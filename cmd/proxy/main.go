@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/dynatrace/sdk-proxy/internal/config"
+	"github.com/dynatrace/sdk-proxy/internal/proxy"
 	"github.com/dynatrace/sdk-proxy/internal/server"
 )
 
@@ -31,7 +33,13 @@ func run() error {
 	}))
 	slog.SetDefault(logger)
 
+	proxyHandler, err := proxy.New(cfg.UpstreamCDNURL, &http.Client{Timeout: 30 * time.Second}, logger)
+	if err != nil {
+		return fmt.Errorf("proxy: %w", err)
+	}
+
 	mux := http.NewServeMux()
+	mux.Handle("/", proxyHandler)
 
 	srv, err := server.New(
 		fmt.Sprintf(":%d", cfg.Port),
