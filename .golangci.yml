@@ -6,4 +6,4 @@ linters:
     - errcheck
     - govet
     - staticcheck
-    - deadcode
+    - unused
