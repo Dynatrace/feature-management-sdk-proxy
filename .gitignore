@@ -3,3 +3,12 @@
 .dolt/
 *.db
 .beads-credential-key
+
+# Go
+/sdk-proxy
+*.test
+*.out
+*.prof
+coverage.txt
+/dist/
+/vendor/
