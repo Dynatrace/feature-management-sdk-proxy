@@ -16,6 +16,9 @@ type Config struct {
 	UpstreamCDNURL  string
 	LogLevel        slog.Level
 	ShutdownTimeout time.Duration
+	// OTLPEnabled is true when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+	// When false, metrics are emitted to a no-op provider.
+	OTLPEnabled bool
 }
 
 // FromEnv loads configuration from environment variables.
@@ -58,6 +61,8 @@ func FromEnv() (Config, error) {
 		}
 		cfg.ShutdownTimeout = d
 	}
+
+	cfg.OTLPEnabled = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != ""
 
 	return cfg, nil
 }
