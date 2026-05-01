@@ -7,19 +7,35 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/dynatrace/sdk-proxy/internal/cache"
 )
 
 func newTestHandler(t *testing.T, upstream *httptest.Server) *Handler {
 	t.Helper()
-	h, err := New(upstream.URL, upstream.Client(), slog.Default())
+	h, err := New(upstream.URL, upstream.Client(), cache.New(), slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	return h
 }
 
-func TestHandler_HappyPath(t *testing.T) {
+func newTestHandlerWithCache(t *testing.T, upstream *httptest.Server, c *cache.Cache) *Handler {
+	t.Helper()
+	h, err := New(upstream.URL, upstream.Client(), c, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return h
+}
+
+// --- Cache miss (cold fetch) tests ---
+
+func TestHandler_CacheMiss_FetchesUpstream(t *testing.T) {
+	upstreamCalled := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled++
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ETag", `"abc123"`)
 		w.WriteHeader(http.StatusOK)
@@ -35,18 +51,43 @@ func TestHandler_HappyPath(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
-	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
-		t.Errorf("expected Content-Type application/json, got %q", ct)
+	if rec.Body.String() != `{"flags":{}}` {
+		t.Errorf("unexpected body: %q", rec.Body.String())
 	}
-	if etag := rec.Header().Get("ETag"); etag != `"abc123"` {
-		t.Errorf("expected ETag forwarded, got %q", etag)
-	}
-	if body := rec.Body.String(); body != `{"flags":{}}` {
-		t.Errorf("unexpected body: %q", body)
+	if upstreamCalled != 1 {
+		t.Errorf("expected upstream called once, got %d", upstreamCalled)
 	}
 }
 
-func TestHandler_PathForwardedToUpstream(t *testing.T) {
+func TestHandler_CacheMiss_PopulatesCache(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"abc123"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"flags":{}}`)
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	h := newTestHandlerWithCache(t, upstream, c)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	h.ServeHTTP(rec, req)
+
+	key := cache.Key("my-sdk-key")
+	entry, ok := c.Get(key)
+	if !ok {
+		t.Fatal("expected cache to be populated after miss")
+	}
+	if string(entry.Payload) != `{"flags":{}}` {
+		t.Errorf("unexpected cached payload: %q", string(entry.Payload))
+	}
+	if entry.ETag != `"abc123"` {
+		t.Errorf("unexpected cached ETag: %q", entry.ETag)
+	}
+}
+
+func TestHandler_CacheMiss_PathForwardedToUpstream(t *testing.T) {
 	var gotPath string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -64,7 +105,7 @@ func TestHandler_PathForwardedToUpstream(t *testing.T) {
 	}
 }
 
-func TestHandler_QueryStringPassthrough(t *testing.T) {
+func TestHandler_CacheMiss_QueryStringPassthrough(t *testing.T) {
 	var gotQuery string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotQuery = r.URL.RawQuery
@@ -82,28 +123,9 @@ func TestHandler_QueryStringPassthrough(t *testing.T) {
 	}
 }
 
-func TestHandler_IfNoneMatchForwardedToUpstream(t *testing.T) {
-	var gotHeader string
+func TestHandler_CacheMiss_Upstream304_Returns503(t *testing.T) {
+	// A 304 on a cold fetch is unexpected and must not return empty config to the SDK.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotHeader = r.Header.Get("If-None-Match")
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer upstream.Close()
-
-	h := newTestHandler(t, upstream)
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
-	req.Header.Set("If-None-Match", `"abc123"`)
-	h.ServeHTTP(rec, req)
-
-	if gotHeader != `"abc123"` {
-		t.Errorf("upstream received If-None-Match %q, want \"abc123\"", gotHeader)
-	}
-}
-
-func TestHandler_Upstream304PassedThrough(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("ETag", `"abc123"`)
 		w.WriteHeader(http.StatusNotModified)
 	}))
 	defer upstream.Close()
@@ -111,18 +133,14 @@ func TestHandler_Upstream304PassedThrough(t *testing.T) {
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
-	req.Header.Set("If-None-Match", `"abc123"`)
 	h.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotModified {
-		t.Fatalf("expected 304, got %d", rec.Code)
-	}
-	if etag := rec.Header().Get("ETag"); etag != `"abc123"` {
-		t.Errorf("expected ETag forwarded, got %q", etag)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rec.Code)
 	}
 }
 
-func TestHandler_UpstreamServerError_Returns503(t *testing.T) {
+func TestHandler_CacheMiss_UpstreamServerError_Returns503(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -138,12 +156,12 @@ func TestHandler_UpstreamServerError_Returns503(t *testing.T) {
 	}
 }
 
-func TestHandler_NetworkError_Returns503(t *testing.T) {
+func TestHandler_CacheMiss_NetworkError_Returns503(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	upstreamURL := upstream.URL
-	upstream.Close() // close before request so the connection is refused
+	upstream.Close()
 
-	h, err := New(upstreamURL, http.DefaultClient, slog.Default())
+	h, err := New(upstreamURL, http.DefaultClient, cache.New(), slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -156,7 +174,7 @@ func TestHandler_NetworkError_Returns503(t *testing.T) {
 	}
 }
 
-func TestHandler_UpstreamClientError_PassedThrough(t *testing.T) {
+func TestHandler_CacheMiss_UpstreamClientError_PassedThrough(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = io.WriteString(w, "forbidden")
@@ -175,6 +193,150 @@ func TestHandler_UpstreamClientError_PassedThrough(t *testing.T) {
 		t.Errorf("expected upstream body forwarded, got %q", rec.Body.String())
 	}
 }
+
+func TestHandler_CacheMiss_IfNoneMatch_NotForwardedToUpstream(t *testing.T) {
+	// On a cache miss, the client's If-None-Match is not forwarded — the cache
+	// handles ETag negotiation, not the upstream on a cold fetch.
+	var gotIfNoneMatch string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotIfNoneMatch = r.Header.Get("If-None-Match")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	h := newTestHandler(t, upstream)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	req.Header.Set("If-None-Match", `"abc123"`)
+	h.ServeHTTP(rec, req)
+
+	if gotIfNoneMatch != "" {
+		t.Errorf("upstream should not receive If-None-Match on cold fetch, got %q", gotIfNoneMatch)
+	}
+}
+
+// --- Cache hit tests ---
+
+func TestHandler_CacheHit_ServesFromCache_NoUpstreamCall(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called on cache hit")
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	key := cache.Key("my-sdk-key")
+	c.Set(key, cache.Entry{
+		Payload:   []byte(`{"flags":{"foo":true}}`),
+		ETag:      `"v1"`,
+		FetchedAt: time.Now(),
+		FetchURL:  upstream.URL + "/v1/config/my-sdk-key.json",
+	})
+
+	h := newTestHandlerWithCache(t, upstream, c)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if rec.Body.String() != `{"flags":{"foo":true}}` {
+		t.Errorf("unexpected body: %q", rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("expected Content-Type application/json, got %q", ct)
+	}
+}
+
+func TestHandler_CacheHit_ETagMatch_Returns304(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called on cache hit")
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	key := cache.Key("my-sdk-key")
+	c.Set(key, cache.Entry{
+		Payload:   []byte(`{"flags":{}}`),
+		ETag:      `"abc123"`,
+		FetchedAt: time.Now(),
+		FetchURL:  upstream.URL + "/v1/config/my-sdk-key.json",
+	})
+
+	h := newTestHandlerWithCache(t, upstream, c)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	req.Header.Set("If-None-Match", `"abc123"`)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("expected 304, got %d", rec.Code)
+	}
+	if etag := rec.Header().Get("ETag"); etag != `"abc123"` {
+		t.Errorf("expected ETag forwarded, got %q", etag)
+	}
+	if rec.Body.Len() > 0 {
+		t.Errorf("304 response must have no body, got %q", rec.Body.String())
+	}
+}
+
+func TestHandler_CacheHit_ETagMismatch_Returns200WithPayload(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called on cache hit")
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	key := cache.Key("my-sdk-key")
+	c.Set(key, cache.Entry{
+		Payload:   []byte(`{"flags":{"updated":true}}`),
+		ETag:      `"v2"`,
+		FetchedAt: time.Now(),
+		FetchURL:  upstream.URL + "/v1/config/my-sdk-key.json",
+	})
+
+	h := newTestHandlerWithCache(t, upstream, c)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	req.Header.Set("If-None-Match", `"v1"`) // stale client version
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if rec.Body.String() != `{"flags":{"updated":true}}` {
+		t.Errorf("unexpected body: %q", rec.Body.String())
+	}
+}
+
+func TestHandler_CacheHit_NoETag_Returns200(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called on cache hit")
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	key := cache.Key("my-sdk-key")
+	c.Set(key, cache.Entry{
+		Payload:   []byte(`{"flags":{}}`),
+		ETag:      "", // no ETag stored
+		FetchedAt: time.Now(),
+		FetchURL:  upstream.URL + "/v1/config/my-sdk-key.json",
+	})
+
+	h := newTestHandlerWithCache(t, upstream, c)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	req.Header.Set("If-None-Match", `"anything"`)
+	h.ServeHTTP(rec, req)
+
+	// Without a cached ETag we cannot confirm the client has the current version.
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+// --- Input validation tests ---
 
 func TestHandler_NonGetMethod_Returns405(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -222,6 +384,52 @@ func TestHandler_EmptyKeySegment_Returns400(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandler_HEAD_CacheHit_NoBody(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called on cache hit")
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	key := cache.Key("my-sdk-key")
+	c.Set(key, cache.Entry{
+		Payload:   []byte(`{"flags":{}}`),
+		ETag:      `"v1"`,
+		FetchedAt: time.Now(),
+		FetchURL:  upstream.URL + "/v1/config/my-sdk-key.json",
+	})
+
+	h := newTestHandlerWithCache(t, upstream, c)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodHead, "/v1/config/my-sdk-key.json", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if rec.Body.Len() > 0 {
+		t.Errorf("HEAD response must have no body, got %q", rec.Body.String())
+	}
+	if etag := rec.Header().Get("ETag"); etag != `"v1"` {
+		t.Errorf("expected ETag header, got %q", etag)
+	}
+}
+
+func TestNew_InvalidUpstreamURL(t *testing.T) {
+	cases := []string{
+		"",
+		"not-a-url",
+		"//noscheme.example.com/path",
+		"ftp://", // no host
+	}
+	for _, tc := range cases {
+		_, err := New(tc, http.DefaultClient, cache.New(), slog.Default())
+		if err == nil {
+			t.Errorf("New(%q): expected error, got nil", tc)
+		}
 	}
 }
 

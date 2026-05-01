@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dynatrace/sdk-proxy/internal/cache"
 	"github.com/dynatrace/sdk-proxy/internal/config"
 	"github.com/dynatrace/sdk-proxy/internal/proxy"
 	"github.com/dynatrace/sdk-proxy/internal/server"
@@ -33,7 +34,9 @@ func run() error {
 	}))
 	slog.SetDefault(logger)
 
-	proxyHandler, err := proxy.New(cfg.UpstreamCDNURL, &http.Client{Timeout: 30 * time.Second}, logger)
+	flagCache := cache.New()
+
+	proxyHandler, err := proxy.New(cfg.UpstreamCDNURL, &http.Client{Timeout: 30 * time.Second}, flagCache, logger)
 	if err != nil {
 		return fmt.Errorf("proxy: %w", err)
 	}
@@ -53,6 +56,10 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+
+	// The refresher shares the signal context so it stops before the server drains.
+	refresher := cache.NewRefresher(flagCache, proxyHandler, logger)
+	go refresher.Run(ctx)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start() }()
