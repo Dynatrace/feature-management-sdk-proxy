@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"os"
 	"strconv"
 	"time"
@@ -13,7 +12,7 @@ import (
 // Config holds all runtime configuration loaded from environment variables.
 type Config struct {
 	Port            int
-	UpstreamCDNURL  string
+	CDNBaseDomain   string
 	LogLevel        slog.Level
 	ShutdownTimeout time.Duration
 	// OTLPEnabled is true when OTEL_EXPORTER_OTLP_ENDPOINT is set.
@@ -22,7 +21,7 @@ type Config struct {
 }
 
 // FromEnv loads configuration from environment variables.
-// UPSTREAM_CDN_URL is required; all others have defaults.
+// CDN_BASE_DOMAIN is required; all others have defaults.
 func FromEnv() (Config, error) {
 	cfg := Config{
 		Port:            8080,
@@ -38,15 +37,16 @@ func FromEnv() (Config, error) {
 		cfg.Port = p
 	}
 
-	upstream := os.Getenv("UPSTREAM_CDN_URL")
-	if upstream == "" {
-		return Config{}, errors.New("UPSTREAM_CDN_URL is required")
+	domain := os.Getenv("CDN_BASE_DOMAIN")
+	if domain == "" {
+		return Config{}, errors.New("CDN_BASE_DOMAIN is required")
 	}
-	u, err := url.Parse(upstream)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return Config{}, fmt.Errorf("invalid UPSTREAM_CDN_URL %q: must be an absolute URL with scheme and host", upstream)
+	for _, c := range domain {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-') {
+			return Config{}, fmt.Errorf("invalid CDN_BASE_DOMAIN %q: must be a bare hostname containing only letters, digits, dots, and hyphens", domain)
+		}
 	}
-	cfg.UpstreamCDNURL = upstream
+	cfg.CDNBaseDomain = domain
 
 	if v := os.Getenv("LOG_LEVEL"); v != "" {
 		if err := cfg.LogLevel.UnmarshalText([]byte(v)); err != nil {

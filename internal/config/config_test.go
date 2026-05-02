@@ -7,7 +7,7 @@ import (
 )
 
 func TestFromEnv_Defaults(t *testing.T) {
-	t.Setenv("UPSTREAM_CDN_URL", "https://cdn.example.com")
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 
 	cfg, err := FromEnv()
 	if err != nil {
@@ -25,7 +25,7 @@ func TestFromEnv_Defaults(t *testing.T) {
 }
 
 func TestFromEnv_AllVars(t *testing.T) {
-	t.Setenv("UPSTREAM_CDN_URL", "https://cdn.example.com")
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("PORT", "9090")
 	t.Setenv("LOG_LEVEL", "DEBUG")
 	t.Setenv("SHUTDOWN_TIMEOUT", "10s")
@@ -45,16 +45,16 @@ func TestFromEnv_AllVars(t *testing.T) {
 	}
 }
 
-func TestFromEnv_MissingUpstream(t *testing.T) {
-	t.Setenv("UPSTREAM_CDN_URL", "")
+func TestFromEnv_MissingCDNBaseDomain(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "")
 	_, err := FromEnv()
 	if err == nil {
-		t.Fatal("expected error for missing UPSTREAM_CDN_URL")
+		t.Fatal("expected error for missing CDN_BASE_DOMAIN")
 	}
 }
 
 func TestFromEnv_InvalidPort(t *testing.T) {
-	t.Setenv("UPSTREAM_CDN_URL", "https://cdn.example.com")
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("PORT", "99999")
 
 	_, err := FromEnv()
@@ -64,7 +64,7 @@ func TestFromEnv_InvalidPort(t *testing.T) {
 }
 
 func TestFromEnv_InvalidLogLevel(t *testing.T) {
-	t.Setenv("UPSTREAM_CDN_URL", "https://cdn.example.com")
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("LOG_LEVEL", "VERBOSE")
 
 	_, err := FromEnv()
@@ -74,7 +74,7 @@ func TestFromEnv_InvalidLogLevel(t *testing.T) {
 }
 
 func TestFromEnv_InvalidShutdownTimeout(t *testing.T) {
-	t.Setenv("UPSTREAM_CDN_URL", "https://cdn.example.com")
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("SHUTDOWN_TIMEOUT", "notaduration")
 
 	_, err := FromEnv()
@@ -83,11 +83,20 @@ func TestFromEnv_InvalidShutdownTimeout(t *testing.T) {
 	}
 }
 
-func TestFromEnv_InvalidUpstreamURL(t *testing.T) {
-	t.Setenv("UPSTREAM_CDN_URL", "not-a-url")
-
-	_, err := FromEnv()
-	if err == nil {
-		t.Fatal("expected error for invalid UPSTREAM_CDN_URL")
+func TestFromEnv_InvalidCDNBaseDomain(t *testing.T) {
+	cases := []string{
+		"https://fm.example.com",
+		"fm.example.com/path",
+		"http://fm.example.com/",
+		"fm.example.com:8080",
+		"fm example.com",
+		"fm.example.com@evil.com",
+	}
+	for _, tc := range cases {
+		t.Setenv("CDN_BASE_DOMAIN", tc)
+		_, err := FromEnv()
+		if err == nil {
+			t.Errorf("CDN_BASE_DOMAIN=%q: expected error, got nil", tc)
+		}
 	}
 }

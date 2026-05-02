@@ -67,7 +67,7 @@ func run() error {
 
 	flagCache := cache.New()
 
-	proxyHandler, err := proxy.New(cfg.UpstreamCDNURL, &http.Client{Timeout: 30 * time.Second}, flagCache, logger)
+	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, &http.Client{Timeout: 30 * time.Second}, flagCache, logger)
 	if err != nil {
 		return fmt.Errorf("proxy: %w", err)
 	}
