@@ -21,6 +21,7 @@ const (
 	BillingFlushLag       = "proxy.billing.flush.lag_seconds"
 	StartupPath           = "proxy.startup.path"
 	SnapshotWritesTotal   = "proxy.snapshot.writes.total"
+	ConfigSSERewriteTotal = "proxy.config.sse_rewrite_total"
 )
 
 // Instruments holds every OTel instrument the proxy emits. Obtain one via Register.
@@ -72,6 +73,10 @@ type Instruments struct {
 
 	// SnapshotWritesTotal counts snapshot write attempts labeled by result (success, failure).
 	SnapshotWritesTotal metric.Int64Counter
+
+	// ConfigSSERewriteTotal counts SSE URL rewrite outcomes per served config request,
+	// labeled by result (rewritten/no_sse_entry/not_found_in_body/unknown).
+	ConfigSSERewriteTotal metric.Int64Counter
 }
 
 // Register creates all metric instruments against meter. Call once at startup and
@@ -182,6 +187,14 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("metrics: register %s: %w", SnapshotWritesTotal, err)
 	}
 
+	sseRewrite, err := meter.Int64Counter(ConfigSSERewriteTotal,
+		metric.WithDescription("SSE URL rewrite outcomes per served config request, labeled by result (rewritten/no_sse_entry/not_found_in_body/unknown)"),
+		metric.WithUnit("{rewrite}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", ConfigSSERewriteTotal, err)
+	}
+
 	return &Instruments{
 		RequestsTotal:         reqTotal,
 		SSEConnections:        sseConns,
@@ -196,5 +209,6 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		BillingFlushLag:       billingLag,
 		StartupPath:           startupPath,
 		SnapshotWritesTotal:   snapshotWrites,
+		ConfigSSERewriteTotal: sseRewrite,
 	}, nil
 }

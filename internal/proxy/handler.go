@@ -11,7 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/dynatrace/sdk-proxy/internal/cache"
+	"github.com/dynatrace/sdk-proxy/internal/metrics"
 	"github.com/dynatrace/sdk-proxy/internal/sse"
 )
 
@@ -35,18 +39,19 @@ type Handler struct {
 	client        *http.Client
 	cache         *cache.Cache
 	sseManager    *sse.Manager
+	inst          *metrics.Instruments
 	logger        *slog.Logger
 }
 
 // New constructs a Handler. cdnBaseDomain must be a bare hostname
 // (e.g. fm.dynatracelabs.com); the region and path are derived per request.
 // sseManager may be nil; if non-nil, OnConfigCached is called after each
-// successful cold fetch.
-func New(cdnBaseDomain string, client *http.Client, c *cache.Cache, sseManager *sse.Manager, logger *slog.Logger) (*Handler, error) {
+// successful cold fetch. inst may be nil; metrics are silently skipped.
+func New(cdnBaseDomain string, client *http.Client, c *cache.Cache, sseManager *sse.Manager, inst *metrics.Instruments, logger *slog.Logger) (*Handler, error) {
 	if cdnBaseDomain == "" || strings.Contains(cdnBaseDomain, "://") || strings.Contains(cdnBaseDomain, "/") {
 		return nil, fmt.Errorf("proxy: invalid CDN base domain %q: must be a bare hostname (e.g. fm.dynatracelabs.com)", cdnBaseDomain)
 	}
-	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, sseManager: sseManager, logger: logger}, nil
+	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, sseManager: sseManager, inst: inst, logger: logger}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +76,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := cache.Key(sdkKey)
 
 	if entry, ok := h.cache.Get(key); ok {
-		h.serveFromCache(w, r, entry)
+		h.serveFromCache(w, r, entry, sdkKey)
 		return
 	}
 
@@ -80,7 +85,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // serveFromCache writes a response from a cached entry. If the client's
 // If-None-Match matches the cached ETag, a 304 is returned with no body.
-func (h *Handler) serveFromCache(w http.ResponseWriter, r *http.Request, entry cache.Entry) {
+// For non-HEAD 200 responses, the SSE URL in the payload is rewritten to
+// point to this proxy's SSE endpoint (derived from the incoming request).
+func (h *Handler) serveFromCache(w http.ResponseWriter, r *http.Request, entry cache.Entry, sdkKey string) {
 	if entry.ETag != "" && r.Header.Get("If-None-Match") == entry.ETag {
 		w.Header().Set("ETag", entry.ETag)
 		w.WriteHeader(http.StatusNotModified)
@@ -91,9 +98,12 @@ func (h *Handler) serveFromCache(w http.ResponseWriter, r *http.Request, entry c
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if r.Method != http.MethodHead {
-		_, _ = w.Write(entry.Payload)
+	if r.Method == http.MethodHead {
+		return
 	}
+	payload, result := sse.RewriteSSEURL(entry.Payload, h.proxySSEURL(r, sdkKey))
+	h.recordRewriteResult(result, cache.Key(sdkKey))
+	_, _ = w.Write(payload)
 }
 
 // serveMiss fetches from the upstream CDN on a cache miss. A successful 200
@@ -160,7 +170,7 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 			h.sseManager.OnConfigCached(context.Background(), sdkKey, body)
 		}
 		// Serve from the cached entry so headers match the cache-hit path.
-		h.serveFromCache(w, r, entry)
+		h.serveFromCache(w, r, entry, sdkKey)
 		return
 	}
 
@@ -271,4 +281,74 @@ func copyHeader(dst, src http.Header) {
 			}
 		}
 	}
+}
+
+// derivedScheme infers the public-facing scheme from the request.
+// It checks X-Forwarded-Proto (set by most ingress controllers and LBs),
+// then r.TLS, then defaults to "http". Only "http" and "https" are accepted
+// from X-Forwarded-Proto; any other value is discarded to prevent injection.
+func derivedScheme(r *http.Request) string {
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		if i := strings.IndexByte(proto, ','); i >= 0 {
+			proto = proto[:i]
+		}
+		proto = strings.TrimSpace(proto)
+		if proto == "http" || proto == "https" {
+			return proto
+		}
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+// proxySSEURL builds the rewrite target URL for the SSE entry in the flagd
+// config payload. The scheme and host are derived from the incoming request,
+// so no static PROXY_PUBLIC_URL configuration is required.
+//
+// r.Host is client-controlled, but the URL is returned only to the same client
+// that provided the header — there is no SSRF surface here. The host is
+// validated to reject values containing whitespace or control characters that
+// could malform the resulting URL string.
+func (h *Handler) proxySSEURL(r *http.Request, sdkKey string) string {
+	host := r.Host
+	if strings.ContainsAny(host, " \t\r\n") {
+		h.logger.Warn("proxy: malformed Host header discarded in SSE URL rewrite",
+			slog.String("key", cache.Key(sdkKey)),
+		)
+		host = "unknown"
+	}
+	return derivedScheme(r) + "://" + host + sse.HandlerPath + "?sdk_key=" + url.QueryEscape(sdkKey)
+}
+
+// recordRewriteResult increments the ConfigSSERewriteTotal counter and emits
+// a warning log when the upstream URL was not found as a byte literal.
+func (h *Handler) recordRewriteResult(result sse.RewriteResult, keyHash string) {
+	var label string
+	switch result {
+	case sse.RewriteResultRewritten:
+		label = "rewritten"
+	case sse.RewriteResultNoEntry:
+		label = "no_sse_entry"
+	case sse.RewriteResultNotFoundInBody:
+		label = "not_found_in_body"
+		h.logger.Warn("proxy: SSE URL rewrite skipped — upstream URL not found as literal byte sequence",
+			slog.String("key", keyHash),
+		)
+	default:
+		label = "unknown"
+		h.logger.Warn("proxy: unknown SSE rewrite result",
+			slog.String("key", keyHash),
+			slog.Int("result", int(result)),
+		)
+	}
+	if h.inst == nil {
+		return
+	}
+	h.inst.ConfigSSERewriteTotal.Add(context.Background(), 1,
+		metric.WithAttributes(
+			attribute.String("result", label),
+		),
+	)
 }

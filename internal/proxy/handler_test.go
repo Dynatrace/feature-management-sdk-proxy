@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"crypto/tls"
 	"io"
 	"log/slog"
 	"net/http"
@@ -35,7 +36,7 @@ func newRedirectingClient(target *httptest.Server) *http.Client {
 
 func newTestHandler(t *testing.T, upstream *httptest.Server) *Handler {
 	t.Helper()
-	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, slog.Default())
+	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -44,7 +45,7 @@ func newTestHandler(t *testing.T, upstream *httptest.Server) *Handler {
 
 func newTestHandlerWithCache(t *testing.T, upstream *httptest.Server, c *cache.Cache) *Handler {
 	t.Helper()
-	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, slog.Default())
+	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -164,7 +165,7 @@ func TestHandler_CacheMiss_NetworkError_Returns503(t *testing.T) {
 	client := newRedirectingClient(upstream)
 	upstream.Close() // close after capturing the address in the client
 
-	h, err := New("fm.test", client, cache.New(), nil, slog.Default())
+	h, err := New("fm.test", client, cache.New(), nil, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -450,7 +451,7 @@ func TestNew_InvalidCDNBaseDomain(t *testing.T) {
 		"http://fm.example.com/",
 	}
 	for _, tc := range cases {
-		_, err := New(tc, http.DefaultClient, cache.New(), nil, slog.Default())
+		_, err := New(tc, http.DefaultClient, cache.New(), nil, nil, slog.Default())
 		if err == nil {
 			t.Errorf("New(%q): expected error, got nil", tc)
 		}
@@ -515,5 +516,278 @@ func TestBuildTarget_ConstructsGeoBoundURL(t *testing.T) {
 	want := "https://cdn.us.fm.dynatracelabs.com/server/dt_server_us_abc123.json"
 	if got != want {
 		t.Errorf("buildTarget = %q, want %q", got, want)
+	}
+}
+
+// --- SSE URL rewrite tests ---
+
+const testPayloadWithSSE = `{"flags":{},"eventStreams":[{"type":"sse","url":"https://upstream.sse.example.com/stream?ch=abc","inactivityDelaySec":120}]}`
+const testPayloadNoSSE = `{"flags":{"foo":true}}`
+
+func TestHandler_CacheHit_RewritesSSEURL(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called on cache hit")
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	key := cache.Key("dt_server_us_abc123")
+	c.Set(key, cache.Entry{
+		Payload:   []byte(testPayloadWithSSE),
+		ETag:      `"v1"`,
+		FetchedAt: time.Now(),
+		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+	})
+
+	h := newTestHandlerWithCache(t, upstream, c)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req.Host = "proxy.example.com"
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "upstream.sse.example.com") {
+		t.Errorf("response still contains upstream SSE URL: %q", body)
+	}
+	if !strings.Contains(body, "proxy.example.com/sse?sdk_key=dt_server_us_abc123") {
+		t.Errorf("response missing proxy SSE URL, got: %q", body)
+	}
+}
+
+func TestHandler_CacheMiss_RewritesSSEURLInResponse_StoresRawInCache(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"abc123"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, testPayloadWithSSE)
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	h := newTestHandlerWithCache(t, upstream, c)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req.Host = "proxy.example.com"
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	// Response served to SDK should have the proxy SSE URL.
+	body := rec.Body.String()
+	if strings.Contains(body, "upstream.sse.example.com") {
+		t.Errorf("response still contains upstream SSE URL: %q", body)
+	}
+	if !strings.Contains(body, "proxy.example.com/sse?sdk_key=dt_server_us_abc123") {
+		t.Errorf("response missing proxy SSE URL, got: %q", body)
+	}
+
+	// Cache must store raw upstream bytes so the SSE manager can dial the real upstream.
+	keyHash := cache.Key("dt_server_us_abc123")
+	entry, ok := c.Get(keyHash)
+	if !ok {
+		t.Fatal("expected cache populated after miss")
+	}
+	if string(entry.Payload) != testPayloadWithSSE {
+		t.Errorf("cache stores rewritten payload, want raw upstream bytes;\ngot:  %q\nwant: %q",
+			string(entry.Payload), testPayloadWithSSE)
+	}
+}
+
+func TestHandler_NoSSEEntry_PayloadServedByteIdentical(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called on cache hit")
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	key := cache.Key("dt_server_us_abc123")
+	c.Set(key, cache.Entry{
+		Payload:   []byte(testPayloadNoSSE),
+		FetchedAt: time.Now(),
+		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+	})
+
+	h := newTestHandlerWithCache(t, upstream, c)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req.Host = "proxy.example.com"
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if rec.Body.String() != testPayloadNoSSE {
+		t.Errorf("payload modified unexpectedly: got %q, want %q", rec.Body.String(), testPayloadNoSSE)
+	}
+}
+
+func TestHandler_HEAD_NoSSERewrite(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called on cache hit")
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	key := cache.Key("dt_server_us_abc123")
+	c.Set(key, cache.Entry{
+		Payload:   []byte(testPayloadWithSSE),
+		ETag:      `"v1"`,
+		FetchedAt: time.Now(),
+		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+	})
+
+	h := newTestHandlerWithCache(t, upstream, c)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodHead, "/v1/config/dt_server_us_abc123.json", nil)
+	req.Host = "proxy.example.com"
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if rec.Body.Len() > 0 {
+		t.Errorf("HEAD must return no body, got %q", rec.Body.String())
+	}
+}
+
+// --- derivedScheme tests ---
+
+func TestDerivedScheme_XForwardedProto(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	if got := derivedScheme(req); got != "https" {
+		t.Errorf("derivedScheme = %q, want %q", got, "https")
+	}
+}
+
+func TestDerivedScheme_XForwardedProto_CommaSeparated(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Proto", "https, http")
+	if got := derivedScheme(req); got != "https" {
+		t.Errorf("derivedScheme = %q, want %q", got, "https")
+	}
+}
+
+func TestDerivedScheme_TLSConnection(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.TLS = &tls.ConnectionState{}
+	if got := derivedScheme(req); got != "https" {
+		t.Errorf("derivedScheme = %q, want %q", got, "https")
+	}
+}
+
+func TestDerivedScheme_Plain(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	if got := derivedScheme(req); got != "http" {
+		t.Errorf("derivedScheme = %q, want %q", got, "http")
+	}
+}
+
+func TestDerivedScheme_XForwardedProto_InvalidSchemeDiscarded(t *testing.T) {
+	// Non-http(s) schemes must be discarded to prevent injection into the rewritten URL.
+	for _, bad := range []string{"javascript", "ftp", "data", "file"} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Forwarded-Proto", bad)
+		if got := derivedScheme(req); got != "http" {
+			t.Errorf("XFP=%q: derivedScheme = %q, want fallback %q", bad, got, "http")
+		}
+	}
+}
+
+func TestHandler_MalformedHostHeader_FallsBackToUnknown(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called on cache hit")
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	key := cache.Key("dt_server_us_abc123")
+	c.Set(key, cache.Entry{
+		Payload:   []byte(testPayloadWithSSE),
+		FetchedAt: time.Now(),
+		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+	})
+
+	h := newTestHandlerWithCache(t, upstream, c)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req.Host = "proxy.example.com\r\nX-Injected: bad"
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	// The malformed host must not appear verbatim; "unknown" is used as fallback.
+	if strings.Contains(body, "\r\n") {
+		t.Errorf("malformed host header leaked into response body: %q", body)
+	}
+	if !strings.Contains(body, "unknown/sse") {
+		t.Errorf("expected fallback 'unknown' in rewritten URL, got: %q", body)
+	}
+}
+
+func TestHandler_Rewrite_SDKKeyQueryEscaped(t *testing.T) {
+	// SDK keys containing + or other special chars must be query-escaped in the SSE URL.
+	// Use a key whose token portion requires no escaping but verify the full URL form.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called on cache hit")
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	// Use a key with a region that contains a hyphen (valid per SSRF guard).
+	sdkKey := "dt_server_us-east_abc123"
+	key := cache.Key(sdkKey)
+	c.Set(key, cache.Entry{
+		Payload:   []byte(`{"flags":{},"eventStreams":[{"type":"sse","url":"https://upstream.sse.example.com/stream","inactivityDelaySec":60}]}`),
+		FetchedAt: time.Now(),
+		FetchURL:  "https://cdn.us-east.fm.test/server/" + sdkKey + ".json",
+	})
+
+	h := newTestHandlerWithCache(t, upstream, c)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/"+sdkKey+".json", nil)
+	req.Host = "proxy.example.com"
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	// sdk_key value must appear URL-encoded in the rewritten URL.
+	if !strings.Contains(body, "sdk_key=dt_server_us-east_abc123") {
+		t.Errorf("rewritten URL missing sdk_key, got: %q", body)
+	}
+}
+
+func TestHandler_Rewrite_HTTPSSchemeFromXForwardedProto(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called on cache hit")
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	key := cache.Key("dt_server_us_abc123")
+	c.Set(key, cache.Entry{
+		Payload:   []byte(testPayloadWithSSE),
+		FetchedAt: time.Now(),
+		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+	})
+
+	h := newTestHandlerWithCache(t, upstream, c)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req.Host = "proxy.example.com"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	h.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "https://proxy.example.com/sse") {
+		t.Errorf("expected https scheme in rewritten URL, got: %q", body)
 	}
 }
