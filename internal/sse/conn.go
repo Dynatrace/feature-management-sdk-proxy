@@ -195,10 +195,10 @@ func (c *conn) readLoop(ctx context.Context, body io.ReadCloser, onEvent func(Ev
 // timedBody wraps an io.ReadCloser and closes it after a period of inactivity.
 // Each successful Read resets the deadline.
 type timedBody struct {
-	body   io.ReadCloser
-	timer  *time.Timer
-	timed  atomic.Bool
-	d      time.Duration
+	body  io.ReadCloser
+	timer *time.Timer
+	timed atomic.Bool
+	d     time.Duration
 }
 
 func newTimedBody(body io.ReadCloser, d time.Duration) *timedBody {

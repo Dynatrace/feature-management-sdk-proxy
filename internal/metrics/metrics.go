@@ -8,19 +8,19 @@ import (
 
 // Instrument name constants — all proxy metrics are defined here.
 const (
-	RequestsTotal          = "proxy.requests.total"
-	SSEConnections         = "proxy.sse.connections"
-	SSEClientConnections   = "proxy.sse.client.connections"
-	SSEEventsDelivered     = "proxy.sse.events_delivered_total"
-	SSEUpstreamReconnects  = "proxy.sse.upstream.reconnects"
-	SSEUpstreamEvents      = "proxy.sse.upstream.events"
-	CacheSize              = "proxy.cache.size"
-	SnapshotAgeSeconds     = "proxy.snapshot.age_seconds"
-	BillingFlushTotal      = "proxy.billing.flush.total"
-	BillingBufferSize      = "proxy.billing.buffer.size"
-	BillingFlushLag        = "proxy.billing.flush.lag_seconds"
-	StartupPath            = "proxy.startup.path"
-	SnapshotWritesTotal    = "proxy.snapshot.writes.total"
+	RequestsTotal         = "proxy.requests.total"
+	SSEConnections        = "proxy.sse.connections"
+	SSEClientConnections  = "proxy.sse.client.connections"
+	SSEEventsDelivered    = "proxy.sse.events_delivered_total"
+	SSEUpstreamReconnects = "proxy.sse.upstream.reconnects"
+	SSEUpstreamEvents     = "proxy.sse.upstream.events"
+	CacheSize             = "proxy.cache.size"
+	SnapshotAgeSeconds    = "proxy.snapshot.age_seconds"
+	BillingFlushTotal     = "proxy.billing.flush.total"
+	BillingBufferSize     = "proxy.billing.buffer.size"
+	BillingFlushLag       = "proxy.billing.flush.lag_seconds"
+	StartupPath           = "proxy.startup.path"
+	SnapshotWritesTotal   = "proxy.snapshot.writes.total"
 )
 
 // Instruments holds every OTel instrument the proxy emits. Obtain one via Register.
@@ -190,11 +190,11 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		SSEUpstreamReconnects: sseReconnects,
 		SSEUpstreamEvents:     sseEvents,
 		CacheSize:             cacheSize,
-		SnapshotAgeSeconds:  snapshotAge,
-		BillingFlushTotal:   billingFlush,
-		BillingBufferSize:   billingBuf,
-		BillingFlushLag:     billingLag,
-		StartupPath:         startupPath,
-		SnapshotWritesTotal: snapshotWrites,
+		SnapshotAgeSeconds:    snapshotAge,
+		BillingFlushTotal:     billingFlush,
+		BillingBufferSize:     billingBuf,
+		BillingFlushLag:       billingLag,
+		StartupPath:           startupPath,
+		SnapshotWritesTotal:   snapshotWrites,
 	}, nil
 }

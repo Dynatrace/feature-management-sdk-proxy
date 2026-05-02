@@ -1,3 +1,4 @@
+// Package main is the entrypoint for the sdk-proxy binary.
 package main
 
 import (
@@ -11,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	otelmetric "go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
@@ -45,7 +45,7 @@ func run() error {
 
 	// Set up OTel metrics. Gate on OTEL_EXPORTER_OTLP_ENDPOINT; fall back to no-op
 	// so components can record metrics unconditionally without nil checks.
-	var meter otelmetric.Meter = noop.NewMeterProvider().Meter("github.com/dynatrace/sdk-proxy")
+	var meter = noop.NewMeterProvider().Meter("github.com/dynatrace/sdk-proxy")
 	if cfg.OTLPEnabled {
 		mp, err := metrics.NewProvider(ctx)
 		if err != nil {

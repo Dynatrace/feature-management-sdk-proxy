@@ -21,7 +21,7 @@ const defaultPushInterval = 30 * time.Second
 func NewProvider(ctx context.Context) (*metric.MeterProvider, error) {
 	res, err := resource.New(ctx,
 		resource.WithAttributes(semconv.ServiceName("sdk-proxy")),
-		resource.WithFromEnv(),       // honours OTEL_RESOURCE_ATTRIBUTES, OTEL_SERVICE_NAME
+		resource.WithFromEnv(),      // honours OTEL_RESOURCE_ATTRIBUTES, OTEL_SERVICE_NAME
 		resource.WithTelemetrySDK(), // adds telemetry.sdk.* attributes
 	)
 	if err != nil {

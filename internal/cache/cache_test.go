@@ -3,7 +3,6 @@ package cache
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"sync"
 	"testing"
@@ -11,11 +10,13 @@ import (
 )
 
 func noopLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+	return slog.New(slog.DiscardHandler)
 }
 
 func TestKey_Deterministic(t *testing.T) {
-	if Key("abc") != Key("abc") {
+	k1 := Key("abc")
+	k2 := Key("abc")
+	if k1 != k2 {
 		t.Error("Key should be deterministic")
 	}
 }
@@ -137,7 +138,7 @@ func TestCache_Snapshot_IsACopy(t *testing.T) {
 func TestCache_ConcurrentAccess(t *testing.T) {
 	c := New()
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()

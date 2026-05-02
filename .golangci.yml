@@ -1,9 +1,64 @@
-run:
-  timeout: 5m
+version: "2"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
 
 linters:
   enable:
-    - errcheck
-    - govet
-    - staticcheck
-    - unused
+    # correctness
+    - bodyclose
+    - errorlint
+    - noctx
+    # style / quality
+    - copyloopvar
+    - gocritic
+    - goconst
+    - misspell
+    - modernize
+    - nolintlint
+    - recvcheck
+    - revive
+    - sloglint
+    - unconvert
+  settings:
+    errcheck:
+      exclude-functions:
+        # Closing HTTP response bodies after reading is a no-op on error; the read
+        # error (if any) is already surfaced before Close is called.
+        - (io.ReadCloser).Close
+    goconst:
+      ignore-tests: true
+  exclusions:
+    generated: lax
+    presets:
+      - std-error-handling
+    rules:
+      # httptest.NewRequest is idiomatic in test files; NewRequestWithContext adds
+      # no value when context is not exercised by the test.
+      - path: "_test\\.go"
+        linters:
+          - noctx
+      # Test handler closures must satisfy http.HandlerFunc regardless of whether
+      # w/r are used; renaming to _ is unconventional in this context.
+      - path: "_test\\.go"
+        linters:
+          - revive
+        text: "unused-parameter"
+      # SA4017: staticcheck false positive — HasPrefix is used as a switch-case
+      # condition expression; the boolean IS consumed.
+      - linters:
+          - staticcheck
+        text: "SA4017"
+      # QF1001: De Morgan's law transform is less readable for multi-condition
+      # character-class guards (e.g. region/domain validation).
+      - linters:
+          - staticcheck
+        text: "QF1001"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

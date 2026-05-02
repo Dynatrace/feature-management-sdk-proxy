@@ -65,7 +65,7 @@ func (m *Manager) OnConfigCached(ctx context.Context, sdkKey string, payload []b
 		)
 		return
 	}
-	m.ensureConn(ctx, sdkKey, cache.Key(sdkKey), sseURL, inactivitySec)
+	m.ensureConn(ctx, cache.Key(sdkKey), sseURL, inactivitySec)
 }
 
 // OnRefreshed implements cache.RefreshObserver. It is called by the background
@@ -167,7 +167,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (m *Manager) ensureConn(ctx context.Context, sdkKey, keyHash, sseURL string, inactivitySec int) {
+func (m *Manager) ensureConn(ctx context.Context, keyHash, sseURL string, inactivitySec int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -198,9 +198,7 @@ func (m *Manager) startLocked(ctx context.Context, keyHash, sseURL string, inact
 	state.inactivityDelaySec = inactivitySec
 	state.cancel = cancel
 
-	state.wg.Add(1)
-	go func() {
-		defer state.wg.Done()
+	state.wg.Go(func() {
 		c := &conn{
 			sseURL:             sseURL,
 			inactivityDelaySec: inactivitySec,
@@ -213,7 +211,7 @@ func (m *Manager) startLocked(ctx context.Context, keyHash, sseURL string, inact
 			},
 		}
 		c.run(connCtx)
-	}()
+	})
 }
 
 // dispatch fans out an event to all subscribers of keyHash.

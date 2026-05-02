@@ -5,10 +5,13 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sync"
 	"time"
 )
 
+// TTL is the cache entry lifetime. Entries are revalidated via If-None-Match
+// by the background Refresher before they expire.
 const TTL = 5 * time.Minute
 
 // Entry holds a cached flagd config payload and metadata for revalidation.
@@ -75,9 +78,7 @@ func (c *Cache) Snapshot() map[string]Entry {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	out := make(map[string]Entry, len(c.entries))
-	for k, v := range c.entries {
-		out[k] = v
-	}
+	maps.Copy(out, c.entries)
 	return out
 }
 

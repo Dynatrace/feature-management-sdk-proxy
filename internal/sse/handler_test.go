@@ -69,7 +69,7 @@ func newTestHandlerWithCache(t *testing.T, sub Subscriber) (*Handler, *cache.Cac
 
 // waitForSubs polls until the subscriber count reaches n or the timeout elapses.
 func waitForSubs(sub *mockSubscriber, n int) bool {
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		if sub.count() >= n {
 			return true
 		}
@@ -153,7 +153,7 @@ func TestHandler_HappyPath_StreamsEvent(t *testing.T) {
 
 	// Poll until the handler writes the event rather than sleeping a fixed duration.
 	const want = `data: {"type":"refetchEvaluation"}`
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		if strings.Contains(rr.Body.String(), want) {
 			break
 		}

@@ -10,9 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
 )
-
 
 // sseServer streams the given frames to each connected client and then closes
 // the connection. Each frame is a complete SSE message (already formatted).
@@ -308,7 +306,7 @@ func TestConn_InactivityTimeout(t *testing.T) {
 		client:             srv.Client(),
 		logger:             slog.Default(),
 		inst:               newTestInstruments(t),
-		onEvent: func(Event) {},
+		onEvent:            func(Event) {},
 	}
 
 	go func() {

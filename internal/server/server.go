@@ -22,7 +22,8 @@ type Server struct {
 // Callers can call Addr() before Start() to discover the bound port (useful
 // when addr uses ":0" for an ephemeral port).
 func New(addr string, mux http.Handler, drainTimeout time.Duration, logger *slog.Logger) (*Server, error) {
-	l, err := net.Listen("tcp", addr)
+	var lc net.ListenConfig
+	l, err := lc.Listen(context.Background(), "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("listen %s: %w", addr, err)
 	}

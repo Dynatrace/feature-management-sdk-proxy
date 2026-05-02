@@ -487,14 +487,14 @@ func TestExtractRegion(t *testing.T) {
 	}{
 		{"dt_server_us_abc123", "us", true},
 		{"dt_server_eu_abc123", "eu", true},
-		{"dt_server_eu_tok_with_underscores", "eu", true},   // token may contain underscores
-		{"dt_client_us_abc", "", false},                    // wrong second segment
-		{"dt_server__abc", "", false},                      // empty region
-		{"dt_server_us_", "", false},                       // empty token
-		{"dt_server_us", "", false},                        // too few parts
-		{"dt_server_US_abc", "", false},                    // uppercase region rejected
-		{"dt_server_us.east_abc", "", false},               // dot in region rejected (SSRF guard)
-		{"dt_server_evil.com:8080_abc", "", false},         // port in region rejected (SSRF guard)
+		{"dt_server_eu_tok_with_underscores", "eu", true}, // token may contain underscores
+		{"dt_client_us_abc", "", false},                   // wrong second segment
+		{"dt_server__abc", "", false},                     // empty region
+		{"dt_server_us_", "", false},                      // empty token
+		{"dt_server_us", "", false},                       // too few parts
+		{"dt_server_US_abc", "", false},                   // uppercase region rejected
+		{"dt_server_us.east_abc", "", false},              // dot in region rejected (SSRF guard)
+		{"dt_server_evil.com:8080_abc", "", false},        // port in region rejected (SSRF guard)
 		{"bogus", "", false},
 		{"", "", false},
 	}

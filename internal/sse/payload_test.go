@@ -4,11 +4,11 @@ import "testing"
 
 func TestExtractSSEURL(t *testing.T) {
 	cases := []struct {
-		name               string
-		payload            string
-		wantURL            string
-		wantInactivitySec  int
-		wantOK             bool
+		name              string
+		payload           string
+		wantURL           string
+		wantInactivitySec int
+		wantOK            bool
 	}{
 		{
 			name:              "url form",
@@ -18,8 +18,8 @@ func TestExtractSSEURL(t *testing.T) {
 			wantOK:            true,
 		},
 		{
-			name:    "first sse entry wins",
-			payload: `{"eventStreams":[{"type":"other","url":"https://other.example.com"},{"type":"sse","url":"https://sse.example.com/stream","inactivityDelaySec":60}]}`,
+			name:              "first sse entry wins",
+			payload:           `{"eventStreams":[{"type":"other","url":"https://other.example.com"},{"type":"sse","url":"https://sse.example.com/stream","inactivityDelaySec":60}]}`,
 			wantURL:           "https://sse.example.com/stream",
 			wantInactivitySec: 60,
 			wantOK:            true,

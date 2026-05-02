@@ -16,6 +16,9 @@ import (
 	"github.com/dynatrace/sdk-proxy/internal/metrics"
 )
 
+// defaultEventType is the SSE spec default when no event: field is present.
+const defaultEventType = "message"
+
 // Subscriber is the narrow interface the Handler needs from the SSE Manager.
 type Subscriber interface {
 	Subscribe(keyHash string) (<-chan Event, func())
@@ -130,14 +133,14 @@ func writeSSEEvent(w http.ResponseWriter, evt Event) error {
 	}
 	evtType := evt.EventType
 	if evtType == "" {
-		evtType = "message"
+		evtType = defaultEventType
 	}
 	if _, err := fmt.Fprintf(w, "event: %s\n", evtType); err != nil {
 		return err
 	}
 	// Upstream may produce multi-line data (conn.go joins lines with \n).
 	// Emit one data: line per segment per the SSE spec.
-	for _, line := range bytes.Split(evt.Data, []byte{'\n'}) {
+	for line := range bytes.SplitSeq(evt.Data, []byte{'\n'}) {
 		if _, err := fmt.Fprintf(w, "data: %s\n", line); err != nil {
 			return err
 		}
