@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 	"github.com/dynatrace/sdk-proxy/internal/metrics"
 	"github.com/dynatrace/sdk-proxy/internal/proxy"
 	"github.com/dynatrace/sdk-proxy/internal/server"
+	"github.com/dynatrace/sdk-proxy/internal/sse"
 )
 
 func main() {
@@ -67,7 +69,19 @@ func run() error {
 
 	flagCache := cache.New()
 
-	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, &http.Client{Timeout: 30 * time.Second}, flagCache, logger)
+	// SSE manager uses a dedicated client with no overall timeout — SSE connections
+	// are long-lived. ResponseHeaderTimeout guards the initial handshake.
+	sseClient := &http.Client{
+		Transport: &http.Transport{
+			DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+		},
+	}
+	sseManager := sse.New(sseClient, inst, logger)
+
+	proxyClient := &http.Client{Timeout: 30 * time.Second}
+	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, logger)
 	if err != nil {
 		return fmt.Errorf("proxy: %w", err)
 	}
@@ -86,7 +100,7 @@ func run() error {
 	}
 
 	// The refresher shares the signal context so it stops before the server drains.
-	refresher := cache.NewRefresher(flagCache, proxyHandler, logger)
+	refresher := cache.NewRefresherWithObserver(flagCache, proxyHandler, sseManager, logger)
 	go refresher.Run(ctx)
 
 	errCh := make(chan error, 1)
@@ -96,6 +110,11 @@ func run() error {
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
+		sseShutCtx, sseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer sseCancel()
+		if err := sseManager.Shutdown(sseShutCtx); err != nil {
+			slog.Warn("sse: shutdown timed out", slog.String("error", err.Error()))
+		}
 		shutdownErr := srv.Shutdown(context.Background())
 		if startErr := <-errCh; startErr != nil {
 			return startErr

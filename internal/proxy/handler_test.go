@@ -35,7 +35,7 @@ func newRedirectingClient(target *httptest.Server) *http.Client {
 
 func newTestHandler(t *testing.T, upstream *httptest.Server) *Handler {
 	t.Helper()
-	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), slog.Default())
+	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -44,7 +44,7 @@ func newTestHandler(t *testing.T, upstream *httptest.Server) *Handler {
 
 func newTestHandlerWithCache(t *testing.T, upstream *httptest.Server, c *cache.Cache) *Handler {
 	t.Helper()
-	h, err := New("fm.test", newRedirectingClient(upstream), c, slog.Default())
+	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestHandler_CacheMiss_NetworkError_Returns503(t *testing.T) {
 	client := newRedirectingClient(upstream)
 	upstream.Close() // close after capturing the address in the client
 
-	h, err := New("fm.test", client, cache.New(), slog.Default())
+	h, err := New("fm.test", client, cache.New(), nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -450,7 +450,7 @@ func TestNew_InvalidCDNBaseDomain(t *testing.T) {
 		"http://fm.example.com/",
 	}
 	for _, tc := range cases {
-		_, err := New(tc, http.DefaultClient, cache.New(), slog.Default())
+		_, err := New(tc, http.DefaultClient, cache.New(), nil, slog.Default())
 		if err == nil {
 			t.Errorf("New(%q): expected error, got nil", tc)
 		}

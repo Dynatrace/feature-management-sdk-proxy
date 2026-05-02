@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
+	"github.com/dynatrace/sdk-proxy/internal/sse"
 )
 
 // hopByHopHeaders must not be forwarded between proxy hops (RFC 7230 §6.1).
@@ -33,16 +34,19 @@ type Handler struct {
 	cdnBaseDomain string
 	client        *http.Client
 	cache         *cache.Cache
+	sseManager    *sse.Manager
 	logger        *slog.Logger
 }
 
 // New constructs a Handler. cdnBaseDomain must be a bare hostname
 // (e.g. fm.dynatracelabs.com); the region and path are derived per request.
-func New(cdnBaseDomain string, client *http.Client, c *cache.Cache, logger *slog.Logger) (*Handler, error) {
+// sseManager may be nil; if non-nil, OnConfigCached is called after each
+// successful cold fetch.
+func New(cdnBaseDomain string, client *http.Client, c *cache.Cache, sseManager *sse.Manager, logger *slog.Logger) (*Handler, error) {
 	if cdnBaseDomain == "" || strings.Contains(cdnBaseDomain, "://") || strings.Contains(cdnBaseDomain, "/") {
 		return nil, fmt.Errorf("proxy: invalid CDN base domain %q: must be a bare hostname (e.g. fm.dynatracelabs.com)", cdnBaseDomain)
 	}
-	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, logger: logger}, nil
+	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, sseManager: sseManager, logger: logger}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +75,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.serveMiss(w, r, key, target)
+	h.serveMiss(w, r, sdkKey, key, target)
 }
 
 // serveFromCache writes a response from a cached entry. If the client's
@@ -97,7 +101,7 @@ func (h *Handler) serveFromCache(w http.ResponseWriter, r *http.Request, entry c
 // consistency with the cache-hit path. 4xx responses are passed through
 // unchanged. 5xx and network errors return 503 — an empty response must
 // never reach the SDK.
-func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, key, target string) {
+func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key, target string) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
 	if err != nil {
 		h.logger.Error("proxy: build upstream request failed", slog.String("error", sanitizeErr(err).Error()))
@@ -151,6 +155,10 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, key, target 
 			FetchURL: target,
 		}
 		h.cache.Set(key, entry)
+		if h.sseManager != nil {
+			// Use context.Background() — SSE connections must outlive the HTTP request.
+			h.sseManager.OnConfigCached(context.Background(), sdkKey, body)
+		}
 		// Serve from the cached entry so headers match the cache-hit path.
 		h.serveFromCache(w, r, entry)
 		return

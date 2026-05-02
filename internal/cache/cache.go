@@ -96,16 +96,30 @@ type Fetcher interface {
 	Fetch(ctx context.Context, fetchURL, etag string) (FetchResult, error)
 }
 
+// RefreshObserver is notified when the background refresher fetches a new
+// payload from upstream (200 response). It is never called for 304 responses
+// or fetch errors. keyHash is the safe SHA-256 identifier for the SDK key.
+type RefreshObserver interface {
+	OnRefreshed(keyHash string, payload []byte)
+}
+
 // Refresher drives background TTL refresh using a Fetcher.
 type Refresher struct {
-	cache   *Cache
-	fetcher Fetcher
-	logger  *slog.Logger
+	cache    *Cache
+	fetcher  Fetcher
+	observer RefreshObserver // optional; nil is safe
+	logger   *slog.Logger
 }
 
 // NewRefresher constructs a Refresher. Call Run to start the background loop.
 func NewRefresher(c *Cache, f Fetcher, logger *slog.Logger) *Refresher {
 	return &Refresher{cache: c, fetcher: f, logger: logger}
+}
+
+// NewRefresherWithObserver constructs a Refresher that notifies observer after
+// each successful 200 refresh.
+func NewRefresherWithObserver(c *Cache, f Fetcher, observer RefreshObserver, logger *slog.Logger) *Refresher {
+	return &Refresher{cache: c, fetcher: f, observer: observer, logger: logger}
 }
 
 // Run ticks at half the TTL so stale entries are caught promptly.
@@ -146,6 +160,9 @@ func (r *Refresher) refresh(ctx context.Context) {
 			result.Entry.FetchURL = entry.FetchURL // preserve the fetch URL
 			r.cache.Set(key, *result.Entry)
 			r.logger.Debug("cache: entry refreshed (200)", slog.String("key", key))
+			if r.observer != nil {
+				r.observer.OnRefreshed(key, result.Entry.Payload)
+			}
 		}
 	}
 }
