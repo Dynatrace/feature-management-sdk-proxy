@@ -36,4 +36,5 @@ func TestRegister_NoopMeter(t *testing.T) {
 	inst.BillingFlushLag.Record(ctx, 1.5)
 	inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", "cold")))
 	inst.SnapshotWritesTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "success")))
+	inst.ConfigSSERewriteTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "rewritten"), keyHash))
 }

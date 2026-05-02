@@ -16,6 +16,9 @@ import (
 	"github.com/dynatrace/sdk-proxy/internal/metrics"
 )
 
+// HandlerPath is the proxy's SSE endpoint path.
+const HandlerPath = "/sse"
+
 // defaultEventType is the SSE spec default when no event: field is present.
 const defaultEventType = "message"
 

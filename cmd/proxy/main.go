@@ -80,7 +80,7 @@ func run() error {
 	sseManager := sse.New(sseClient, inst, logger)
 
 	proxyClient := &http.Client{Timeout: 30 * time.Second}
-	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, logger)
+	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, inst, logger)
 	if err != nil {
 		return fmt.Errorf("proxy: %w", err)
 	}
@@ -88,7 +88,7 @@ func run() error {
 	sseHandler := sse.NewHandler(flagCache, sseManager, inst, logger, 15*time.Second)
 
 	mux := http.NewServeMux()
-	mux.Handle("/sse", sseHandler)
+	mux.Handle(sse.HandlerPath, sseHandler)
 	mux.Handle("/", proxyHandler)
 
 	srv, err := server.New(
