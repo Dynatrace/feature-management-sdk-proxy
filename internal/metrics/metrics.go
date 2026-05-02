@@ -8,15 +8,17 @@ import (
 
 // Instrument name constants — all proxy metrics are defined here.
 const (
-	RequestsTotal       = "proxy.requests.total"
-	SSEConnections      = "proxy.sse.connections"
-	CacheSize           = "proxy.cache.size"
-	SnapshotAgeSeconds  = "proxy.snapshot.age_seconds"
-	BillingFlushTotal   = "proxy.billing.flush.total"
-	BillingBufferSize   = "proxy.billing.buffer.size"
-	BillingFlushLag     = "proxy.billing.flush.lag_seconds"
-	StartupPath         = "proxy.startup.path"
-	SnapshotWritesTotal = "proxy.snapshot.writes.total"
+	RequestsTotal          = "proxy.requests.total"
+	SSEConnections         = "proxy.sse.connections"
+	SSEUpstreamReconnects  = "proxy.sse.upstream.reconnects"
+	SSEUpstreamEvents      = "proxy.sse.upstream.events"
+	CacheSize              = "proxy.cache.size"
+	SnapshotAgeSeconds     = "proxy.snapshot.age_seconds"
+	BillingFlushTotal      = "proxy.billing.flush.total"
+	BillingBufferSize      = "proxy.billing.buffer.size"
+	BillingFlushLag        = "proxy.billing.flush.lag_seconds"
+	StartupPath            = "proxy.startup.path"
+	SnapshotWritesTotal    = "proxy.snapshot.writes.total"
 )
 
 // Instruments holds every OTel instrument the proxy emits. Obtain one via Register.
@@ -27,6 +29,14 @@ type Instruments struct {
 
 	// SSEConnections tracks active upstream SSE connections per sdk_key_hash.
 	SSEConnections metric.Int64UpDownCounter
+
+	// SSEUpstreamReconnects counts upstream SSE reconnect attempts per sdk_key_hash
+	// labeled by reason (eof/io_error/inactivity/url_change).
+	SSEUpstreamReconnects metric.Int64Counter
+
+	// SSEUpstreamEvents counts SSE events received from upstream per sdk_key_hash
+	// labeled by result (forwarded/dropped_no_subscribers/dropped_slow_subscriber).
+	SSEUpstreamEvents metric.Int64Counter
 
 	// CacheSize reports the number of bytes held for a given sdk_key_hash.
 	// Synchronous gauge: each component pushes updates at mutation time.
@@ -71,6 +81,22 @@ func Register(meter metric.Meter) (*Instruments, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("metrics: register %s: %w", SSEConnections, err)
+	}
+
+	sseReconnects, err := meter.Int64Counter(SSEUpstreamReconnects,
+		metric.WithDescription("Upstream SSE reconnect attempts by sdk_key_hash and reason (eof/io_error/inactivity/url_change)"),
+		metric.WithUnit("{reconnect}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", SSEUpstreamReconnects, err)
+	}
+
+	sseEvents, err := meter.Int64Counter(SSEUpstreamEvents,
+		metric.WithDescription("Upstream SSE events received by sdk_key_hash and result (forwarded/dropped_no_subscribers/dropped_slow_subscriber)"),
+		metric.WithUnit("{event}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", SSEUpstreamEvents, err)
 	}
 
 	cacheSize, err := meter.Int64Gauge(CacheSize,
@@ -131,9 +157,11 @@ func Register(meter metric.Meter) (*Instruments, error) {
 	}
 
 	return &Instruments{
-		RequestsTotal:       reqTotal,
-		SSEConnections:      sseConns,
-		CacheSize:           cacheSize,
+		RequestsTotal:         reqTotal,
+		SSEConnections:        sseConns,
+		SSEUpstreamReconnects: sseReconnects,
+		SSEUpstreamEvents:     sseEvents,
+		CacheSize:             cacheSize,
 		SnapshotAgeSeconds:  snapshotAge,
 		BillingFlushTotal:   billingFlush,
 		BillingBufferSize:   billingBuf,

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
+	"github.com/dynatrace/sdk-proxy/internal/sse"
 )
 
 // hopByHopHeaders must not be forwarded between proxy hops (RFC 7230 §6.1).
@@ -30,20 +31,22 @@ var hopByHopHeaders = map[string]bool{
 // to the upstream CDN on a miss. The SDK key is never logged or stored; only
 // its SHA-256 hash is used as a stable identifier.
 type Handler struct {
-	upstream *url.URL
-	client   *http.Client
-	cache    *cache.Cache
-	logger   *slog.Logger
+	cdnBaseDomain string
+	client        *http.Client
+	cache         *cache.Cache
+	sseManager    *sse.Manager
+	logger        *slog.Logger
 }
 
-// New constructs a Handler. upstreamBase must be an absolute URL with no
-// trailing path components; path-based routing is appended from each request.
-func New(upstreamBase string, client *http.Client, c *cache.Cache, logger *slog.Logger) (*Handler, error) {
-	u, err := url.Parse(upstreamBase)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return nil, fmt.Errorf("proxy: invalid upstream URL %q", upstreamBase)
+// New constructs a Handler. cdnBaseDomain must be a bare hostname
+// (e.g. fm.dynatracelabs.com); the region and path are derived per request.
+// sseManager may be nil; if non-nil, OnConfigCached is called after each
+// successful cold fetch.
+func New(cdnBaseDomain string, client *http.Client, c *cache.Cache, sseManager *sse.Manager, logger *slog.Logger) (*Handler, error) {
+	if cdnBaseDomain == "" || strings.Contains(cdnBaseDomain, "://") || strings.Contains(cdnBaseDomain, "/") {
+		return nil, fmt.Errorf("proxy: invalid CDN base domain %q: must be a bare hostname (e.g. fm.dynatracelabs.com)", cdnBaseDomain)
 	}
-	return &Handler{upstream: u, client: client, cache: c, logger: logger}, nil
+	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, sseManager: sseManager, logger: logger}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -58,6 +61,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	target, ok := h.buildTarget(sdkKey)
+	if !ok {
+		h.logger.Warn("proxy: unrecognized SDK key format", slog.String("key", cache.Key(sdkKey)))
+		http.Error(w, "unrecognized SDK key format: must be dt_server_{region}_{token}", http.StatusBadRequest)
+		return
+	}
+
 	key := cache.Key(sdkKey)
 
 	if entry, ok := h.cache.Get(key); ok {
@@ -65,7 +75,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.serveMiss(w, r, key)
+	h.serveMiss(w, r, sdkKey, key, target)
 }
 
 // serveFromCache writes a response from a cached entry. If the client's
@@ -91,12 +101,10 @@ func (h *Handler) serveFromCache(w http.ResponseWriter, r *http.Request, entry c
 // consistency with the cache-hit path. 4xx responses are passed through
 // unchanged. 5xx and network errors return 503 — an empty response must
 // never reach the SDK.
-func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, key string) {
-	target := h.buildTarget(r.URL)
-
+func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key, target string) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
 	if err != nil {
-		h.logger.Error("proxy: build upstream request failed", slog.String("error", err.Error()))
+		h.logger.Error("proxy: build upstream request failed", slog.String("error", sanitizeErr(err).Error()))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -142,9 +150,15 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, key string) 
 			Payload:   body,
 			ETag:      resp.Header.Get("ETag"),
 			FetchedAt: time.Now(),
-			FetchURL:  target,
+			// FetchURL contains the raw SDK key — in-memory use is permitted by design
+			// (CLAUDE.md invariant). Snapshot code MUST NOT persist this field as-is.
+			FetchURL: target,
 		}
 		h.cache.Set(key, entry)
+		if h.sseManager != nil {
+			// Use context.Background() — SSE connections must outlive the HTTP request.
+			h.sseManager.OnConfigCached(context.Background(), sdkKey, body)
+		}
 		// Serve from the cached entry so headers match the cache-hit path.
 		h.serveFromCache(w, r, entry)
 		return
@@ -197,12 +211,32 @@ func (h *Handler) Fetch(ctx context.Context, fetchURL, etag string) (cache.Fetch
 	}, nil
 }
 
-// buildTarget constructs the upstream URL for a given inbound request URL.
-func (h *Handler) buildTarget(reqURL *url.URL) string {
-	target := *h.upstream
-	target.Path = strings.TrimRight(h.upstream.Path, "/") + reqURL.Path
-	target.RawQuery = reqURL.RawQuery
-	return target.String()
+// buildTarget derives the geo-bound CDN URL for an SDK key.
+// Returns ("", false) if the SDK key format is not recognized.
+func (h *Handler) buildTarget(sdkKey string) (string, bool) {
+	region, ok := extractRegion(sdkKey)
+	if !ok {
+		return "", false
+	}
+	return "https://cdn." + region + "." + h.cdnBaseDomain + "/server/" + sdkKey + ".json", true
+}
+
+// extractRegion parses the region segment from an SDK key in the format
+// dt_server_{region}_{token}. Returns ("", false) for any other format.
+// The region is validated to contain only [a-z0-9-] to prevent SSRF via
+// crafted region segments in the derived CDN URL.
+func extractRegion(sdkKey string) (string, bool) {
+	parts := strings.SplitN(sdkKey, "_", 4)
+	if len(parts) != 4 || parts[0] != "dt" || parts[1] != "server" || parts[2] == "" || parts[3] == "" {
+		return "", false
+	}
+	region := parts[2]
+	for _, c := range region {
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
+			return "", false
+		}
+	}
+	return region, true
 }
 
 // sanitizeErr strips request URL values from *url.Error to prevent raw SDK

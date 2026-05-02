@@ -12,9 +12,30 @@ import (
 	"github.com/dynatrace/sdk-proxy/internal/cache"
 )
 
+// roundTripFunc adapts a function to the http.RoundTripper interface.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// newRedirectingClient returns an http.Client that routes all requests to
+// target regardless of the request's Host or scheme. This lets tests pass
+// "fm.test" as cdnBaseDomain while buildTarget generates https:// URLs that
+// are transparently sent to the httptest.Server over plain HTTP.
+func newRedirectingClient(target *httptest.Server) *http.Client {
+	addr := target.Listener.Addr().String()
+	return &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			r2 := r.Clone(r.Context())
+			r2.URL.Scheme = "http"
+			r2.URL.Host = addr
+			return http.DefaultTransport.RoundTrip(r2)
+		}),
+	}
+}
+
 func newTestHandler(t *testing.T, upstream *httptest.Server) *Handler {
 	t.Helper()
-	h, err := New(upstream.URL, upstream.Client(), cache.New(), slog.Default())
+	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -23,7 +44,7 @@ func newTestHandler(t *testing.T, upstream *httptest.Server) *Handler {
 
 func newTestHandlerWithCache(t *testing.T, upstream *httptest.Server, c *cache.Cache) *Handler {
 	t.Helper()
-	h, err := New(upstream.URL, upstream.Client(), c, slog.Default())
+	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -45,7 +66,7 @@ func TestHandler_CacheMiss_FetchesUpstream(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -71,10 +92,10 @@ func TestHandler_CacheMiss_PopulatesCache(t *testing.T) {
 	h := newTestHandlerWithCache(t, upstream, c)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
-	key := cache.Key("my-sdk-key")
+	key := cache.Key("dt_server_us_abc123")
 	entry, ok := c.Get(key)
 	if !ok {
 		t.Fatal("expected cache to be populated after miss")
@@ -97,29 +118,11 @@ func TestHandler_CacheMiss_PathForwardedToUpstream(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
-	if gotPath != "/v1/config/my-sdk-key.json" {
-		t.Errorf("upstream received path %q, want /v1/config/my-sdk-key.json", gotPath)
-	}
-}
-
-func TestHandler_CacheMiss_QueryStringPassthrough(t *testing.T) {
-	var gotQuery string
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotQuery = r.URL.RawQuery
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer upstream.Close()
-
-	h := newTestHandler(t, upstream)
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json?foo=bar", nil)
-	h.ServeHTTP(rec, req)
-
-	if gotQuery != "foo=bar" {
-		t.Errorf("upstream received query %q, want foo=bar", gotQuery)
+	if gotPath != "/server/dt_server_us_abc123.json" {
+		t.Errorf("upstream received path %q, want /server/dt_server_us_abc123.json", gotPath)
 	}
 }
 
@@ -132,7 +135,7 @@ func TestHandler_CacheMiss_Upstream304_Returns503(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -148,7 +151,7 @@ func TestHandler_CacheMiss_UpstreamServerError_Returns503(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -158,15 +161,15 @@ func TestHandler_CacheMiss_UpstreamServerError_Returns503(t *testing.T) {
 
 func TestHandler_CacheMiss_NetworkError_Returns503(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	upstreamURL := upstream.URL
-	upstream.Close()
+	client := newRedirectingClient(upstream)
+	upstream.Close() // close after capturing the address in the client
 
-	h, err := New(upstreamURL, http.DefaultClient, cache.New(), slog.Default())
+	h, err := New("fm.test", client, cache.New(), nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -183,7 +186,7 @@ func TestHandler_CacheMiss_UpstreamClientError_PassedThrough(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
@@ -206,7 +209,7 @@ func TestHandler_CacheMiss_IfNoneMatch_NotForwardedToUpstream(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
 	req.Header.Set("If-None-Match", `"abc123"`)
 	h.ServeHTTP(rec, req)
 
@@ -224,17 +227,17 @@ func TestHandler_CacheHit_ServesFromCache_NoUpstreamCall(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.Key("my-sdk-key")
+	key := cache.Key("dt_server_us_abc123")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{"foo":true}}`),
 		ETag:      `"v1"`,
 		FetchedAt: time.Now(),
-		FetchURL:  upstream.URL + "/v1/config/my-sdk-key.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
 	})
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -255,17 +258,17 @@ func TestHandler_CacheHit_ETagMatch_Returns304(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.Key("my-sdk-key")
+	key := cache.Key("dt_server_us_abc123")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{}}`),
 		ETag:      `"abc123"`,
 		FetchedAt: time.Now(),
-		FetchURL:  upstream.URL + "/v1/config/my-sdk-key.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
 	})
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
 	req.Header.Set("If-None-Match", `"abc123"`)
 	h.ServeHTTP(rec, req)
 
@@ -287,17 +290,17 @@ func TestHandler_CacheHit_ETagMismatch_Returns200WithPayload(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.Key("my-sdk-key")
+	key := cache.Key("dt_server_us_abc123")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{"updated":true}}`),
 		ETag:      `"v2"`,
 		FetchedAt: time.Now(),
-		FetchURL:  upstream.URL + "/v1/config/my-sdk-key.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
 	})
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
 	req.Header.Set("If-None-Match", `"v1"`) // stale client version
 	h.ServeHTTP(rec, req)
 
@@ -316,17 +319,17 @@ func TestHandler_CacheHit_NoETag_Returns200(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.Key("my-sdk-key")
+	key := cache.Key("dt_server_us_abc123")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{}}`),
 		ETag:      "", // no ETag stored
 		FetchedAt: time.Now(),
-		FetchURL:  upstream.URL + "/v1/config/my-sdk-key.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
 	})
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
 	req.Header.Set("If-None-Match", `"anything"`)
 	h.ServeHTTP(rec, req)
 
@@ -347,7 +350,7 @@ func TestHandler_NonGetMethod_Returns405(t *testing.T) {
 	h := newTestHandler(t, upstream)
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(method, "/v1/config/my-sdk-key.json", nil)
+		req := httptest.NewRequest(method, "/v1/config/dt_server_us_abc123.json", nil)
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s: expected 405, got %d", method, rec.Code)
@@ -363,7 +366,7 @@ func TestHandler_MissingJsonSuffix_Returns400(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/my-sdk-key", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -387,6 +390,27 @@ func TestHandler_EmptyKeySegment_Returns400(t *testing.T) {
 	}
 }
 
+func TestHandler_UnrecognizedSDKKeyFormat_Returns400(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called for unrecognized key format")
+	}))
+	defer upstream.Close()
+
+	h := newTestHandler(t, upstream)
+	for _, path := range []string{
+		"/v1/config/bogus.json",
+		"/v1/config/my-sdk-key.json",
+		"/v1/config/dt_client_us_abc.json",
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("path %q: expected 400, got %d", path, rec.Code)
+		}
+	}
+}
+
 func TestHandler_HEAD_CacheHit_NoBody(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("upstream should not be called on cache hit")
@@ -394,17 +418,17 @@ func TestHandler_HEAD_CacheHit_NoBody(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.Key("my-sdk-key")
+	key := cache.Key("dt_server_us_abc123")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{}}`),
 		ETag:      `"v1"`,
 		FetchedAt: time.Now(),
-		FetchURL:  upstream.URL + "/v1/config/my-sdk-key.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
 	})
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodHead, "/v1/config/my-sdk-key.json", nil)
+	req := httptest.NewRequest(http.MethodHead, "/v1/config/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -418,15 +442,15 @@ func TestHandler_HEAD_CacheHit_NoBody(t *testing.T) {
 	}
 }
 
-func TestNew_InvalidUpstreamURL(t *testing.T) {
+func TestNew_InvalidCDNBaseDomain(t *testing.T) {
 	cases := []string{
 		"",
-		"not-a-url",
-		"//noscheme.example.com/path",
-		"ftp://", // no host
+		"https://fm.example.com",
+		"fm.example.com/path",
+		"http://fm.example.com/",
 	}
 	for _, tc := range cases {
-		_, err := New(tc, http.DefaultClient, cache.New(), slog.Default())
+		_, err := New(tc, http.DefaultClient, cache.New(), nil, slog.Default())
 		if err == nil {
 			t.Errorf("New(%q): expected error, got nil", tc)
 		}
@@ -452,5 +476,44 @@ func TestExtractSDKKey(t *testing.T) {
 		if ok != tc.wantOK || key != tc.wantKey {
 			t.Errorf("extractSDKKey(%q) = (%q, %v), want (%q, %v)", tc.path, key, ok, tc.wantKey, tc.wantOK)
 		}
+	}
+}
+
+func TestExtractRegion(t *testing.T) {
+	cases := []struct {
+		sdkKey     string
+		wantRegion string
+		wantOK     bool
+	}{
+		{"dt_server_us_abc123", "us", true},
+		{"dt_server_eu_abc123", "eu", true},
+		{"dt_server_eu_tok_with_underscores", "eu", true},   // token may contain underscores
+		{"dt_client_us_abc", "", false},                    // wrong second segment
+		{"dt_server__abc", "", false},                      // empty region
+		{"dt_server_us_", "", false},                       // empty token
+		{"dt_server_us", "", false},                        // too few parts
+		{"dt_server_US_abc", "", false},                    // uppercase region rejected
+		{"dt_server_us.east_abc", "", false},               // dot in region rejected (SSRF guard)
+		{"dt_server_evil.com:8080_abc", "", false},         // port in region rejected (SSRF guard)
+		{"bogus", "", false},
+		{"", "", false},
+	}
+	for _, tc := range cases {
+		region, ok := extractRegion(tc.sdkKey)
+		if ok != tc.wantOK || region != tc.wantRegion {
+			t.Errorf("extractRegion(%q) = (%q, %v), want (%q, %v)", tc.sdkKey, region, ok, tc.wantRegion, tc.wantOK)
+		}
+	}
+}
+
+func TestBuildTarget_ConstructsGeoBoundURL(t *testing.T) {
+	h := &Handler{cdnBaseDomain: "fm.dynatracelabs.com"}
+	got, ok := h.buildTarget("dt_server_us_abc123")
+	if !ok {
+		t.Fatal("buildTarget returned ok=false for valid SDK key")
+	}
+	want := "https://cdn.us.fm.dynatracelabs.com/server/dt_server_us_abc123.json"
+	if got != want {
+		t.Errorf("buildTarget = %q, want %q", got, want)
 	}
 }
