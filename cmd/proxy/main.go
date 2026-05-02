@@ -65,7 +65,6 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("metrics register: %w", err)
 	}
-	_ = inst // components will consume this as they are wired in
 
 	flagCache := cache.New()
 
@@ -86,7 +85,10 @@ func run() error {
 		return fmt.Errorf("proxy: %w", err)
 	}
 
+	sseHandler := sse.NewHandler(flagCache, sseManager, inst, logger, 15*time.Second)
+
 	mux := http.NewServeMux()
+	mux.Handle("/sse", sseHandler)
 	mux.Handle("/", proxyHandler)
 
 	srv, err := server.New(

@@ -10,6 +10,8 @@ import (
 const (
 	RequestsTotal          = "proxy.requests.total"
 	SSEConnections         = "proxy.sse.connections"
+	SSEClientConnections   = "proxy.sse.client.connections"
+	SSEEventsDelivered     = "proxy.sse.events_delivered_total"
 	SSEUpstreamReconnects  = "proxy.sse.upstream.reconnects"
 	SSEUpstreamEvents      = "proxy.sse.upstream.events"
 	CacheSize              = "proxy.cache.size"
@@ -29,6 +31,14 @@ type Instruments struct {
 
 	// SSEConnections tracks active upstream SSE connections per sdk_key_hash.
 	SSEConnections metric.Int64UpDownCounter
+
+	// SSEClientConnections tracks active SDK client SSE connections to the proxy
+	// per sdk_key_hash.
+	SSEClientConnections metric.Int64UpDownCounter
+
+	// SSEEventsDelivered counts SSE events successfully written to SDK clients
+	// per sdk_key_hash.
+	SSEEventsDelivered metric.Int64Counter
 
 	// SSEUpstreamReconnects counts upstream SSE reconnect attempts per sdk_key_hash
 	// labeled by reason (eof/io_error/inactivity/url_change).
@@ -81,6 +91,22 @@ func Register(meter metric.Meter) (*Instruments, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("metrics: register %s: %w", SSEConnections, err)
+	}
+
+	sseClientConns, err := meter.Int64UpDownCounter(SSEClientConnections,
+		metric.WithDescription("Active SDK client SSE connections to the proxy per SDK key hash"),
+		metric.WithUnit("{connection}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", SSEClientConnections, err)
+	}
+
+	sseEventsDelivered, err := meter.Int64Counter(SSEEventsDelivered,
+		metric.WithDescription("SSE events successfully written to SDK clients per SDK key hash"),
+		metric.WithUnit("{event}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", SSEEventsDelivered, err)
 	}
 
 	sseReconnects, err := meter.Int64Counter(SSEUpstreamReconnects,
@@ -159,6 +185,8 @@ func Register(meter metric.Meter) (*Instruments, error) {
 	return &Instruments{
 		RequestsTotal:         reqTotal,
 		SSEConnections:        sseConns,
+		SSEClientConnections:  sseClientConns,
+		SSEEventsDelivered:    sseEventsDelivered,
 		SSEUpstreamReconnects: sseReconnects,
 		SSEUpstreamEvents:     sseEvents,
 		CacheSize:             cacheSize,

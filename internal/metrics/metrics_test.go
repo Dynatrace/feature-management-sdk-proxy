@@ -27,6 +27,8 @@ func TestRegister_NoopMeter(t *testing.T) {
 
 	inst.RequestsTotal.Add(ctx, 1, metric.WithAttributes(result))
 	inst.SSEConnections.Add(ctx, 1, metric.WithAttributes(keyHash))
+	inst.SSEClientConnections.Add(ctx, 1, metric.WithAttributes(keyHash))
+	inst.SSEEventsDelivered.Add(ctx, 1, metric.WithAttributes(keyHash))
 	inst.CacheSize.Record(ctx, 1024, metric.WithAttributes(keyHash))
 	inst.SnapshotAgeSeconds.Record(ctx, 30.5, metric.WithAttributes(keyHash))
 	inst.BillingFlushTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "success")))

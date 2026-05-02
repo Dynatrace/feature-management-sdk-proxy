@@ -9,4 +9,10 @@
 // cache. OnRefreshed must be called after each background 200 refresh (not
 // 304). The snapshot load path must NOT call either — SSE is established only
 // after the proxy confirms upstream reachability via a live HTTP response.
+//
+// Handler serves GET /sse for SDK clients. The SDK key is supplied via the
+// sdk_key query parameter. The handler gates on cache presence (412 if the
+// config has not been fetched yet), then subscribes to the Manager and
+// re-broadcasts refetchEvaluation events to the client. It never opens an
+// upstream SSE connection; that is handled exclusively by Manager.
 package sse
