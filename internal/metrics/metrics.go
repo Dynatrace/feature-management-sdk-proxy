@@ -147,7 +147,7 @@ func Register(meter metric.Meter) (*Instruments, error) {
 	}
 
 	billingFlush, err := meter.Int64Counter(BillingFlushTotal,
-		metric.WithDescription("Billing endpoint flush attempts by result (success/failure)"),
+		metric.WithDescription("Billing endpoint flush attempts by result (success/permanent_error/ctx_error/retry)"),
 		metric.WithUnit("{flush}"),
 	)
 	if err != nil {

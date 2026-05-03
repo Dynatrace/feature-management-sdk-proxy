@@ -169,6 +169,23 @@ func TestCounter_ConcurrentIncrements_Race(t *testing.T) {
 	}
 }
 
+func TestSample_WindowFieldsZeroByDefault(t *testing.T) {
+	c := NewCounter()
+	c.Increment("dt_server_us_abc123")
+
+	samples := c.Drain()
+	if len(samples) != 1 {
+		t.Fatalf("want 1 sample, got %d", len(samples))
+	}
+	s := samples[0]
+	if !s.WindowStart.IsZero() {
+		t.Errorf("WindowStart = %v, want zero (flush loop populates it)", s.WindowStart)
+	}
+	if !s.WindowEnd.IsZero() {
+		t.Errorf("WindowEnd = %v, want zero (flush loop populates it)", s.WindowEnd)
+	}
+}
+
 func TestCounter_ConcurrentIncrementAndDrain_NoLostCounts(t *testing.T) {
 	c := NewCounter()
 	const key = "dt_server_us_drainconcurrent"

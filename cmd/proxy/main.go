@@ -81,6 +81,8 @@ func run() error {
 	sseManager := sse.New(sseClient, inst, logger)
 
 	counter := telemetry.NewCounter()
+	logReporter := telemetry.NewLogReporter(logger, cfg.ProxyInstanceID)
+	flusher := telemetry.NewFlusher(counter, logReporter, telemetry.NewNoopRetryBuffer(), inst, cfg.BillingFlushInterval, logger)
 
 	proxyClient := &http.Client{Timeout: 30 * time.Second}
 	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, inst, counter, logger)
@@ -104,9 +106,10 @@ func run() error {
 		return fmt.Errorf("server: %w", err)
 	}
 
-	// The refresher shares the signal context so it stops before the server drains.
+	// The refresher and flusher share the signal context so they stop before the server drains.
 	refresher := cache.NewRefresherWithObserver(flagCache, proxyHandler, sseManager, logger)
 	go refresher.Run(ctx)
+	go flusher.Run(ctx)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start() }()
