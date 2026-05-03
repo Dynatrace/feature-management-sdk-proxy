@@ -20,6 +20,7 @@ import (
 	"github.com/dynatrace/sdk-proxy/internal/proxy"
 	"github.com/dynatrace/sdk-proxy/internal/server"
 	"github.com/dynatrace/sdk-proxy/internal/sse"
+	"github.com/dynatrace/sdk-proxy/internal/telemetry"
 )
 
 func main() {
@@ -79,13 +80,15 @@ func run() error {
 	}
 	sseManager := sse.New(sseClient, inst, logger)
 
+	counter := telemetry.NewCounter()
+
 	proxyClient := &http.Client{Timeout: 30 * time.Second}
-	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, inst, logger)
+	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, inst, counter, logger)
 	if err != nil {
 		return fmt.Errorf("proxy: %w", err)
 	}
 
-	sseHandler := sse.NewHandler(flagCache, sseManager, inst, logger, 15*time.Second)
+	sseHandler := sse.NewHandler(flagCache, sseManager, inst, counter, logger, 15*time.Second)
 
 	mux := http.NewServeMux()
 	mux.Handle(sse.HandlerPath, sseHandler)

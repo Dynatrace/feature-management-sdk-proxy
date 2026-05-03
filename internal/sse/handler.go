@@ -14,6 +14,7 @@ import (
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
 	"github.com/dynatrace/sdk-proxy/internal/metrics"
+	"github.com/dynatrace/sdk-proxy/internal/telemetry"
 )
 
 // HandlerPath is the proxy's SSE endpoint path.
@@ -34,17 +35,20 @@ type Handler struct {
 	cache             *cache.Cache
 	manager           Subscriber
 	inst              *metrics.Instruments
+	counter           *telemetry.Counter
 	logger            *slog.Logger
 	heartbeatInterval time.Duration
 }
 
 // NewHandler constructs a Handler. heartbeatInterval is the period between
 // keepalive comments sent on idle connections (15s is typical for production).
-func NewHandler(c *cache.Cache, m Subscriber, inst *metrics.Instruments, logger *slog.Logger, heartbeatInterval time.Duration) *Handler {
+// counter may be nil; counting is silently skipped.
+func NewHandler(c *cache.Cache, m Subscriber, inst *metrics.Instruments, counter *telemetry.Counter, logger *slog.Logger, heartbeatInterval time.Duration) *Handler {
 	return &Handler{
 		cache:             c,
 		manager:           m,
 		inst:              inst,
+		counter:           counter,
 		logger:            logger,
 		heartbeatInterval: heartbeatInterval,
 	}
@@ -76,6 +80,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		)
 		http.Error(w, "config not cached; fetch /v1/config/{sdk_key}.json first", http.StatusPreconditionFailed)
 		return
+	}
+
+	// Count only accepted SSE subscription requests (after key and cache gate).
+	// Rejected requests (412 no config, invalid key format) are not counted —
+	// they never establish a connection and consume no ongoing proxy resources.
+	if h.counter != nil {
+		h.counter.Increment(sdkKey)
 	}
 
 	flusher, ok := w.(http.Flusher)

@@ -17,6 +17,7 @@ import (
 	"github.com/dynatrace/sdk-proxy/internal/cache"
 	"github.com/dynatrace/sdk-proxy/internal/metrics"
 	"github.com/dynatrace/sdk-proxy/internal/sse"
+	"github.com/dynatrace/sdk-proxy/internal/telemetry"
 )
 
 // hopByHopHeaders must not be forwarded between proxy hops (RFC 7230 §6.1).
@@ -40,18 +41,20 @@ type Handler struct {
 	cache         *cache.Cache
 	sseManager    *sse.Manager
 	inst          *metrics.Instruments
+	counter       *telemetry.Counter
 	logger        *slog.Logger
 }
 
 // New constructs a Handler. cdnBaseDomain must be a bare hostname
 // (e.g. fm.dynatracelabs.com); the region and path are derived per request.
 // sseManager may be nil; if non-nil, OnConfigCached is called after each
-// successful cold fetch. inst may be nil; metrics are silently skipped.
-func New(cdnBaseDomain string, client *http.Client, c *cache.Cache, sseManager *sse.Manager, inst *metrics.Instruments, logger *slog.Logger) (*Handler, error) {
+// successful cold fetch. inst and counter may be nil; metrics and counting
+// are silently skipped.
+func New(cdnBaseDomain string, client *http.Client, c *cache.Cache, sseManager *sse.Manager, inst *metrics.Instruments, counter *telemetry.Counter, logger *slog.Logger) (*Handler, error) {
 	if cdnBaseDomain == "" || strings.Contains(cdnBaseDomain, "://") || strings.Contains(cdnBaseDomain, "/") {
 		return nil, fmt.Errorf("proxy: invalid CDN base domain %q: must be a bare hostname (e.g. fm.dynatracelabs.com)", cdnBaseDomain)
 	}
-	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, sseManager: sseManager, inst: inst, logger: logger}, nil
+	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, sseManager: sseManager, inst: inst, counter: counter, logger: logger}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -74,6 +77,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key := cache.Key(sdkKey)
+
+	// Count every request with a recognized SDK key, regardless of whether it
+	// hits the cache or reaches upstream. Cache hits, cache misses, upstream
+	// errors (503), and HEAD requests all reflect real SDK usage.
+	if h.counter != nil {
+		h.counter.Increment(sdkKey)
+	}
 
 	if entry, ok := h.cache.Get(key); ok {
 		h.serveFromCache(w, r, entry, sdkKey)
