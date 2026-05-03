@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
+	"github.com/dynatrace/sdk-proxy/internal/telemetry"
 )
 
 // roundTripFunc adapts a function to the http.RoundTripper interface.
@@ -36,7 +37,7 @@ func newRedirectingClient(target *httptest.Server) *http.Client {
 
 func newTestHandler(t *testing.T, upstream *httptest.Server) *Handler {
 	t.Helper()
-	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, nil, slog.Default())
+	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, nil, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -45,7 +46,7 @@ func newTestHandler(t *testing.T, upstream *httptest.Server) *Handler {
 
 func newTestHandlerWithCache(t *testing.T, upstream *httptest.Server, c *cache.Cache) *Handler {
 	t.Helper()
-	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, nil, slog.Default())
+	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, nil, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestHandler_CacheMiss_NetworkError_Returns503(t *testing.T) {
 	client := newRedirectingClient(upstream)
 	upstream.Close() // close after capturing the address in the client
 
-	h, err := New("fm.test", client, cache.New(), nil, nil, slog.Default())
+	h, err := New("fm.test", client, cache.New(), nil, nil, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -451,7 +452,7 @@ func TestNew_InvalidCDNBaseDomain(t *testing.T) {
 		"http://fm.example.com/",
 	}
 	for _, tc := range cases {
-		_, err := New(tc, http.DefaultClient, cache.New(), nil, nil, slog.Default())
+		_, err := New(tc, http.DefaultClient, cache.New(), nil, nil, nil, slog.Default())
 		if err == nil {
 			t.Errorf("New(%q): expected error, got nil", tc)
 		}
@@ -789,5 +790,169 @@ func TestHandler_Rewrite_HTTPSSchemeFromXForwardedProto(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "https://proxy.example.com/sse") {
 		t.Errorf("expected https scheme in rewritten URL, got: %q", body)
+	}
+}
+
+// --- Counter increment tests ---
+
+func newTestHandlerWithCounter(t *testing.T, upstream *httptest.Server, counter *telemetry.Counter) *Handler {
+	t.Helper()
+	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, nil, counter, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return h
+}
+
+func newTestHandlerWithCacheAndCounter(t *testing.T, upstream *httptest.Server, c *cache.Cache, counter *telemetry.Counter) *Handler {
+	t.Helper()
+	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, nil, counter, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return h
+}
+
+func TestHandler_Counter_IncrementOnCacheMiss(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"flags":{}}`)
+	}))
+	defer upstream.Close()
+
+	counter := telemetry.NewCounter()
+	h := newTestHandlerWithCounter(t, upstream, counter)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	h.ServeHTTP(rec, req)
+
+	samples := counter.Drain()
+	if len(samples) != 1 || samples[0].Count != 1 {
+		t.Errorf("want 1 sample with Count=1 after cache miss, got %v", samples)
+	}
+}
+
+func TestHandler_Counter_IncrementOnCacheHit(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called on cache hit")
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	c.Set(cache.Key("dt_server_us_abc123"), cache.Entry{
+		Payload:   []byte(`{"flags":{}}`),
+		FetchedAt: time.Now(),
+		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+	})
+	counter := telemetry.NewCounter()
+	h := newTestHandlerWithCacheAndCounter(t, upstream, c, counter)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	h.ServeHTTP(rec, req)
+
+	samples := counter.Drain()
+	if len(samples) != 1 || samples[0].Count != 1 {
+		t.Errorf("want 1 sample with Count=1 after cache hit, got %v", samples)
+	}
+}
+
+func TestHandler_Counter_IncrementOnUpstreamError(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+
+	counter := telemetry.NewCounter()
+	h := newTestHandlerWithCounter(t, upstream, counter)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rec.Code)
+	}
+	samples := counter.Drain()
+	if len(samples) != 1 || samples[0].Count != 1 {
+		t.Errorf("want 1 sample with Count=1 even on upstream error, got %v", samples)
+	}
+}
+
+func TestHandler_Counter_IncrementOnHEAD(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called on cache hit")
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	c.Set(cache.Key("dt_server_us_abc123"), cache.Entry{
+		Payload:   []byte(`{"flags":{}}`),
+		FetchedAt: time.Now(),
+		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+	})
+	counter := telemetry.NewCounter()
+	h := newTestHandlerWithCacheAndCounter(t, upstream, c, counter)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodHead, "/v1/config/dt_server_us_abc123.json", nil)
+	h.ServeHTTP(rec, req)
+
+	samples := counter.Drain()
+	if len(samples) != 1 || samples[0].Count != 1 {
+		t.Errorf("want 1 sample with Count=1 for HEAD request, got %v", samples)
+	}
+}
+
+func TestHandler_Counter_NoIncrementOn405(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer upstream.Close()
+
+	counter := telemetry.NewCounter()
+	h := newTestHandlerWithCounter(t, upstream, counter)
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(method, "/v1/config/dt_server_us_abc123.json", nil)
+		h.ServeHTTP(rec, req)
+	}
+
+	if samples := counter.Drain(); len(samples) != 0 {
+		t.Errorf("405 requests must not increment counter, got %v", samples)
+	}
+}
+
+func TestHandler_Counter_NoIncrementOnMalformedPath(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer upstream.Close()
+
+	counter := telemetry.NewCounter()
+	h := newTestHandlerWithCounter(t, upstream, counter)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/notjson", nil)
+	h.ServeHTTP(rec, req)
+
+	if samples := counter.Drain(); len(samples) != 0 {
+		t.Errorf("malformed path must not increment counter, got %v", samples)
+	}
+}
+
+func TestHandler_Counter_NoIncrementOnUnrecognizedKeyFormat(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer upstream.Close()
+
+	counter := telemetry.NewCounter()
+	h := newTestHandlerWithCounter(t, upstream, counter)
+
+	for _, path := range []string{"/v1/config/bogus.json", "/v1/config/dt_client_us_abc.json"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		h.ServeHTTP(rec, req)
+	}
+
+	if samples := counter.Drain(); len(samples) != 0 {
+		t.Errorf("unrecognized key format must not increment counter, got %v", samples)
 	}
 }

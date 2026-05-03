@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
+	"github.com/dynatrace/sdk-proxy/internal/telemetry"
 )
 
 // mockSubscriber implements Subscriber for testing.
@@ -63,7 +64,7 @@ const testSDKKey = "dt_server_us_abc123"
 func newTestHandlerWithCache(t *testing.T, sub Subscriber) (*Handler, *cache.Cache) {
 	t.Helper()
 	c := cache.New()
-	h := NewHandler(c, sub, newTestInstruments(t), slog.Default(), 15*time.Second)
+	h := NewHandler(c, sub, newTestInstruments(t), nil, slog.Default(), 15*time.Second)
 	return h, c
 }
 
@@ -151,17 +152,14 @@ func TestHandler_HappyPath_StreamsEvent(t *testing.T) {
 
 	sub.dispatch(Event{EventType: "message", Data: []byte(`{"type":"refetchEvaluation"}`)})
 
-	// Poll until the handler writes the event rather than sleeping a fixed duration.
-	const want = `data: {"type":"refetchEvaluation"}`
-	for range 100 {
-		if strings.Contains(rr.Body.String(), want) {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// Give the handler goroutine time to write the event before cancelling.
+	// Reading rr.Body while the handler goroutine is still writing is a data race,
+	// so we cancel after the sleep and read only after <-done.
+	time.Sleep(50 * time.Millisecond)
 	cancel()
 	<-done
 
+	const want = `data: {"type":"refetchEvaluation"}`
 	body := rr.Body.String()
 	if !strings.Contains(body, "event: message") {
 		t.Errorf("body %q: missing 'event: message'", body)
@@ -176,7 +174,7 @@ func TestHandler_MultipleSubscribers_AllReceiveEvent(t *testing.T) {
 	sub := &mockSubscriber{}
 	c := cache.New()
 	c.Set(cache.Key(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
-	h := NewHandler(c, sub, newTestInstruments(t), slog.Default(), time.Minute)
+	h := NewHandler(c, sub, newTestInstruments(t), nil, slog.Default(), time.Minute)
 
 	cancels := make([]context.CancelFunc, n)
 	rrs := make([]*httptest.ResponseRecorder, n)
@@ -244,7 +242,7 @@ func TestHandler_Heartbeat_EmitsPing(t *testing.T) {
 	sub := &mockSubscriber{}
 	c := cache.New()
 	c.Set(cache.Key(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
-	h := NewHandler(c, sub, newTestInstruments(t), slog.Default(), 50*time.Millisecond)
+	h := NewHandler(c, sub, newTestInstruments(t), nil, slog.Default(), 50*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -274,7 +272,7 @@ func TestHandler_RawSDKKeyNeverLogged(t *testing.T) {
 	sub := &mockSubscriber{}
 	c := cache.New()
 	c.Set(cache.Key(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
-	h := NewHandler(c, sub, newTestInstruments(t), logger, 15*time.Second)
+	h := NewHandler(c, sub, newTestInstruments(t), nil, logger, 15*time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rr := httptest.NewRecorder()
@@ -298,5 +296,92 @@ func TestHandler_RawSDKKeyNeverLogged(t *testing.T) {
 	}
 	if !strings.Contains(logs, cache.Key(testSDKKey)) {
 		t.Errorf("log output missing key hash %q: %s", cache.Key(testSDKKey), logs)
+	}
+}
+
+// --- Counter increment tests ---
+
+func TestSSEHandler_Counter_IncrementOnAcceptedSubscription(t *testing.T) {
+	sub := &mockSubscriber{}
+	c := cache.New()
+	c.Set(cache.Key(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
+
+	counter := telemetry.NewCounter()
+	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sse?sdk_key="+testSDKKey, nil).WithContext(ctx)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.ServeHTTP(rr, req)
+	}()
+
+	if !waitForSubs(sub, 1) {
+		t.Fatal("timed out waiting for subscriber to register")
+	}
+	cancel()
+	<-done
+
+	samples := counter.Drain()
+	if len(samples) != 1 || samples[0].Count != 1 {
+		t.Errorf("want 1 sample with Count=1 for accepted SSE subscription, got %v", samples)
+	}
+}
+
+func TestSSEHandler_Counter_NoIncrementOn405(t *testing.T) {
+	sub := &mockSubscriber{}
+	counter := telemetry.NewCounter()
+	c := cache.New()
+	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second)
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(method, "/sse?sdk_key="+testSDKKey, nil)
+		h.ServeHTTP(rr, req)
+	}
+
+	if samples := counter.Drain(); len(samples) != 0 {
+		t.Errorf("405 requests must not increment counter, got %v", samples)
+	}
+}
+
+func TestSSEHandler_Counter_NoIncrementOnMissingSDKKey(t *testing.T) {
+	sub := &mockSubscriber{}
+	counter := telemetry.NewCounter()
+	c := cache.New()
+	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+	if samples := counter.Drain(); len(samples) != 0 {
+		t.Errorf("missing sdk_key must not increment counter, got %v", samples)
+	}
+}
+
+func TestSSEHandler_Counter_NoIncrementOn412(t *testing.T) {
+	sub := &mockSubscriber{}
+	counter := telemetry.NewCounter()
+	c := cache.New() // config not cached
+	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sse?sdk_key="+testSDKKey, nil)
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusPreconditionFailed {
+		t.Fatalf("expected 412, got %d", rr.Code)
+	}
+	if samples := counter.Drain(); len(samples) != 0 {
+		t.Errorf("412 (no cached config) must not increment counter, got %v", samples)
 	}
 }
