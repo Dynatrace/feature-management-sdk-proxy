@@ -320,6 +320,111 @@ func TestFlusher_RetriedSample_PreservesWindow(t *testing.T) {
 	}
 }
 
+// blockingReporter blocks until its ctx is cancelled, then returns ctx.Err().
+type blockingReporter struct{}
+
+func (r *blockingReporter) Report(ctx context.Context, _ Sample) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestFlusher_Shutdown_FlushesPendingCounts(t *testing.T) {
+	reporter := &spyReporter{}
+	counter := NewCounter()
+	counter.Increment("dt_server_us_tok1")
+
+	f := newFlusher(counter, reporter, NewNoopRetryBuffer(), newTestInst(t))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	f.Shutdown(ctx)
+
+	calls := reporter.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("want 1 call, got %d", len(calls))
+	}
+	if calls[0].Count != 1 {
+		t.Errorf("Count = %d, want 1", calls[0].Count)
+	}
+	if calls[0].WindowStart.IsZero() || calls[0].WindowEnd.IsZero() {
+		t.Error("window timestamps not populated")
+	}
+}
+
+func TestFlusher_Shutdown_DrainsRetryBufferFirst(t *testing.T) {
+	spy := &spyRetryBuffer{}
+	retrySample := Sample{
+		KeyHash:     "aabbccddeeff0011",
+		SDKKey:      "dt_server_us_retry_key",
+		Count:       5,
+		WindowStart: time.Now().Add(-2 * time.Minute).UTC(),
+		WindowEnd:   time.Now().Add(-1 * time.Minute).UTC(),
+	}
+	spy.Enqueue(retrySample)
+
+	counter := NewCounter()
+	counter.Increment("dt_server_us_fresh_key")
+
+	reporter := &spyReporter{}
+	f := newFlusher(counter, reporter, spy, newTestInst(t))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	f.Shutdown(ctx)
+
+	calls := reporter.Calls()
+	if len(calls) < 2 {
+		t.Fatalf("want >= 2 calls, got %d", len(calls))
+	}
+	if calls[0].KeyHash != retrySample.KeyHash {
+		t.Errorf("first call KeyHash = %q, want retry sample %q", calls[0].KeyHash, retrySample.KeyHash)
+	}
+}
+
+func TestFlusher_Shutdown_DeadlineExpired_DropsAndEnqueues(t *testing.T) {
+	// Two distinct tokens so Counter.Drain returns two samples.
+	// The blocking reporter holds the first dispatch until the short ctx expires.
+	// The second sample is then enqueued-with-log (not dispatched) because
+	// ctx.Err() != nil at the start of the next loop iteration.
+	counter := NewCounter()
+	counter.Increment("dt_server_us_tok1")
+	counter.Increment("dt_server_us_tok2")
+
+	spy := &spyRetryBuffer{}
+	f := newFlusher(counter, &blockingReporter{}, spy, newTestInst(t))
+
+	// Deadline shorter than per-call timeout (2*tickInterval = 40ms).
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	f.Shutdown(ctx)
+
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Errorf("Shutdown took %v, expected <= 500ms", elapsed)
+	}
+	if len(spy.History()) != 1 {
+		t.Errorf("want 1 enqueued sample (unprocessed remainder), got %d", len(spy.History()))
+	}
+}
+
+func TestFlusher_Shutdown_AfterRunExits(t *testing.T) {
+	f := newFlusher(NewCounter(), &spyReporter{}, NewNoopRetryBuffer(), newTestInst(t))
+
+	runCtx, runCancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.Run(runCtx)
+	}()
+	runCancel()
+	<-done
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	f.Shutdown(ctx) // must not panic or deadlock
+}
+
 func TestFlusher_CtxCancel_ExitsRun(t *testing.T) {
 	reporter := &spyReporter{}
 	f := newFlusher(NewCounter(), reporter, NewNoopRetryBuffer(), newTestInst(t))
