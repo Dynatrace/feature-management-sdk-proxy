@@ -18,15 +18,22 @@ type Config struct {
 	// OTLPEnabled is true when OTEL_EXPORTER_OTLP_ENDPOINT is set.
 	// When false, metrics are emitted to a no-op provider.
 	OTLPEnabled bool
+	// BillingFlushInterval is how often the telemetry flusher drains counters
+	// and sends to the billing endpoint. Minimum 10s, default 60s.
+	BillingFlushInterval time.Duration
+	// ProxyInstanceID identifies this proxy replica in billing records.
+	// Defaults to os.Hostname(); falls back to "unknown" on error.
+	ProxyInstanceID string
 }
 
 // FromEnv loads configuration from environment variables.
 // CDN_BASE_DOMAIN is required; all others have defaults.
 func FromEnv() (Config, error) {
 	cfg := Config{
-		Port:            8080,
-		LogLevel:        slog.LevelInfo,
-		ShutdownTimeout: 30 * time.Second,
+		Port:                 8080,
+		LogLevel:             slog.LevelInfo,
+		ShutdownTimeout:      30 * time.Second,
+		BillingFlushInterval: 60 * time.Second,
 	}
 
 	if v := os.Getenv("PORT"); v != "" {
@@ -63,6 +70,24 @@ func FromEnv() (Config, error) {
 	}
 
 	cfg.OTLPEnabled = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != ""
+
+	if v := os.Getenv("BILLING_FLUSH_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 10*time.Second {
+			return Config{}, fmt.Errorf("invalid BILLING_FLUSH_INTERVAL %q: must be a duration >= 10s (e.g. 60s)", v)
+		}
+		cfg.BillingFlushInterval = d
+	}
+
+	if v := os.Getenv("PROXY_INSTANCE_ID"); v != "" {
+		cfg.ProxyInstanceID = v
+	} else {
+		h, err := os.Hostname()
+		if err != nil {
+			h = "unknown"
+		}
+		cfg.ProxyInstanceID = h
+	}
 
 	return cfg, nil
 }

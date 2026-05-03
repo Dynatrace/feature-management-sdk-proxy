@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
 )
@@ -23,16 +24,24 @@ type Counter struct {
 }
 
 // Sample is a snapshot of one token's request count returned by Drain.
+// WindowStart and WindowEnd are zero when returned by Counter.Drain; the flush
+// loop populates them at drain time before dispatching to BillingReporter.
 type Sample struct {
-	KeyHash string // safe for logs and metric labels
-	SDKKey  string // raw token for billing flush auth — never log this field
-	Count   int64
+	KeyHash     string // safe for logs and metric labels
+	SDKKey      string // raw token for billing flush auth — never log this field
+	Count       int64
+	WindowStart time.Time // flush loop sets at drain time; zero in counter output
+	WindowEnd   time.Time // flush loop sets at drain time; zero in counter output
 }
 
 // String returns a safe log representation with the raw SDK key redacted.
 // Use this when logging or formatting a Sample to avoid leaking the token.
 func (s Sample) String() string {
-	return fmt.Sprintf("{KeyHash:%s Count:%d}", s.KeyHash, s.Count)
+	return fmt.Sprintf("{KeyHash:%s Count:%d WindowStart:%s WindowEnd:%s}",
+		s.KeyHash, s.Count,
+		s.WindowStart.UTC().Format(time.RFC3339Nano),
+		s.WindowEnd.UTC().Format(time.RFC3339Nano),
+	)
 }
 
 // NewCounter constructs an empty Counter.

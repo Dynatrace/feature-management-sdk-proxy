@@ -83,6 +83,78 @@ func TestFromEnv_InvalidShutdownTimeout(t *testing.T) {
 	}
 }
 
+func TestFromEnv_BillingFlushInterval_Default(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.BillingFlushInterval != 60*time.Second {
+		t.Errorf("BillingFlushInterval = %v, want 60s", cfg.BillingFlushInterval)
+	}
+}
+
+func TestFromEnv_BillingFlushInterval_ValidOverride(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("BILLING_FLUSH_INTERVAL", "30s")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.BillingFlushInterval != 30*time.Second {
+		t.Errorf("BillingFlushInterval = %v, want 30s", cfg.BillingFlushInterval)
+	}
+}
+
+func TestFromEnv_BillingFlushInterval_TooShort(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("BILLING_FLUSH_INTERVAL", "5s")
+
+	_, err := FromEnv()
+	if err == nil {
+		t.Fatal("expected error for BILLING_FLUSH_INTERVAL < 10s")
+	}
+}
+
+func TestFromEnv_BillingFlushInterval_Malformed(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("BILLING_FLUSH_INTERVAL", "notaduration")
+
+	_, err := FromEnv()
+	if err == nil {
+		t.Fatal("expected error for malformed BILLING_FLUSH_INTERVAL")
+	}
+}
+
+func TestFromEnv_ProxyInstanceID_Override(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("PROXY_INSTANCE_ID", "pod-abc-123")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ProxyInstanceID != "pod-abc-123" {
+		t.Errorf("ProxyInstanceID = %q, want %q", cfg.ProxyInstanceID, "pod-abc-123")
+	}
+}
+
+func TestFromEnv_ProxyInstanceID_DefaultNonEmpty(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("PROXY_INSTANCE_ID", "")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Default is os.Hostname() or "unknown" — either way it must not be empty.
+	if cfg.ProxyInstanceID == "" {
+		t.Error("ProxyInstanceID must not be empty when PROXY_INSTANCE_ID is unset")
+	}
+}
+
 func TestFromEnv_InvalidCDNBaseDomain(t *testing.T) {
 	cases := []string{
 		"https://fm.example.com",
