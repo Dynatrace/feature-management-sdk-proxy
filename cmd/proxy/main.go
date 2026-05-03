@@ -106,10 +106,16 @@ func run() error {
 		return fmt.Errorf("server: %w", err)
 	}
 
-	// The refresher and flusher share the signal context so they stop before the server drains.
 	refresher := cache.NewRefresherWithObserver(flagCache, proxyHandler, sseManager, logger)
 	go refresher.Run(ctx)
-	go flusher.Run(ctx)
+
+	// Track flusher goroutine so we can wait for Run to exit before calling
+	// Shutdown — the two must not execute concurrently.
+	flusherDone := make(chan struct{})
+	go func() {
+		defer close(flusherDone)
+		flusher.Run(ctx)
+	}()
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start() }()
@@ -118,15 +124,30 @@ func run() error {
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
+		// Drain in-flight HTTP requests first — counter.Increment is called
+		// during request handling, so the final billing flush must happen after.
+		if err := srv.Shutdown(context.Background()); err != nil {
+			slog.Warn("server: shutdown error", slog.String("error", err.Error()))
+		}
+		if startErr := <-errCh; startErr != nil {
+			slog.Warn("server: listen error", slog.String("error", startErr.Error()))
+		}
+
 		sseShutCtx, sseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer sseCancel()
 		if err := sseManager.Shutdown(sseShutCtx); err != nil {
 			slog.Warn("sse: shutdown timed out", slog.String("error", err.Error()))
 		}
-		shutdownErr := srv.Shutdown(context.Background())
-		if startErr := <-errCh; startErr != nil {
-			return startErr
-		}
-		return shutdownErr
+
+		// Wait for the Run loop to exit before calling Shutdown to avoid
+		// concurrent access to Flusher internals.
+		<-flusherDone
+		billingShutCtx, billingCancel := context.WithTimeout(context.Background(), billingShutdownGrace)
+		defer billingCancel()
+		flusher.Shutdown(billingShutCtx)
+
+		return nil
 	}
 }
+
+const billingShutdownGrace = 10 * time.Second

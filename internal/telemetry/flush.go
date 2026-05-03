@@ -113,6 +113,17 @@ func (f *Flusher) enqueueWithLog(s Sample) {
 	f.retry.Enqueue(s)
 }
 
+// Shutdown performs one final drain of the retry buffer and counter and
+// dispatches each sample using ctx. Must be called after Run has returned —
+// the two must not execute concurrently. ctx should carry a short deadline
+// (typically 10s). Samples that cannot be dispatched before ctx expires are
+// logged and passed to the retry buffer.
+func (f *Flusher) Shutdown(ctx context.Context) {
+	f.logger.Info("telemetry: starting final billing flush")
+	f.tick(ctx)
+	f.logger.Info("telemetry: final billing flush complete")
+}
+
 func (f *Flusher) dispatchSample(ctx context.Context, s Sample) {
 	timeout := min(2*f.interval, 30*time.Second)
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
