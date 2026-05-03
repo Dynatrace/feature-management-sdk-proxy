@@ -74,9 +74,9 @@ SDK Proxy is a single Go binary with four core components:
 
 | Component | Responsibility |
 |---|---|
-| **HTTP proxy + cache** | Serves flagd config from in-memory cache; fetches upstream on miss; keyed by `SHA-256(sdk_key)` |
-| **SSE fan-out** | Maintains one upstream SSE connection per SDK key; re-broadcasts `refetchEvaluation` events (OFREP ADR-0008) to all connected clients via `GET /sse` |
-| **Usage telemetry** | Increments a per-SDK-token counter on every request; batch-flushes to the billing endpoint on a configurable interval |
+| **HTTP proxy + cache** | Serves flagd config from in-memory cache; fetches upstream on miss; keyed by `SHA-256(sdk_key)`. See [`docs/cache.md`](docs/cache.md). |
+| **SSE fan-out** | Maintains one upstream SSE connection per SDK key; re-broadcasts `refetchEvaluation` events (OFREP ADR-0008) to all connected clients via `GET /sse`. See [`docs/sse.md`](docs/sse.md). |
+| **Usage telemetry** | Increments a per-SDK-token counter on every request; batch-flushes to the billing endpoint on a configurable interval. See [`docs/telemetry.md`](docs/telemetry.md). |
 | **Snapshot persistence** | Optional. Writes cache entries to S3-compatible object storage (or local file) asynchronously after each update; loaded on startup to survive restarts. Skipped entirely if not configured. |
 
 **Data flow:** SDK → proxy (HTTP config + SSE) → Cloudflare CDN (config fetch on miss) / upstream SSE service (one connection per SDK key) → billing endpoint (periodic flush).
@@ -117,3 +117,8 @@ These are load-bearing constraints — do not break them without an explicit des
 
 - Emit OTel metrics (not Prometheus-native). All metric names are defined in `internal/metrics` — add new metrics there, not inline.
 - Every dropped record (billing buffer overflow, cache miss during outage, malformed request) must produce a structured log entry with enough context to diagnose the cause.
+- Full metrics reference (names, labels, instrument types): [`docs/telemetry.md`](docs/telemetry.md).
+
+### Shutdown
+
+- On SIGTERM, `run()` always exits 0 — signal-driven shutdown is not an error. See [`docs/shutdown.md`](docs/shutdown.md) for the full shutdown sequence and rationale.
