@@ -228,6 +228,16 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
 ```
-
-> ⚠️ Health probe configuration (`/health`, `/ready`, `/live`) is not yet implemented. This example will be updated once that work lands.
