@@ -1,6 +1,6 @@
 ---
 name: nt-plan
-version: 1.0.0
+version: 1.1.0
 description: |
   Deep codebase planning for sdk-proxy. Given a beads issue, systematically
   explores internal packages, finds existing patterns to reuse, and produces a
@@ -50,7 +50,9 @@ cat internal/sse/doc.go
 cat internal/telemetry/doc.go
 ```
 
-Based on the issue scope, read the full implementation files for the relevant packages. For every package you plan to modify, also read its test file to understand existing test patterns before designing new tests.
+Based on the issue scope, read the **full implementation files** only for the packages the issue directly touches. Do not read full files for unrelated packages — the doc.go summaries are sufficient for context.
+
+For every package you plan to modify, also read its test file to understand existing test patterns before designing new tests.
 
 ---
 
@@ -81,11 +83,12 @@ If a suitable implementation already exists, reuse or extend it. Never create a 
 
 ## Design Principles
 
-Apply these SOLID principles during planning:
+Apply these principles during planning:
 
 - **SRP**: Each type and function has one reason to change. If a struct is doing two things, split it.
 - **DIP**: New dependencies are injected as interfaces, not instantiated inline. Wire everything in `cmd/proxy/main.go`.
 - **ISP**: Interfaces are narrow — define the minimal interface the consumer needs, not everything the implementation provides.
+- **KISS**: Prefer the simplest solution that satisfies the requirements. Don't add layers of abstraction for hypothetical future use. Three similar lines beat a premature abstraction.
 - **No `init()`**: Wire all dependencies explicitly in `main`. No side effects at package load time.
 
 ---
@@ -121,8 +124,8 @@ Produce the implementation plan as a structured markdown document:
 | cache.SHA256Key | internal/cache/cache.go:42 | Same keying strategy for new store |
 
 ### New Interfaces
-| Name | Location | SRP/DIP rationale |
-|------|----------|-------------------|
+| Name | Location | Rationale |
+|------|----------|-----------|
 | FooDoer | internal/foo/foo.go | Narrow interface for the one caller |
 
 ### Test Strategy

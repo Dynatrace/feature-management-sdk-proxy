@@ -1,11 +1,12 @@
 ---
 name: next-task
-version: 1.0.0
+version: 1.1.0
 description: |
   Full-cycle implementation workflow for sdk-proxy. Discovers the next ready
   issue via bd, runs deep Opus planning (/nt-plan), gates on approval,
-  implements, runs parallel Sonnet code review (/nt-review), passes quality
-  gates and ships (/nt-ship). Each sub-skill can be invoked independently.
+  implements on a feature branch, runs parallel Sonnet code review (/nt-review),
+  passes quality gates, commits, merges to main, and ships (/nt-ship).
+  Each sub-skill can be invoked independently.
   Use when asked to "pick up the next task", "next task", "work on the backlog",
   "implement the next issue", or simply "let's get to work".
 allowed-tools:
@@ -25,25 +26,37 @@ allowed-tools:
 
 ## Preamble (run immediately on skill start)
 
+In a **single message**, run all three in parallel:
+
 ```bash
 bd ready 2>&1
+```
+
+```bash
 git branch --show-current
 git status --short
 ```
 
-Surface the issue queue and repository state before any user interaction.
+```bash
+go build ./... 2>&1
+```
+
+Surface the issue queue, repository state, and build status before any user interaction.
 
 ---
 
-## Phase 0 — Dirty Tree Check
+## Phase 0 — Dirty Tree & Build Check
 
-If `git status --short` shows uncommitted changes, use `AskUserQuestion`:
+**Build check**: If `go build ./...` produced any output (errors/warnings), surface it and use `AskUserQuestion`:
+- A) Abort — fix the build before starting (recommended)
+- B) Continue — the build failure is expected / will be addressed in this task
 
+**Dirty tree check**: If `git status --short` shows uncommitted changes, use `AskUserQuestion`:
 - A) Stash changes and continue (`git stash`) — recommended if changes are unrelated
 - B) Continue with the dirty tree — only if the uncommitted work is intentional
 - C) Abort — let me clean up first
 
-If A, run `git stash` before proceeding.
+If stash chosen, run `git stash` before proceeding.
 
 ---
 
@@ -98,7 +111,7 @@ prompt:
   <full output of bd show <ISSUE_ID>>
 ```
 
-The agent will explore the codebase, grep for reuse opportunities, check invariants, and return a structured implementation plan.
+The agent will explore the codebase, grep for reuse opportunities, check invariants, and return a structured implementation plan. The plan will include a "Conventional Commit" line with `<type>(<scope>): <description>` — store these values as `COMMIT_TYPE`, `COMMIT_SCOPE`, and `COMMIT_DESC`.
 
 Do NOT claim the issue yet — wait for plan approval.
 
@@ -130,11 +143,14 @@ Loop back to D3 until approved or aborted.
 
 ## Phase 4 — Implementation
 
-Immediately after approval, claim the issue:
+Immediately after approval, claim the issue and create the feature branch:
 
 ```bash
 bd update <ISSUE_ID> --claim
+git checkout -b <COMMIT_TYPE>/<COMMIT_SCOPE>-<short-description>
 ```
+
+Derive the branch name from the plan's conventional commit: type and scope as-is, description lowercased and hyphenated (max 30 chars). Example: `feat/cache-ttl-refresh`.
 
 Execute the approved plan step by step. Follow these rules:
 
@@ -162,7 +178,7 @@ Read .claude/skills/nt-review/SKILL.md
 
 Follow its instructions from top to bottom. It will:
 1. Capture `git diff HEAD`
-2. Spawn three parallel review agents (Quality, Security, DX) on `claude-sonnet-4-6`
+2. Spawn two parallel review agents (Security, DX) on `claude-sonnet-4-6`
 3. Collate findings by severity
 4. Gate warnings on user decision via AskUserQuestion
 
@@ -183,9 +199,10 @@ Follow its instructions from top to bottom. It will:
 2. Fix any failures
 3. Gate the commit on user approval (D-COMMIT)
 4. Close `<ISSUE_ID>` in beads
-5. Gate the push on user approval (D-PUSH)
+5. Merge the feature branch into `main`
+6. Gate the push on user approval (D-PUSH)
 
-Pass `ISSUE_ID` through to the ship sub-skill.
+Pass `ISSUE_ID` and the current feature branch name through to the ship sub-skill.
 
 ---
 
@@ -198,9 +215,9 @@ Session complete.
 
   Issue:    <ISSUE_ID> — <ISSUE_TITLE> [CLOSED]
   Commit:   <git log --oneline -1>
-  Branch:   <git branch --show-current>
+  Branch:   merged into main, deleted
   Gates:    lint ✓  test ✓  vet ✓
-  Review:   quality ✓  security ✓  DX ✓
+  Review:   security ✓  DX ✓
 
 Run /next-task again to pick up the next issue.
 ```

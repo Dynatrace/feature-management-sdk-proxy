@@ -1,10 +1,11 @@
 ---
 name: nt-ship
-version: 1.0.0
+version: 1.1.0
 description: |
-  Quality gates, commit, beads close, and push for sdk-proxy. Runs lint/test/vet
-  in parallel, gates on user approval before committing, closes the beads issue,
-  and offers to push. Can be run standalone after any implementation: /nt-ship
+  Quality gates, commit, beads close, merge to main, and push for sdk-proxy.
+  Runs lint/test/vet in parallel, gates on user approval before committing,
+  closes the beads issue, merges the feature branch into main, and offers to push.
+  Can be run standalone after any implementation: /nt-ship
   Called by /next-task after code review passes. Requires ISSUE_ID to be set
   in context, or prompts for it if invoked standalone.
 allowed-tools:
@@ -21,6 +22,11 @@ git branch --show-current
 
 Print the changed files and current branch. If there are no changes since HEAD, print
 "Nothing to ship — no staged or unstaged changes." and exit.
+
+**Branch check**: If currently on `main`, print a warning:
+> ⚠️ Currently on `main`. /next-task normally creates a feature branch before implementation.
+
+Use `AskUserQuestion`: proceed anyway (standalone mode) or abort?
 
 If invoked standalone, ask: "Which beads issue ID should I close after committing?"
 Store as `ISSUE_ID`.
@@ -58,13 +64,11 @@ Do not proceed to commit until all three pass.
 
 ## Phase 2 — Commit
 
-**Branch check**: if currently on `main`, create a feature branch first:
+Store the current feature branch name:
 
 ```bash
-git checkout -b <type>/<scope>-<short-description>
+FEATURE_BRANCH=$(git branch --show-current)
 ```
-
-Use the conventional commit type and scope from the implementation plan (feat/fix/refactor/test/chore/ci/docs/perf × cache/sse/telemetry/snapshot/server/metrics/config/proxy).
 
 **Stage specific files** — never `git add -A` or `git add .`:
 
@@ -112,13 +116,27 @@ bd dolt push 2>&1 || echo "[info] no bd remote configured — skipping dolt push
 
 ---
 
-## Phase 4 — Push Gate
+## Phase 4 — Merge to Main
+
+Merge the feature branch into `main` with a no-fast-forward merge commit:
+
+```bash
+git checkout main
+git merge --no-ff "$FEATURE_BRANCH" -m "merge(<scope>): <ISSUE_TITLE> [<ISSUE_ID>]"
+git branch -d "$FEATURE_BRANCH"
+```
+
+If the merge produces conflicts, print the conflict details and ask the user to resolve them before continuing.
+
+---
+
+## Phase 5 — Push Gate
 
 **D-PUSH — AskUserQuestion**: Push to remote?
 
 Present:
-- Current branch
-- Commit just created (`git log --oneline -1`)
+- Current branch: `main`
+- Commit just merged (`git log --oneline -1`)
 - Note: CLAUDE.md mandates push at session close
 
 Options:
@@ -128,8 +146,7 @@ Options:
 On approval:
 
 ```bash
-git pull --rebase
-git push -u origin $(git branch --show-current)
+git push origin main
 git status
 ```
 
@@ -146,6 +163,6 @@ Ship complete.
 
 Issue:   <ISSUE_ID> [CLOSED]
 Commit:  <git log --oneline -1>
-Branch:  <branch>
+Branch:  <FEATURE_BRANCH> merged into main, deleted
 Gates:   lint ✓  test ✓  vet ✓
 ```

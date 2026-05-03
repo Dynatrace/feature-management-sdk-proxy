@@ -1,9 +1,9 @@
 ---
 name: nt-review
-version: 1.0.0
+version: 1.1.0
 description: |
-  Three-perspective parallel code review for sdk-proxy. Spawns Quality, Security,
-  and Developer Experience reviewer agents simultaneously against the current git
+  Two-perspective parallel code review for sdk-proxy. Spawns Security and
+  Developer Experience reviewer agents simultaneously against the current git
   diff. Each reviewer runs on claude-sonnet. Returns collated findings grouped
   by severity. Can be invoked standalone after any code change: /nt-review
   Called by /next-task after implementation is complete.
@@ -16,65 +16,28 @@ allowed-tools:
 ## Preamble
 
 ```bash
+git diff HEAD | wc -l
 git diff HEAD
 ```
 
-Capture and store the full diff output. This will be appended to each reviewer's prompt below.
+Capture and store the full diff output. Note the line count.
 
 If the diff is empty, print "Nothing to review — no changes since last commit." and exit.
+
+If the diff exceeds 400 lines, use only the first 400 lines and append:
+```
+[DIFF TRUNCATED at 400 lines — full diff available via `git diff HEAD`]
+```
 
 ---
 
 ## Parallel Review
 
-In a **single message**, issue all three Agent calls simultaneously. Do not wait for one agent before issuing the next. Append the full diff captured above to each prompt, after the word "DIFF:".
+In a **single message**, issue both Agent calls simultaneously. Do not wait for one agent before issuing the next. Append the diff (full or truncated as above) to each prompt, after the word "DIFF:".
 
 ---
 
-### Agent A — Code Quality & SOLID
-
-```
-model: sonnet
-description: Code quality and SOLID principles review
-prompt:
-You are a senior Go engineer reviewing a diff for code quality and SOLID principles.
-
-Project constraints (from CLAUDE.md):
-- No init() functions; wire dependencies explicitly in main
-- golangci-lint must pass (errcheck, govet, staticcheck, unused)
-- Standard Go project layout: /cmd/proxy entrypoint, /internal packages
-- One logical change per commit
-
-Review the following diff for:
-1. SRP: does each type/function have exactly one reason to change?
-2. DIP: are dependencies injected as interfaces, not hardcoded?
-3. ISP: are interfaces narrow? No fat interfaces?
-4. Error handling: all errors checked, wrapped with fmt.Errorf("%w", err), not swallowed
-5. Idiomatic Go: naming follows Go conventions, no unnecessary abstractions
-6. Test quality: do tests verify behavior, not implementation details? Are they table-driven where appropriate?
-
-Return valid JSON only — no prose before or after:
-{
-  "summary": "one-sentence overall verdict",
-  "findings": [
-    {
-      "severity": "error|warning|info",
-      "file": "path/to/file.go",
-      "line": 42,
-      "issue": "concise description of the problem",
-      "recommendation": "how to fix it"
-    }
-  ],
-  "approved": true
-}
-
-DIFF:
-[append the full git diff output here]
-```
-
----
-
-### Agent B — Security
+### Agent A — Security
 
 ```
 model: sonnet
@@ -114,12 +77,12 @@ Return valid JSON only — no prose before or after:
 }
 
 DIFF:
-[append the full git diff output here]
+[append the diff here]
 ```
 
 ---
 
-### Agent C — Developer Experience & Observability
+### Agent B — Developer Experience & Observability
 
 ```
 model: sonnet
@@ -158,14 +121,14 @@ Return valid JSON only — no prose before or after:
 }
 
 DIFF:
-[append the full git diff output here]
+[append the diff here]
 ```
 
 ---
 
 ## Collation
 
-After all three agents return, collate findings across all three reports and group by severity:
+After both agents return, collate findings across both reports and group by severity:
 
 **Errors** (block implementation — must fix before proceeding):
 - List all `"severity": "error"` findings with file, line, and recommendation
@@ -181,7 +144,6 @@ Print a summary table:
 ```
 | Reviewer | Approved | Errors | Warnings | Info |
 |----------|----------|--------|----------|------|
-| Quality  | ✓/✗      | N      | N        | N    |
 | Security | ✓/✗      | N      | N        | N    |
 | DX       | ✓/✗      | N      | N        | N    |
 ```
