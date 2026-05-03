@@ -82,7 +82,7 @@ func run() error {
 
 	counter := telemetry.NewCounter()
 	logReporter := telemetry.NewLogReporter(logger, cfg.ProxyInstanceID)
-	flusher := telemetry.NewFlusher(counter, logReporter, telemetry.NewNoopRetryBuffer(), inst, cfg.BillingFlushInterval, logger)
+	flusher := telemetry.NewFlusher(counter, logReporter, telemetry.NewBoundedRetryBuffer(cfg.BillingRetryBufferSize, inst, logger), inst, cfg.BillingFlushInterval, logger)
 
 	proxyClient := &http.Client{Timeout: 30 * time.Second}
 	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, inst, counter, logger)
