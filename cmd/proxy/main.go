@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
@@ -20,6 +22,7 @@ import (
 	"github.com/dynatrace/sdk-proxy/internal/metrics"
 	"github.com/dynatrace/sdk-proxy/internal/proxy"
 	"github.com/dynatrace/sdk-proxy/internal/server"
+	"github.com/dynatrace/sdk-proxy/internal/snapshot"
 	"github.com/dynatrace/sdk-proxy/internal/sse"
 	"github.com/dynatrace/sdk-proxy/internal/telemetry"
 )
@@ -70,6 +73,55 @@ func run() error {
 
 	flagCache := cache.New()
 
+	// --- Snapshot persistence (optional) ---
+	//
+	// Build the store and load snapshots synchronously before starting the HTTP
+	// listener. The /ready probe returns true only after this completes (or when
+	// persistence is disabled).
+	snapshotReady := false
+	var snapshotWriter *snapshot.Writer
+
+	if cfg.SnapshotBackend == "s3" {
+		store, err := snapshot.NewS3Store(ctx, snapshot.S3Config{
+			Endpoint:        cfg.SnapshotS3Endpoint,
+			Bucket:          cfg.SnapshotS3Bucket,
+			Region:          cfg.SnapshotS3Region,
+			Prefix:          cfg.SnapshotS3Prefix,
+			AccessKeyID:     cfg.SnapshotS3AccessKey,
+			SecretAccessKey: cfg.SnapshotS3SecretKey,
+		})
+		if err != nil {
+			return fmt.Errorf("snapshot: %w", err)
+		}
+
+		loaded, err := snapshot.LoadAll(ctx, store, flagCache, inst, logger)
+		if err != nil {
+			// Non-fatal: log and continue with a cold start.
+			slog.Warn("snapshot: startup load failed; starting cold",
+				slog.String("error", err.Error()),
+				slog.String("bucket", cfg.SnapshotS3Bucket),
+				slog.String("prefix", cfg.SnapshotS3Prefix),
+			)
+		} else {
+			slog.Info("snapshot: loaded entries",
+				slog.Int("count", loaded),
+				slog.String("bucket", cfg.SnapshotS3Bucket),
+				slog.String("prefix", cfg.SnapshotS3Prefix),
+			)
+		}
+
+		startupPath := "cold"
+		if loaded > 0 {
+			startupPath = "snapshot"
+		}
+		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", startupPath)))
+
+		snapshotWriter = snapshot.NewWriter(store, inst, logger, cfg.SnapshotWriteQueueSize)
+	} else {
+		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", "cold")))
+	}
+	snapshotReady = true
+
 	// SSE manager uses a dedicated client with no overall timeout — SSE connections
 	// are long-lived. ResponseHeaderTimeout guards the initial handshake.
 	sseClient := &http.Client{
@@ -85,17 +137,17 @@ func run() error {
 	logReporter := telemetry.NewLogReporter(logger, cfg.ProxyInstanceID)
 	flusher := telemetry.NewFlusher(counter, logReporter, telemetry.NewBoundedRetryBuffer(cfg.BillingRetryBufferSize, inst, logger), inst, cfg.BillingFlushInterval, logger)
 
+	// snapshotWriter is nil when persistence is disabled; proxy.New accepts nil.
 	proxyClient := &http.Client{Timeout: 30 * time.Second}
-	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, inst, counter, logger)
+	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, snapshotWriter, inst, counter, logger)
 	if err != nil {
 		return fmt.Errorf("proxy: %w", err)
 	}
 
 	sseHandler := sse.NewHandler(flagCache, sseManager, inst, counter, logger, 15*time.Second)
 
-	// ReadyFunc: returns true immediately today (no snapshot persistence wired yet).
-	// When snapshot persistence lands, swap this closure to gate on snapshot load.
-	probeHandlers := health.New(func() bool { return true }, logger)
+	// ReadyFunc gates /ready on snapshot load completion.
+	probeHandlers := health.New(func() bool { return snapshotReady }, logger)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/live", probeHandlers.Live)
@@ -114,8 +166,21 @@ func run() error {
 		return fmt.Errorf("server: %w", err)
 	}
 
-	refresher := cache.NewRefresherWithObserver(flagCache, proxyHandler, sseManager, logger)
+	// Wire the refresher with both SSE manager and snapshot writer as observers.
+	// NewRefresherWithObservers filters out nil values, so passing snapshotWriter
+	// when nil (persistence disabled) is safe.
+	refresher := cache.NewRefresherWithObservers(flagCache, proxyHandler, logger, sseManager, snapshotWriter)
 	go refresher.Run(ctx)
+
+	// Start snapshot writer drain loop if persistence is enabled.
+	var snapshotWriterDone chan struct{}
+	if snapshotWriter != nil {
+		snapshotWriterDone = make(chan struct{})
+		go func() {
+			defer close(snapshotWriterDone)
+			snapshotWriter.Run(ctx)
+		}()
+	}
 
 	// Track flusher goroutine so we can wait for Run to exit before calling
 	// Shutdown — the two must not execute concurrently.
@@ -147,6 +212,15 @@ func run() error {
 			slog.Warn("sse: shutdown timed out", slog.String("error", err.Error()))
 		}
 
+		// Drain the snapshot write queue before billing flush so any final
+		// cold-fetch snapshot has a chance to land.
+		if snapshotWriter != nil {
+			<-snapshotWriterDone
+			snapShutCtx, snapCancel := context.WithTimeout(context.Background(), snapshotShutdownGrace)
+			defer snapCancel()
+			snapshotWriter.Shutdown(snapShutCtx)
+		}
+
 		// Wait for the Run loop to exit before calling Shutdown to avoid
 		// concurrent access to Flusher internals.
 		<-flusherDone
@@ -159,3 +233,4 @@ func run() error {
 }
 
 const billingShutdownGrace = 10 * time.Second
+const snapshotShutdownGrace = 5 * time.Second

@@ -106,10 +106,10 @@ type RefreshObserver interface {
 
 // Refresher drives background TTL refresh using a Fetcher.
 type Refresher struct {
-	cache    *Cache
-	fetcher  Fetcher
-	observer RefreshObserver // optional; nil is safe
-	logger   *slog.Logger
+	cache     *Cache
+	fetcher   Fetcher
+	observers []RefreshObserver
+	logger    *slog.Logger
 }
 
 // NewRefresher constructs a Refresher. Call Run to start the background loop.
@@ -117,10 +117,22 @@ func NewRefresher(c *Cache, f Fetcher, logger *slog.Logger) *Refresher {
 	return &Refresher{cache: c, fetcher: f, logger: logger}
 }
 
-// NewRefresherWithObserver constructs a Refresher that notifies observer after
-// each successful 200 refresh.
+// NewRefresherWithObservers constructs a Refresher that notifies all provided
+// observers after each successful 200 refresh. Nil observers are ignored.
+func NewRefresherWithObservers(c *Cache, f Fetcher, logger *slog.Logger, observers ...RefreshObserver) *Refresher {
+	var filtered []RefreshObserver
+	for _, o := range observers {
+		if o != nil {
+			filtered = append(filtered, o)
+		}
+	}
+	return &Refresher{cache: c, fetcher: f, observers: filtered, logger: logger}
+}
+
+// NewRefresherWithObserver constructs a Refresher that notifies a single observer
+// after each successful 200 refresh. Deprecated: prefer NewRefresherWithObservers.
 func NewRefresherWithObserver(c *Cache, f Fetcher, observer RefreshObserver, logger *slog.Logger) *Refresher {
-	return &Refresher{cache: c, fetcher: f, observer: observer, logger: logger}
+	return NewRefresherWithObservers(c, f, logger, observer)
 }
 
 // Run ticks at half the TTL so stale entries are caught promptly.
@@ -144,6 +156,12 @@ func (r *Refresher) refresh(ctx context.Context) {
 		if !entry.IsStale(now) {
 			continue
 		}
+		// FetchURL is empty for snapshot-restored entries until the first SDK
+		// request repairs it. Skip quietly; the handler will hydrate it on hit.
+		if entry.FetchURL == "" {
+			r.logger.Debug("cache: skipping stale snapshot-restored entry (no FetchURL yet)", slog.String("key", key))
+			continue
+		}
 		result, err := r.fetcher.Fetch(ctx, entry.FetchURL, entry.ETag)
 		if err != nil {
 			r.logger.Warn("cache: background refresh failed",
@@ -161,8 +179,8 @@ func (r *Refresher) refresh(ctx context.Context) {
 			result.Entry.FetchURL = entry.FetchURL // preserve the fetch URL
 			r.cache.Set(key, *result.Entry)
 			r.logger.Debug("cache: entry refreshed (200)", slog.String("key", key))
-			if r.observer != nil {
-				r.observer.OnRefreshed(key, result.Entry.Payload)
+			for _, obs := range r.observers {
+				obs.OnRefreshed(key, result.Entry.Payload)
 			}
 		}
 	}

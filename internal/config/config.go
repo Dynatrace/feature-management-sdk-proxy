@@ -28,6 +28,25 @@ type Config struct {
 	// held in the retry buffer. Oldest samples are dropped on overflow.
 	// Range 1–100000, default 1000.
 	BillingRetryBufferSize int
+
+	// Snapshot persistence (optional). When SnapshotBackend is "", persistence
+	// is disabled and all other Snapshot* fields are ignored.
+	//
+	// SnapshotBackend selects the persistence backend. Only "s3" is supported
+	// in this release; "local" is reserved for the local-file backend.
+	SnapshotBackend string
+
+	// S3-compatible object storage settings. Used when SnapshotBackend == "s3".
+	SnapshotS3Endpoint  string // optional; leave empty for AWS S3
+	SnapshotS3Bucket    string // required when backend is "s3"
+	SnapshotS3Region    string // required when backend is "s3"
+	SnapshotS3Prefix    string // optional key prefix; defaults to ""
+	SnapshotS3AccessKey string // optional; uses default credential chain when empty
+	SnapshotS3SecretKey string // optional; uses default credential chain when empty
+
+	// SnapshotWriteQueueSize is the maximum pending async snapshot writes.
+	// Range 1–10000, default 256.
+	SnapshotWriteQueueSize int
 }
 
 // FromEnv loads configuration from environment variables.
@@ -39,6 +58,7 @@ func FromEnv() (Config, error) {
 		ShutdownTimeout:        30 * time.Second,
 		BillingFlushInterval:   60 * time.Second,
 		BillingRetryBufferSize: 1000,
+		SnapshotWriteQueueSize: 256,
 	}
 
 	if v := os.Getenv("PORT"); v != "" {
@@ -100,6 +120,38 @@ func FromEnv() (Config, error) {
 			h = "unknown"
 		}
 		cfg.ProxyInstanceID = h
+	}
+
+	if v := os.Getenv("SNAPSHOT_BACKEND"); v != "" {
+		if v != "s3" {
+			return Config{}, fmt.Errorf("invalid SNAPSHOT_BACKEND %q: must be \"s3\"", v)
+		}
+		cfg.SnapshotBackend = v
+	}
+
+	if cfg.SnapshotBackend == "s3" {
+		bucket := os.Getenv("SNAPSHOT_S3_BUCKET")
+		if bucket == "" {
+			return Config{}, errors.New("SNAPSHOT_S3_BUCKET is required when SNAPSHOT_BACKEND=s3")
+		}
+		region := os.Getenv("SNAPSHOT_S3_REGION")
+		if region == "" {
+			return Config{}, errors.New("SNAPSHOT_S3_REGION is required when SNAPSHOT_BACKEND=s3")
+		}
+		cfg.SnapshotS3Bucket = bucket
+		cfg.SnapshotS3Region = region
+		cfg.SnapshotS3Endpoint = os.Getenv("SNAPSHOT_S3_ENDPOINT")
+		cfg.SnapshotS3Prefix = os.Getenv("SNAPSHOT_S3_PREFIX")
+		cfg.SnapshotS3AccessKey = os.Getenv("SNAPSHOT_S3_ACCESS_KEY")
+		cfg.SnapshotS3SecretKey = os.Getenv("SNAPSHOT_S3_SECRET_KEY")
+	}
+
+	if v := os.Getenv("SNAPSHOT_WRITE_QUEUE_SIZE"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 10_000 {
+			return Config{}, fmt.Errorf("invalid SNAPSHOT_WRITE_QUEUE_SIZE %q: must be an integer between 1 and 10000", v)
+		}
+		cfg.SnapshotWriteQueueSize = n
 	}
 
 	return cfg, nil

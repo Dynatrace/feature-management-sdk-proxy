@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,7 +38,7 @@ func newRedirectingClient(target *httptest.Server) *http.Client {
 
 func newTestHandler(t *testing.T, upstream *httptest.Server) *Handler {
 	t.Helper()
-	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, nil, nil, slog.Default())
+	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, nil, nil, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -46,7 +47,7 @@ func newTestHandler(t *testing.T, upstream *httptest.Server) *Handler {
 
 func newTestHandlerWithCache(t *testing.T, upstream *httptest.Server, c *cache.Cache) *Handler {
 	t.Helper()
-	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, nil, nil, slog.Default())
+	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, nil, nil, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -166,7 +167,7 @@ func TestHandler_CacheMiss_NetworkError_Returns503(t *testing.T) {
 	client := newRedirectingClient(upstream)
 	upstream.Close() // close after capturing the address in the client
 
-	h, err := New("fm.test", client, cache.New(), nil, nil, nil, slog.Default())
+	h, err := New("fm.test", client, cache.New(), nil, nil, nil, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -452,7 +453,7 @@ func TestNew_InvalidCDNBaseDomain(t *testing.T) {
 		"http://fm.example.com/",
 	}
 	for _, tc := range cases {
-		_, err := New(tc, http.DefaultClient, cache.New(), nil, nil, nil, slog.Default())
+		_, err := New(tc, http.DefaultClient, cache.New(), nil, nil, nil, nil, slog.Default())
 		if err == nil {
 			t.Errorf("New(%q): expected error, got nil", tc)
 		}
@@ -797,7 +798,7 @@ func TestHandler_Rewrite_HTTPSSchemeFromXForwardedProto(t *testing.T) {
 
 func newTestHandlerWithCounter(t *testing.T, upstream *httptest.Server, counter *telemetry.Counter) *Handler {
 	t.Helper()
-	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, nil, counter, slog.Default())
+	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, nil, nil, counter, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -806,7 +807,7 @@ func newTestHandlerWithCounter(t *testing.T, upstream *httptest.Server, counter 
 
 func newTestHandlerWithCacheAndCounter(t *testing.T, upstream *httptest.Server, c *cache.Cache, counter *telemetry.Counter) *Handler {
 	t.Helper()
-	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, nil, counter, slog.Default())
+	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, nil, nil, counter, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -954,5 +955,92 @@ func TestHandler_Counter_NoIncrementOnUnrecognizedKeyFormat(t *testing.T) {
 
 	if samples := counter.Drain(); len(samples) != 0 {
 		t.Errorf("unrecognized key format must not increment counter, got %v", samples)
+	}
+}
+
+// --- Snapshot integration tests ---
+
+type mockSnapshotNotifier struct {
+	mu    sync.Mutex
+	calls []struct {
+		keyHash string
+		etag    string
+		payload []byte
+	}
+}
+
+func (m *mockSnapshotNotifier) OnConfigCached(keyHash, etag string, payload []byte) {
+	m.mu.Lock()
+	m.calls = append(m.calls, struct {
+		keyHash string
+		etag    string
+		payload []byte
+	}{keyHash, etag, payload})
+	m.mu.Unlock()
+}
+
+func TestHandler_CacheMiss_InvokesSnapshotNotifier(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"v1"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"flags":{}}`)
+	}))
+	defer upstream.Close()
+
+	notifier := &mockSnapshotNotifier{}
+	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, notifier, nil, nil, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	notifier.mu.Lock()
+	defer notifier.mu.Unlock()
+	if len(notifier.calls) != 1 {
+		t.Fatalf("expected 1 snapshot notifier call, got %d", len(notifier.calls))
+	}
+	if got := notifier.calls[0].keyHash; got != cache.Key("dt_server_us_abc123") {
+		t.Errorf("wrong keyHash: got %q", got)
+	}
+	if got := notifier.calls[0].etag; got != `"v1"` {
+		t.Errorf("wrong etag: got %q", got)
+	}
+}
+
+func TestHandler_SnapshotRestoredEntry_HydratesFetchURL(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called on cache hit")
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	sdkKey := "dt_server_us_abc123"
+	key := cache.Key(sdkKey)
+	c.Set(key, cache.Entry{
+		Payload:   []byte(`{"flags":{}}`),
+		ETag:      `"v1"`,
+		FetchedAt: time.Now(),
+		FetchURL:  "", // snapshot-restored: FetchURL not persisted
+	})
+
+	h := newTestHandlerWithCache(t, upstream, c)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/"+sdkKey+".json", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	got, _ := c.Get(key)
+	if got.FetchURL == "" {
+		t.Error("expected FetchURL to be hydrated on first SDK hit, got empty string")
 	}
 }

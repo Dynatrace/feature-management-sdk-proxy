@@ -32,29 +32,37 @@ var hopByHopHeaders = map[string]bool{
 	"Trailer":             true,
 }
 
+// SnapshotNotifier is notified after a successful cold fetch (200) so it can
+// persist the new cache entry asynchronously. Defined here (rather than
+// importing internal/snapshot) to keep the dependency graph acyclic.
+type SnapshotNotifier interface {
+	OnConfigCached(keyHash, etag string, payload []byte)
+}
+
 // Handler serves flagd config requests from an in-memory cache, falling back
 // to the upstream CDN on a miss. The SDK key is never logged or stored; only
 // its SHA-256 hash is used as a stable identifier.
 type Handler struct {
-	cdnBaseDomain string
-	client        *http.Client
-	cache         *cache.Cache
-	sseManager    *sse.Manager
-	inst          *metrics.Instruments
-	counter       *telemetry.Counter
-	logger        *slog.Logger
+	cdnBaseDomain    string
+	client           *http.Client
+	cache            *cache.Cache
+	sseManager       *sse.Manager
+	snapshotNotifier SnapshotNotifier // nil when persistence is disabled
+	inst             *metrics.Instruments
+	counter          *telemetry.Counter
+	logger           *slog.Logger
 }
 
 // New constructs a Handler. cdnBaseDomain must be a bare hostname
 // (e.g. fm.dynatracelabs.com); the region and path are derived per request.
-// sseManager may be nil; if non-nil, OnConfigCached is called after each
-// successful cold fetch. inst and counter may be nil; metrics and counting
-// are silently skipped.
-func New(cdnBaseDomain string, client *http.Client, c *cache.Cache, sseManager *sse.Manager, inst *metrics.Instruments, counter *telemetry.Counter, logger *slog.Logger) (*Handler, error) {
+// sseManager and snapshotNotifier may be nil; when non-nil, they are notified
+// after each successful cold fetch. inst and counter may be nil; metrics and
+// counting are silently skipped.
+func New(cdnBaseDomain string, client *http.Client, c *cache.Cache, sseManager *sse.Manager, snapshotNotifier SnapshotNotifier, inst *metrics.Instruments, counter *telemetry.Counter, logger *slog.Logger) (*Handler, error) {
 	if cdnBaseDomain == "" || strings.Contains(cdnBaseDomain, "://") || strings.Contains(cdnBaseDomain, "/") {
 		return nil, fmt.Errorf("proxy: invalid CDN base domain %q: must be a bare hostname (e.g. fm.dynatracelabs.com)", cdnBaseDomain)
 	}
-	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, sseManager: sseManager, inst: inst, counter: counter, logger: logger}, nil
+	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, sseManager: sseManager, snapshotNotifier: snapshotNotifier, inst: inst, counter: counter, logger: logger}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +105,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // If-None-Match matches the cached ETag, a 304 is returned with no body.
 // For non-HEAD 200 responses, the SSE URL in the payload is rewritten to
 // point to this proxy's SSE endpoint (derived from the incoming request).
+//
+// When entry.FetchURL is empty (the entry was restored from a snapshot at
+// startup), it is repaired here so the background refresher can revalidate
+// it on the next TTL tick. This happens at most once per key per process.
 func (h *Handler) serveFromCache(w http.ResponseWriter, r *http.Request, entry cache.Entry, sdkKey string) {
+	if entry.FetchURL == "" {
+		if target, ok := h.buildTarget(sdkKey); ok {
+			entry.FetchURL = target
+			h.cache.Set(cache.Key(sdkKey), entry)
+		}
+	}
+
 	if entry.ETag != "" && r.Header.Get("If-None-Match") == entry.ETag {
 		w.Header().Set("ETag", entry.ETag)
 		w.WriteHeader(http.StatusNotModified)
@@ -178,6 +197,9 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 		if h.sseManager != nil {
 			// Use context.Background() — SSE connections must outlive the HTTP request.
 			h.sseManager.OnConfigCached(context.Background(), sdkKey, body)
+		}
+		if h.snapshotNotifier != nil {
+			h.snapshotNotifier.OnConfigCached(key, entry.ETag, body)
 		}
 		// Serve from the cached entry so headers match the cache-hit path.
 		h.serveFromCache(w, r, entry, sdkKey)

@@ -23,6 +23,8 @@ const (
 	StartupPath               = "proxy.startup.path"
 	SnapshotWritesTotal       = "proxy.snapshot.writes.total"
 	ConfigSSERewriteTotal     = "proxy.config.sse_rewrite_total"
+	SnapshotLoadTotal         = "proxy.snapshot.load.total"
+	SnapshotWriteQueueDropped = "proxy.snapshot.write_queue.dropped_total"
 )
 
 // Instruments holds every OTel instrument the proxy emits. Obtain one via Register.
@@ -82,6 +84,13 @@ type Instruments struct {
 	// ConfigSSERewriteTotal counts SSE URL rewrite outcomes per served config request,
 	// labeled by result (rewritten/no_sse_entry/not_found_in_body/unknown).
 	ConfigSSERewriteTotal metric.Int64Counter
+
+	// SnapshotLoadTotal counts snapshot objects processed at startup, labeled by
+	// result (loaded/skipped_unknown_version/skipped_corrupt/backend_error).
+	SnapshotLoadTotal metric.Int64Counter
+
+	// SnapshotWriteQueueDropped counts snapshot writes dropped due to queue overflow.
+	SnapshotWriteQueueDropped metric.Int64Counter
 }
 
 // Register creates all metric instruments against meter. Call once at startup and
@@ -208,6 +217,22 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("metrics: register %s: %w", BillingRetryBufferDropped, err)
 	}
 
+	snapshotLoadTotal, err := meter.Int64Counter(SnapshotLoadTotal,
+		metric.WithDescription("Snapshot objects processed at startup by result (loaded/skipped_unknown_version/skipped_corrupt/backend_error)"),
+		metric.WithUnit("{object}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", SnapshotLoadTotal, err)
+	}
+
+	snapshotWriteQueueDropped, err := meter.Int64Counter(SnapshotWriteQueueDropped,
+		metric.WithDescription("Snapshot writes dropped due to write queue overflow"),
+		metric.WithUnit("{write}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", SnapshotWriteQueueDropped, err)
+	}
+
 	return &Instruments{
 		RequestsTotal:             reqTotal,
 		SSEConnections:            sseConns,
@@ -224,5 +249,7 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		SnapshotWritesTotal:       snapshotWrites,
 		ConfigSSERewriteTotal:     sseRewrite,
 		BillingRetryBufferDropped: retryBufDropped,
+		SnapshotLoadTotal:         snapshotLoadTotal,
+		SnapshotWriteQueueDropped: snapshotWriteQueueDropped,
 	}, nil
 }

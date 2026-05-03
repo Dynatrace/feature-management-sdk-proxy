@@ -246,6 +246,74 @@ func TestRefresher_RefreshesStaleEntries_200(t *testing.T) {
 	}
 }
 
+type mockObserver struct {
+	mu    sync.Mutex
+	calls []struct {
+		keyHash string
+		payload []byte
+	}
+}
+
+func (m *mockObserver) OnRefreshed(keyHash string, payload []byte) {
+	m.mu.Lock()
+	m.calls = append(m.calls, struct {
+		keyHash string
+		payload []byte
+	}{keyHash, payload})
+	m.mu.Unlock()
+}
+
+func TestRefresher_MultiObserver_BothNotified(t *testing.T) {
+	c := New()
+	c.Set("k1", Entry{
+		Payload:   []byte("old"),
+		ETag:      `"v1"`,
+		FetchedAt: time.Now().Add(-10 * time.Minute),
+		FetchURL:  "https://example.com/k1.json",
+	})
+
+	newEntry := Entry{Payload: []byte("new"), ETag: `"v2"`, FetchedAt: time.Now()}
+	fetcher := &mockFetcher{
+		results: map[string]FetchResult{
+			"https://example.com/k1.json": {Entry: &newEntry},
+		},
+	}
+
+	obs1 := &mockObserver{}
+	obs2 := &mockObserver{}
+	r := NewRefresherWithObservers(c, fetcher, noopLogger(), obs1, obs2)
+	r.refresh(context.Background())
+
+	obs1.mu.Lock()
+	defer obs1.mu.Unlock()
+	if len(obs1.calls) != 1 || obs1.calls[0].keyHash != "k1" {
+		t.Errorf("observer1: expected 1 call for k1, got %v", obs1.calls)
+	}
+
+	obs2.mu.Lock()
+	defer obs2.mu.Unlock()
+	if len(obs2.calls) != 1 || obs2.calls[0].keyHash != "k1" {
+		t.Errorf("observer2: expected 1 call for k1, got %v", obs2.calls)
+	}
+}
+
+func TestRefresher_SkipsEmptyFetchURL(t *testing.T) {
+	c := New()
+	c.Set("k1", Entry{
+		Payload:   []byte("data"),
+		FetchedAt: time.Now().Add(-10 * time.Minute), // stale
+		FetchURL:  "",                                // snapshot-restored, not yet hydrated
+	})
+
+	fetcher := &mockFetcher{}
+	r := NewRefresher(c, fetcher, noopLogger())
+	r.refresh(context.Background())
+
+	if len(fetcher.calls) != 0 {
+		t.Errorf("expected no fetch for empty FetchURL, got %d calls", len(fetcher.calls))
+	}
+}
+
 func TestRefresher_FetchError_PreservesExistingEntry(t *testing.T) {
 	c := New()
 	c.Set("k1", Entry{
