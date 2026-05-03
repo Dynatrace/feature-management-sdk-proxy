@@ -24,16 +24,21 @@ type Config struct {
 	// ProxyInstanceID identifies this proxy replica in billing records.
 	// Defaults to os.Hostname(); falls back to "unknown" on error.
 	ProxyInstanceID string
+	// BillingRetryBufferSize is the maximum number of failed billing samples
+	// held in the retry buffer. Oldest samples are dropped on overflow.
+	// Range 1–100000, default 1000.
+	BillingRetryBufferSize int
 }
 
 // FromEnv loads configuration from environment variables.
 // CDN_BASE_DOMAIN is required; all others have defaults.
 func FromEnv() (Config, error) {
 	cfg := Config{
-		Port:                 8080,
-		LogLevel:             slog.LevelInfo,
-		ShutdownTimeout:      30 * time.Second,
-		BillingFlushInterval: 60 * time.Second,
+		Port:                   8080,
+		LogLevel:               slog.LevelInfo,
+		ShutdownTimeout:        30 * time.Second,
+		BillingFlushInterval:   60 * time.Second,
+		BillingRetryBufferSize: 1000,
 	}
 
 	if v := os.Getenv("PORT"); v != "" {
@@ -77,6 +82,14 @@ func FromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("invalid BILLING_FLUSH_INTERVAL %q: must be a duration >= 10s (e.g. 60s)", v)
 		}
 		cfg.BillingFlushInterval = d
+	}
+
+	if v := os.Getenv("BILLING_RETRY_BUFFER_SIZE"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 100_000 {
+			return Config{}, fmt.Errorf("invalid BILLING_RETRY_BUFFER_SIZE %q: must be an integer between 1 and 100000", v)
+		}
+		cfg.BillingRetryBufferSize = n
 	}
 
 	if v := os.Getenv("PROXY_INSTANCE_ID"); v != "" {

@@ -8,20 +8,21 @@ import (
 
 // Instrument name constants — all proxy metrics are defined here.
 const (
-	RequestsTotal         = "proxy.requests.total"
-	SSEConnections        = "proxy.sse.connections"
-	SSEClientConnections  = "proxy.sse.client.connections"
-	SSEEventsDelivered    = "proxy.sse.events_delivered_total"
-	SSEUpstreamReconnects = "proxy.sse.upstream.reconnects"
-	SSEUpstreamEvents     = "proxy.sse.upstream.events"
-	CacheSize             = "proxy.cache.size"
-	SnapshotAgeSeconds    = "proxy.snapshot.age_seconds"
-	BillingFlushTotal     = "proxy.billing.flush.total"
-	BillingBufferSize     = "proxy.billing.buffer.size"
-	BillingFlushLag       = "proxy.billing.flush.lag_seconds"
-	StartupPath           = "proxy.startup.path"
-	SnapshotWritesTotal   = "proxy.snapshot.writes.total"
-	ConfigSSERewriteTotal = "proxy.config.sse_rewrite_total"
+	RequestsTotal             = "proxy.requests.total"
+	SSEConnections            = "proxy.sse.connections"
+	SSEClientConnections      = "proxy.sse.client.connections"
+	SSEEventsDelivered        = "proxy.sse.events_delivered_total"
+	SSEUpstreamReconnects     = "proxy.sse.upstream.reconnects"
+	SSEUpstreamEvents         = "proxy.sse.upstream.events"
+	CacheSize                 = "proxy.cache.size"
+	SnapshotAgeSeconds        = "proxy.snapshot.age_seconds"
+	BillingFlushTotal         = "proxy.billing.flush.total"
+	BillingBufferSize         = "proxy.billing.buffer.size"
+	BillingFlushLag           = "proxy.billing.flush.lag_seconds"
+	BillingRetryBufferDropped = "proxy.billing.retry_buffer.dropped_total"
+	StartupPath               = "proxy.startup.path"
+	SnapshotWritesTotal       = "proxy.snapshot.writes.total"
+	ConfigSSERewriteTotal     = "proxy.config.sse_rewrite_total"
 )
 
 // Instruments holds every OTel instrument the proxy emits. Obtain one via Register.
@@ -57,12 +58,16 @@ type Instruments struct {
 	// Synchronous gauge: updated after each successful snapshot write and on startup.
 	SnapshotAgeSeconds metric.Float64Gauge
 
-	// BillingFlushTotal counts billing flush attempts labeled by result (success, failure).
+	// BillingFlushTotal counts billing flush attempts labeled by result
+	// (success/permanent_error/ctx_error/retry).
 	BillingFlushTotal metric.Int64Counter
 
 	// BillingBufferSize reports the current number of unsent billing records.
 	// Synchronous gauge: updated whenever records are added or flushed.
 	BillingBufferSize metric.Int64Gauge
+
+	// BillingRetryBufferDropped counts samples evicted from the retry buffer due to overflow.
+	BillingRetryBufferDropped metric.Int64Counter
 
 	// BillingFlushLag records the wall-clock lag between the oldest unsent record and flush time.
 	BillingFlushLag metric.Float64Histogram
@@ -195,20 +200,29 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("metrics: register %s: %w", ConfigSSERewriteTotal, err)
 	}
 
+	retryBufDropped, err := meter.Int64Counter(BillingRetryBufferDropped,
+		metric.WithDescription("Billing samples evicted from the retry buffer due to overflow"),
+		metric.WithUnit("{sample}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", BillingRetryBufferDropped, err)
+	}
+
 	return &Instruments{
-		RequestsTotal:         reqTotal,
-		SSEConnections:        sseConns,
-		SSEClientConnections:  sseClientConns,
-		SSEEventsDelivered:    sseEventsDelivered,
-		SSEUpstreamReconnects: sseReconnects,
-		SSEUpstreamEvents:     sseEvents,
-		CacheSize:             cacheSize,
-		SnapshotAgeSeconds:    snapshotAge,
-		BillingFlushTotal:     billingFlush,
-		BillingBufferSize:     billingBuf,
-		BillingFlushLag:       billingLag,
-		StartupPath:           startupPath,
-		SnapshotWritesTotal:   snapshotWrites,
-		ConfigSSERewriteTotal: sseRewrite,
+		RequestsTotal:             reqTotal,
+		SSEConnections:            sseConns,
+		SSEClientConnections:      sseClientConns,
+		SSEEventsDelivered:        sseEventsDelivered,
+		SSEUpstreamReconnects:     sseReconnects,
+		SSEUpstreamEvents:         sseEvents,
+		CacheSize:                 cacheSize,
+		SnapshotAgeSeconds:        snapshotAge,
+		BillingFlushTotal:         billingFlush,
+		BillingBufferSize:         billingBuf,
+		BillingFlushLag:           billingLag,
+		StartupPath:               startupPath,
+		SnapshotWritesTotal:       snapshotWrites,
+		ConfigSSERewriteTotal:     sseRewrite,
+		BillingRetryBufferDropped: retryBufDropped,
 	}, nil
 }

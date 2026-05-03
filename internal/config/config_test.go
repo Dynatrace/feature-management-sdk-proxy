@@ -155,6 +155,71 @@ func TestFromEnv_ProxyInstanceID_DefaultNonEmpty(t *testing.T) {
 	}
 }
 
+func TestFromEnv_BillingRetryBufferSize_Default(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.BillingRetryBufferSize != 1000 {
+		t.Errorf("BillingRetryBufferSize = %d, want 1000", cfg.BillingRetryBufferSize)
+	}
+}
+
+func TestFromEnv_BillingRetryBufferSize_ValidOverride(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("BILLING_RETRY_BUFFER_SIZE", "5000")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.BillingRetryBufferSize != 5000 {
+		t.Errorf("BillingRetryBufferSize = %d, want 5000", cfg.BillingRetryBufferSize)
+	}
+}
+
+func TestFromEnv_BillingRetryBufferSize_Zero(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("BILLING_RETRY_BUFFER_SIZE", "0")
+
+	_, err := FromEnv()
+	if err == nil {
+		t.Fatal("expected error for BILLING_RETRY_BUFFER_SIZE=0")
+	}
+}
+
+func TestFromEnv_BillingRetryBufferSize_Negative(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("BILLING_RETRY_BUFFER_SIZE", "-1")
+
+	_, err := FromEnv()
+	if err == nil {
+		t.Fatal("expected error for negative BILLING_RETRY_BUFFER_SIZE")
+	}
+}
+
+func TestFromEnv_BillingRetryBufferSize_Malformed(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("BILLING_RETRY_BUFFER_SIZE", "notanint")
+
+	_, err := FromEnv()
+	if err == nil {
+		t.Fatal("expected error for malformed BILLING_RETRY_BUFFER_SIZE")
+	}
+}
+
+func TestFromEnv_BillingRetryBufferSize_TooLarge(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("BILLING_RETRY_BUFFER_SIZE", "100001")
+
+	_, err := FromEnv()
+	if err == nil {
+		t.Fatal("expected error for BILLING_RETRY_BUFFER_SIZE > 100000")
+	}
+}
+
 func TestFromEnv_InvalidCDNBaseDomain(t *testing.T) {
 	cases := []string{
 		"https://fm.example.com",

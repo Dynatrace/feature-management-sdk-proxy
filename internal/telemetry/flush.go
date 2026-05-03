@@ -101,8 +101,7 @@ func (f *Flusher) tick(ctx context.Context) {
 }
 
 // enqueueWithLog passes s to the retry buffer and logs the attempt so that
-// any subsequent drop (e.g. noop buffer before sdk-proxy-1hj is wired) is
-// observable in the structured log.
+// any subsequent buffer-overflow drop is observable in the structured log.
 func (f *Flusher) enqueueWithLog(s Sample) {
 	f.logger.Warn("billing: enqueueing sample for retry",
 		slog.String("key_hash", s.KeyHash),
