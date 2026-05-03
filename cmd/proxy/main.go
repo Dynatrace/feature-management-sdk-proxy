@@ -16,6 +16,7 @@ import (
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
 	"github.com/dynatrace/sdk-proxy/internal/config"
+	"github.com/dynatrace/sdk-proxy/internal/health"
 	"github.com/dynatrace/sdk-proxy/internal/metrics"
 	"github.com/dynatrace/sdk-proxy/internal/proxy"
 	"github.com/dynatrace/sdk-proxy/internal/server"
@@ -92,7 +93,14 @@ func run() error {
 
 	sseHandler := sse.NewHandler(flagCache, sseManager, inst, counter, logger, 15*time.Second)
 
+	// ReadyFunc: returns true immediately today (no snapshot persistence wired yet).
+	// When snapshot persistence lands, swap this closure to gate on snapshot load.
+	probeHandlers := health.New(func() bool { return true }, logger)
+
 	mux := http.NewServeMux()
+	mux.HandleFunc("/live", probeHandlers.Live)
+	mux.HandleFunc("/ready", probeHandlers.Ready)
+	mux.HandleFunc("/health", probeHandlers.Health)
 	mux.Handle(sse.HandlerPath, sseHandler)
 	mux.Handle("/", proxyHandler)
 
