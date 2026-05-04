@@ -172,13 +172,13 @@ func (r *Refresher) refresh(ctx context.Context) {
 		}
 		if result.NotModified {
 			r.cache.ResetTTL(key, time.Now())
-			r.logger.Debug("cache: TTL reset (304)", slog.String("key", key))
+			r.logger.Debug("cache: background refresh — upstream unchanged (304), TTL extended", slog.String("key", key))
 			continue
 		}
 		if result.Entry != nil {
 			result.Entry.FetchURL = entry.FetchURL // preserve the fetch URL
 			r.cache.Set(key, *result.Entry)
-			r.logger.Debug("cache: entry refreshed (200)", slog.String("key", key))
+			r.logger.Debug("cache: background refresh — new content received (200), cache updated", slog.String("key", key))
 			for _, obs := range r.observers {
 				obs.OnRefreshed(key, result.Entry.Payload)
 			}
