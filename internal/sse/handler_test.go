@@ -299,6 +299,45 @@ func TestHandler_RawSDKKeyNeverLogged(t *testing.T) {
 	}
 }
 
+// TestHandler_ChannelClose_HandlerReturnsCleanly verifies that when the manager
+// closes the subscriber channel (e.g. after a lifecycle invalidation), the
+// handler exits cleanly without busy-looping on zero-value events.
+func TestHandler_ChannelClose_HandlerReturnsCleanly(t *testing.T) {
+	sub := &mockSubscriber{}
+	h, c := newTestHandlerWithCache(t, sub)
+	c.Set(cache.Key(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sse?sdk_key="+testSDKKey, nil).WithContext(ctx)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.ServeHTTP(rr, req)
+	}()
+
+	if !waitForSubs(sub, 1) {
+		t.Fatal("timed out waiting for subscriber to register")
+	}
+
+	// Close all subscriber channels (simulates lifecycle invalidation).
+	sub.mu.Lock()
+	for _, s := range sub.subs {
+		close(s.ch)
+	}
+	sub.mu.Unlock()
+
+	select {
+	case <-done:
+		// Handler returned cleanly after channel close.
+	case <-time.After(time.Second):
+		t.Error("handler did not return after subscriber channel was closed")
+	}
+}
+
 // --- Counter increment tests ---
 
 func TestSSEHandler_Counter_IncrementOnAcceptedSubscription(t *testing.T) {

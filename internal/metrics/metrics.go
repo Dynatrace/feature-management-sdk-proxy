@@ -25,6 +25,8 @@ const (
 	ConfigSSERewriteTotal     = "proxy.config.sse_rewrite_total"
 	SnapshotLoadTotal         = "proxy.snapshot.load.total"
 	SnapshotWriteQueueDropped = "proxy.snapshot.write_queue.dropped_total"
+	LifecycleEventsTotal      = "proxy.lifecycle.events_total"
+	LifecycleInvalidatedKeys  = "proxy.lifecycle.invalidated_keys_total"
 )
 
 // Instruments holds every OTel instrument the proxy emits. Obtain one via Register.
@@ -95,6 +97,12 @@ type Instruments struct {
 
 	// SnapshotWriteQueueDropped counts snapshot writes dropped due to queue overflow.
 	SnapshotWriteQueueDropped metric.Int64Counter
+
+	// LifecycleEventsTotal counts lifecycle events received, labeled by event_type and result.
+	LifecycleEventsTotal metric.Int64Counter
+
+	// LifecycleInvalidatedKeys counts keys invalidated by lifecycle events, labeled by event_type.
+	LifecycleInvalidatedKeys metric.Int64Counter
 }
 
 // Register creates all metric instruments against meter. Call once at startup and
@@ -237,6 +245,22 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("metrics: register %s: %w", SnapshotWriteQueueDropped, err)
 	}
 
+	lifecycleEventsTotal, err := meter.Int64Counter(LifecycleEventsTotal,
+		metric.WithDescription("Lifecycle SSE events received by event_type and result (handled/malformed)"),
+		metric.WithUnit("{event}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", LifecycleEventsTotal, err)
+	}
+
+	lifecycleInvalidatedKeys, err := meter.Int64Counter(LifecycleInvalidatedKeys,
+		metric.WithDescription("Keys invalidated by lifecycle SSE events, labeled by event_type"),
+		metric.WithUnit("{key}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", LifecycleInvalidatedKeys, err)
+	}
+
 	return &Instruments{
 		RequestsTotal:             reqTotal,
 		SSEConnections:            sseConns,
@@ -255,5 +279,7 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		BillingRetryBufferDropped: retryBufDropped,
 		SnapshotLoadTotal:         snapshotLoadTotal,
 		SnapshotWriteQueueDropped: snapshotWriteQueueDropped,
+		LifecycleEventsTotal:      lifecycleEventsTotal,
+		LifecycleInvalidatedKeys:  lifecycleInvalidatedKeys,
 	}, nil
 }

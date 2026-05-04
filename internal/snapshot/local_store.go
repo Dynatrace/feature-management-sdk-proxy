@@ -99,5 +99,18 @@ func (s *LocalStore) List(_ context.Context) ([]string, error) {
 	return keys, nil
 }
 
+// Delete removes the snapshot file for the given key hash.
+// Returns nil when the file does not exist (idempotent).
+func (s *LocalStore) Delete(_ context.Context, keyHash string) error {
+	if !keyHashRe.MatchString(keyHash) {
+		return fmt.Errorf("snapshot: local: invalid key hash %q", keyHash)
+	}
+	err := os.Remove(filepath.Join(s.dir, keyHash+".json"))
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("snapshot: local: delete %s: %w", keyHash, err)
+	}
+	return nil
+}
+
 // ensure LocalStore implements Store at compile time.
 var _ Store = (*LocalStore)(nil)

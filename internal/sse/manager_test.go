@@ -254,6 +254,100 @@ func TestManager_NeverCachedKeyNeverOpensConn(t *testing.T) {
 	}
 }
 
+// TestManager_Close_CancelsUpstreamConn verifies that Close cancels the
+// active upstream connection for a key (connCount stops growing).
+func TestManager_Close_CancelsUpstreamConn(t *testing.T) {
+	var connCount atomic.Int64
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connCount.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	m := newTestManager(t, srv.Client())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	keyHash := cache.Key("dt_server_us_abc123")
+	m.OnConfigCached(ctx, "dt_server_us_abc123", configWithSSEURL(srv.URL))
+	time.Sleep(150 * time.Millisecond)
+
+	m.Close(keyHash)
+	time.Sleep(150 * time.Millisecond)
+
+	// After Close, no new reconnects should happen (context cancelled).
+	snapshotCount := connCount.Load()
+	time.Sleep(200 * time.Millisecond)
+	if connCount.Load() > snapshotCount+1 {
+		t.Errorf("connections kept growing after Close: %d -> %d", snapshotCount, connCount.Load())
+	}
+}
+
+// TestManager_Close_ClosesSubscriberChannels verifies that Close closes all
+// channels belonging to subscribers of the key.
+func TestManager_Close_ClosesSubscriberChannels(t *testing.T) {
+	m := newTestManager(t, nil)
+	keyHash := cache.Key("dt_server_us_abc123")
+
+	ch1, unsub1 := m.Subscribe(keyHash)
+	ch2, unsub2 := m.Subscribe(keyHash)
+	defer unsub1()
+	defer unsub2()
+
+	m.Close(keyHash)
+
+	for _, ch := range []<-chan Event{ch1, ch2} {
+		select {
+		case _, ok := <-ch:
+			if ok {
+				t.Error("expected closed channel, got open channel with value")
+			}
+		case <-time.After(time.Second):
+			t.Error("timed out waiting for channel to be closed")
+		}
+	}
+}
+
+// TestManager_Close_UnknownKeyIsNoop verifies that Close on an unknown key
+// does not panic or error.
+func TestManager_Close_UnknownKeyIsNoop(t *testing.T) {
+	m := newTestManager(t, nil)
+	m.Close("nonexistent0000") // must not panic
+}
+
+// TestManager_Close_SubscribeAfterCloseCreatesNewState verifies that a new
+// Subscribe call after Close creates fresh state (channel is open).
+func TestManager_Close_SubscribeAfterCloseCreatesNewState(t *testing.T) {
+	m := newTestManager(t, nil)
+	keyHash := cache.Key("dt_server_us_abc123")
+
+	ch1, _ := m.Subscribe(keyHash)
+	m.Close(keyHash)
+
+	ch2, unsub2 := m.Subscribe(keyHash)
+	defer unsub2()
+
+	// ch1 should be closed; ch2 should be open (not immediately closed).
+	select {
+	case _, ok := <-ch1:
+		if ok {
+			t.Error("ch1: expected closed, got open with value")
+		}
+	case <-time.After(time.Second):
+		t.Error("ch1: timed out waiting for close")
+	}
+
+	// ch2 should not be closed yet.
+	select {
+	case <-ch2:
+		t.Error("ch2: should be open after fresh Subscribe")
+	default:
+		// expected
+	}
+}
+
 // TestManager_NoSSEInConfig_NoConnection verifies that a payload without
 // eventStreams does not open an upstream SSE connection.
 func TestManager_NoSSEInConfig_NoConnection(t *testing.T) {

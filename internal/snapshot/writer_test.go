@@ -9,9 +9,11 @@ import (
 )
 
 type countingStore struct {
-	mu    sync.Mutex
-	puts  []string
-	putFn func(keyHash string) error
+	mu      sync.Mutex
+	puts    []string
+	deletes []string
+	putFn   func(keyHash string) error
+	delFn   func(keyHash string) error
 }
 
 func (s *countingStore) Put(_ context.Context, keyHash string, _ []byte) error {
@@ -32,6 +34,18 @@ func (s *countingStore) Get(_ context.Context, _ string) ([]byte, error) {
 
 func (s *countingStore) List(_ context.Context) ([]string, error) {
 	return nil, errors.New("not implemented")
+}
+
+func (s *countingStore) Delete(_ context.Context, keyHash string) error {
+	if s.delFn != nil {
+		if err := s.delFn(keyHash); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	s.deletes = append(s.deletes, keyHash)
+	s.mu.Unlock()
+	return nil
 }
 
 func TestWriter_OnConfigCached_WritesPersisted(t *testing.T) {
@@ -142,6 +156,56 @@ func TestWriter_QueueFull_DropsOldest(t *testing.T) {
 	if len(store.puts) < 2 {
 		t.Errorf("expected at least 2 puts, got %v", store.puts)
 	}
+}
+
+func TestWriter_OnInvalidated_DeletesPersisted(t *testing.T) {
+	store := &countingStore{}
+	w := NewWriter(store, noopInst(t), noopLogger(), 16)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); w.Run(ctx) }()
+
+	w.OnInvalidated("key1")
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.deletes) != 1 || store.deletes[0] != "key1" {
+		t.Errorf("expected 1 delete for key1, got %v", store.deletes)
+	}
+	if len(store.puts) != 0 {
+		t.Errorf("expected no puts for OnInvalidated, got %v", store.puts)
+	}
+}
+
+func TestWriter_OnInvalidated_DeleteError_NoBlock(t *testing.T) {
+	store := &countingStore{
+		delFn: func(_ string) error { return errors.New("backend down") },
+	}
+	w := NewWriter(store, noopInst(t), noopLogger(), 16)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); w.Run(ctx) }()
+
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		w.OnInvalidated("k")
+	}()
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("OnInvalidated blocked")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
 }
 
 func TestWriter_Shutdown_DrainsQueue(t *testing.T) {

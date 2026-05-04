@@ -314,6 +314,28 @@ func TestRefresher_SkipsEmptyFetchURL(t *testing.T) {
 	}
 }
 
+func TestCache_Delete_RemovesEntry(t *testing.T) {
+	c := New()
+	c.Set("k1", Entry{Payload: []byte("v1")})
+	c.Delete("k1")
+	_, ok := c.Get("k1")
+	if ok {
+		t.Error("expected miss after Delete")
+	}
+}
+
+func TestCache_Delete_MissingKeyIsNoop(t *testing.T) {
+	c := New()
+	c.Delete("nonexistent") // must not panic
+}
+
+func TestCache_Delete_Idempotent(t *testing.T) {
+	c := New()
+	c.Set("k1", Entry{Payload: []byte("v1")})
+	c.Delete("k1")
+	c.Delete("k1") // second delete must not panic
+}
+
 func TestRefresher_FetchError_PreservesExistingEntry(t *testing.T) {
 	c := New()
 	c.Set("k1", Entry{

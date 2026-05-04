@@ -36,6 +36,10 @@ type conn struct {
 	logger             *slog.Logger
 	inst               *metrics.Instruments
 	onEvent            func(Event)
+	// onLifecycle is called for each received event before onEvent. When it
+	// returns true the event is a lifecycle event and must not be forwarded
+	// to SDK subscribers via onEvent. May be nil.
+	onLifecycle func(Event) bool
 }
 
 // run is the reconnect loop. It blocks until ctx is cancelled.
@@ -55,6 +59,9 @@ func (c *conn) run(ctx context.Context) {
 		err := c.connect(ctx, lastEventID, func(evt Event) {
 			if evt.ID != "" {
 				lastEventID = evt.ID
+			}
+			if c.onLifecycle != nil && c.onLifecycle(evt) {
+				return
 			}
 			c.onEvent(evt)
 		})
