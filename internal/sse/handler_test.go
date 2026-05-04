@@ -64,7 +64,7 @@ const testSDKKey = "dt_server_us_abc123"
 func newTestHandlerWithCache(t *testing.T, sub Subscriber) (*Handler, *cache.Cache) {
 	t.Helper()
 	c := cache.New()
-	h := NewHandler(c, sub, newTestInstruments(t), nil, slog.Default(), 15*time.Second)
+	h := NewHandler(c, sub, newTestInstruments(t), nil, slog.Default(), 15*time.Second, "/server/")
 	return h, c
 }
 
@@ -174,7 +174,7 @@ func TestHandler_MultipleSubscribers_AllReceiveEvent(t *testing.T) {
 	sub := &mockSubscriber{}
 	c := cache.New()
 	c.Set(cache.Key(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
-	h := NewHandler(c, sub, newTestInstruments(t), nil, slog.Default(), time.Minute)
+	h := NewHandler(c, sub, newTestInstruments(t), nil, slog.Default(), time.Minute, "/server/")
 
 	cancels := make([]context.CancelFunc, n)
 	rrs := make([]*httptest.ResponseRecorder, n)
@@ -242,7 +242,7 @@ func TestHandler_Heartbeat_EmitsPing(t *testing.T) {
 	sub := &mockSubscriber{}
 	c := cache.New()
 	c.Set(cache.Key(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
-	h := NewHandler(c, sub, newTestInstruments(t), nil, slog.Default(), 50*time.Millisecond)
+	h := NewHandler(c, sub, newTestInstruments(t), nil, slog.Default(), 50*time.Millisecond, "/server/")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -272,7 +272,7 @@ func TestHandler_RawSDKKeyNeverLogged(t *testing.T) {
 	sub := &mockSubscriber{}
 	c := cache.New()
 	c.Set(cache.Key(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
-	h := NewHandler(c, sub, newTestInstruments(t), nil, logger, 15*time.Second)
+	h := NewHandler(c, sub, newTestInstruments(t), nil, logger, 15*time.Second, "/server/")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rr := httptest.NewRecorder()
@@ -307,7 +307,7 @@ func TestSSEHandler_Counter_IncrementOnAcceptedSubscription(t *testing.T) {
 	c.Set(cache.Key(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
 
 	counter := telemetry.NewCounter()
-	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second)
+	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -337,7 +337,7 @@ func TestSSEHandler_Counter_NoIncrementOn405(t *testing.T) {
 	sub := &mockSubscriber{}
 	counter := telemetry.NewCounter()
 	c := cache.New()
-	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second)
+	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
 
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		rr := httptest.NewRecorder()
@@ -354,7 +354,7 @@ func TestSSEHandler_Counter_NoIncrementOnMissingSDKKey(t *testing.T) {
 	sub := &mockSubscriber{}
 	counter := telemetry.NewCounter()
 	c := cache.New()
-	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second)
+	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
@@ -372,7 +372,7 @@ func TestSSEHandler_Counter_NoIncrementOn412(t *testing.T) {
 	sub := &mockSubscriber{}
 	counter := telemetry.NewCounter()
 	c := cache.New() // config not cached
-	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second)
+	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/sse?sdk_key="+testSDKKey, nil)

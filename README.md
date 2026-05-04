@@ -9,7 +9,7 @@ Without the proxy, each SDK replica opens its own CDN connection and its own ups
 ```
 SDK instances (N)           sdk-proxy (1)           Dynatrace CDN / SSE
 ─────────────────           ─────────────           ────────────────────
-GET /v1/config/{key}.json ──▶ cache hit: serve
+GET /server/{key}.json ──▶ cache hit: serve
                               cache miss: ──────────▶ GET /server/{key}.json
                               SSE subscribe ─────────▶ 1 upstream SSE conn
 GET /sse?sdk_key={key}    ──▶ fan-out ◀──────────────  events broadcast
@@ -56,7 +56,7 @@ docker run --rm \
 
 | Endpoint | Description |
 |---|---|
-| `GET /v1/config/{sdk_key}.json` | Serve flagd config for an SDK key (cache hit or CDN fetch). The SDK key is the last path segment before `.json`. |
+| `GET /server/{sdk_key}.json` | Serve flagd config for an SDK key (cache hit or CDN fetch). The SDK key is the last path segment before `.json`. |
 | `GET /sse?sdk_key={sdk_key}` | SSE fan-out. SDK clients subscribe here to receive `refetchEvaluation` events. Requires the config to be cached first; returns 412 otherwise. |
 
 ## Configuration

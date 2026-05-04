@@ -69,7 +69,7 @@ func TestHandler_CacheMiss_FetchesUpstream(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -95,7 +95,7 @@ func TestHandler_CacheMiss_PopulatesCache(t *testing.T) {
 	h := newTestHandlerWithCache(t, upstream, c)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	key := cache.Key("dt_server_us_abc123")
@@ -121,7 +121,7 @@ func TestHandler_CacheMiss_PathForwardedToUpstream(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if gotPath != "/server/dt_server_us_abc123.json" {
@@ -138,7 +138,7 @@ func TestHandler_CacheMiss_Upstream304_Returns503(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -154,7 +154,7 @@ func TestHandler_CacheMiss_UpstreamServerError_Returns503(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -172,7 +172,7 @@ func TestHandler_CacheMiss_NetworkError_Returns503(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -189,7 +189,7 @@ func TestHandler_CacheMiss_UpstreamClientError_PassedThrough(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
@@ -212,7 +212,7 @@ func TestHandler_CacheMiss_IfNoneMatch_NotForwardedToUpstream(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	req.Header.Set("If-None-Match", `"abc123"`)
 	h.ServeHTTP(rec, req)
 
@@ -240,7 +240,7 @@ func TestHandler_CacheHit_ServesFromCache_NoUpstreamCall(t *testing.T) {
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -271,7 +271,7 @@ func TestHandler_CacheHit_ETagMatch_Returns304(t *testing.T) {
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	req.Header.Set("If-None-Match", `"abc123"`)
 	h.ServeHTTP(rec, req)
 
@@ -303,7 +303,7 @@ func TestHandler_CacheHit_ETagMismatch_Returns200WithPayload(t *testing.T) {
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	req.Header.Set("If-None-Match", `"v1"`) // stale client version
 	h.ServeHTTP(rec, req)
 
@@ -332,7 +332,7 @@ func TestHandler_CacheHit_NoETag_Returns200(t *testing.T) {
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	req.Header.Set("If-None-Match", `"anything"`)
 	h.ServeHTTP(rec, req)
 
@@ -353,7 +353,7 @@ func TestHandler_NonGetMethod_Returns405(t *testing.T) {
 	h := newTestHandler(t, upstream)
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(method, "/v1/config/dt_server_us_abc123.json", nil)
+		req := httptest.NewRequest(method, "/server/dt_server_us_abc123.json", nil)
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s: expected 405, got %d", method, rec.Code)
@@ -369,7 +369,7 @@ func TestHandler_MissingJsonSuffix_Returns400(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -401,9 +401,9 @@ func TestHandler_UnrecognizedSDKKeyFormat_Returns400(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	for _, path := range []string{
-		"/v1/config/bogus.json",
-		"/v1/config/my-sdk-key.json",
-		"/v1/config/dt_client_us_abc.json",
+		"/server/bogus.json",
+		"/server/my-sdk-key.json",
+		"/server/dt_client_us_abc.json",
 	} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -431,7 +431,7 @@ func TestHandler_HEAD_CacheHit_NoBody(t *testing.T) {
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodHead, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodHead, "/server/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -466,7 +466,7 @@ func TestExtractSDKKey(t *testing.T) {
 		wantKey string
 		wantOK  bool
 	}{
-		{"/v1/config/abc123.json", "abc123", true},
+		{"/server/abc123.json", "abc123", true},
 		{"/abc123.json", "abc123", true},
 		{"noslash.json", "noslash", true},
 		{"/.json", "", false},
@@ -543,7 +543,7 @@ func TestHandler_CacheHit_RewritesSSEURL(t *testing.T) {
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	req.Host = "proxy.example.com"
 	h.ServeHTTP(rec, req)
 
@@ -570,7 +570,7 @@ func TestHandler_CacheMiss_RewritesSSEURLInResponse_StoresRawInCache(t *testing.
 	c := cache.New()
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	req.Host = "proxy.example.com"
 	h.ServeHTTP(rec, req)
 
@@ -615,7 +615,7 @@ func TestHandler_NoSSEEntry_PayloadServedByteIdentical(t *testing.T) {
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	req.Host = "proxy.example.com"
 	h.ServeHTTP(rec, req)
 
@@ -644,7 +644,7 @@ func TestHandler_HEAD_NoSSERewrite(t *testing.T) {
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodHead, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodHead, "/server/dt_server_us_abc123.json", nil)
 	req.Host = "proxy.example.com"
 	h.ServeHTTP(rec, req)
 
@@ -716,7 +716,7 @@ func TestHandler_MalformedHostHeader_FallsBackToUnknown(t *testing.T) {
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	req.Host = "proxy.example.com\r\nX-Injected: bad"
 	h.ServeHTTP(rec, req)
 
@@ -753,7 +753,7 @@ func TestHandler_Rewrite_SDKKeyQueryEscaped(t *testing.T) {
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/"+sdkKey+".json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/"+sdkKey+".json", nil)
 	req.Host = "proxy.example.com"
 	h.ServeHTTP(rec, req)
 
@@ -783,7 +783,7 @@ func TestHandler_Rewrite_HTTPSSchemeFromXForwardedProto(t *testing.T) {
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	req.Host = "proxy.example.com"
 	req.Header.Set("X-Forwarded-Proto", "https")
 	h.ServeHTTP(rec, req)
@@ -825,7 +825,7 @@ func TestHandler_Counter_IncrementOnCacheMiss(t *testing.T) {
 	h := newTestHandlerWithCounter(t, upstream, counter)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	samples := counter.Drain()
@@ -850,7 +850,7 @@ func TestHandler_Counter_IncrementOnCacheHit(t *testing.T) {
 	h := newTestHandlerWithCacheAndCounter(t, upstream, c, counter)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	samples := counter.Drain()
@@ -869,7 +869,7 @@ func TestHandler_Counter_IncrementOnUpstreamError(t *testing.T) {
 	h := newTestHandlerWithCounter(t, upstream, counter)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -897,7 +897,7 @@ func TestHandler_Counter_IncrementOnHEAD(t *testing.T) {
 	h := newTestHandlerWithCacheAndCounter(t, upstream, c, counter)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodHead, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodHead, "/server/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	samples := counter.Drain()
@@ -915,7 +915,7 @@ func TestHandler_Counter_NoIncrementOn405(t *testing.T) {
 
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(method, "/v1/config/dt_server_us_abc123.json", nil)
+		req := httptest.NewRequest(method, "/server/dt_server_us_abc123.json", nil)
 		h.ServeHTTP(rec, req)
 	}
 
@@ -932,7 +932,7 @@ func TestHandler_Counter_NoIncrementOnMalformedPath(t *testing.T) {
 	h := newTestHandlerWithCounter(t, upstream, counter)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/notjson", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/notjson", nil)
 	h.ServeHTTP(rec, req)
 
 	if samples := counter.Drain(); len(samples) != 0 {
@@ -947,7 +947,7 @@ func TestHandler_Counter_NoIncrementOnUnrecognizedKeyFormat(t *testing.T) {
 	counter := telemetry.NewCounter()
 	h := newTestHandlerWithCounter(t, upstream, counter)
 
-	for _, path := range []string{"/v1/config/bogus.json", "/v1/config/dt_client_us_abc.json"} {
+	for _, path := range []string{"/server/bogus.json", "/server/dt_client_us_abc.json"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		h.ServeHTTP(rec, req)
@@ -994,7 +994,7 @@ func TestHandler_CacheMiss_InvokesSnapshotNotifier(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1032,7 +1032,7 @@ func TestHandler_SnapshotRestoredEntry_HydratesFetchURL(t *testing.T) {
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/"+sdkKey+".json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/"+sdkKey+".json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {

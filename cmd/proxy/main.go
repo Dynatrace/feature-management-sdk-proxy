@@ -133,7 +133,7 @@ func run() error {
 		return fmt.Errorf("proxy: %w", err)
 	}
 
-	sseHandler := sse.NewHandler(flagCache, sseManager, inst, counter, logger, 15*time.Second)
+	sseHandler := sse.NewHandler(flagCache, sseManager, inst, counter, logger, 15*time.Second, configHandlerPath)
 
 	// ReadyFunc gates /ready on snapshot load completion.
 	probeHandlers := health.New(func() bool { return snapshotReady }, logger)
@@ -143,7 +143,8 @@ func run() error {
 	mux.HandleFunc("/ready", probeHandlers.Ready)
 	mux.HandleFunc("/health", probeHandlers.Health)
 	mux.Handle(sse.HandlerPath, sseHandler)
-	mux.Handle("/", proxyHandler)
+	mux.Handle(configHandlerPath, proxyHandler)
+	mux.HandleFunc("/", http.NotFound)
 
 	srv, err := server.New(
 		fmt.Sprintf(":%d", cfg.Port),
@@ -220,6 +221,9 @@ func run() error {
 		return nil
 	}
 }
+
+// configHandlerPath mirrors the upstream CDN path structure (cdn…/server/<key>.json).
+const configHandlerPath = "/server/"
 
 const billingShutdownGrace = 10 * time.Second
 const snapshotShutdownGrace = 5 * time.Second
