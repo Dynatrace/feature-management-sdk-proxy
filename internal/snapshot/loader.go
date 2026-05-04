@@ -13,6 +13,20 @@ import (
 	"github.com/dynatrace/sdk-proxy/internal/metrics"
 )
 
+// OldestCapturedAt returns the minimum FetchedAt timestamp across all entries
+// currently in c. Returns (zero, false) when the cache is empty.
+func OldestCapturedAt(c *cache.Cache) (time.Time, bool) {
+	var oldest time.Time
+	found := false
+	for _, entry := range c.Snapshot() {
+		if !found || entry.FetchedAt.Before(oldest) {
+			oldest = entry.FetchedAt
+			found = true
+		}
+	}
+	return oldest, found
+}
+
 // LoadAll reads every snapshot from store, decodes the envelope, and populates
 // c with the restored entries. Entries with unknown versions or corrupt envelopes
 // are skipped with a warning log and a metric increment — they never fail startup.

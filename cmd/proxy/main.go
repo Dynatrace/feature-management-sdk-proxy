@@ -76,10 +76,11 @@ func run() error {
 	// --- Snapshot persistence (optional) ---
 	//
 	// Build the store and load snapshots synchronously before starting the HTTP
-	// listener. The /ready probe returns true only after this completes (or when
-	// persistence is disabled).
+	// listener. The /ready probe returns true only after startup classification.
 	snapshotReady := false
 	var snapshotWriter *snapshot.Writer
+	var snapshotLoaded int
+	var snapshotLoadErr error
 
 	switch cfg.SnapshotBackend {
 	case "s3":
@@ -94,7 +95,7 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("snapshot: %w", err)
 		}
-		snapshotWriter = initSnapshotWriter(ctx, store, flagCache, inst, logger, cfg.SnapshotWriteQueueSize,
+		snapshotLoaded, snapshotWriter, snapshotLoadErr = initSnapshotWriter(ctx, store, flagCache, inst, logger, cfg.SnapshotWriteQueueSize,
 			slog.String("bucket", cfg.SnapshotS3Bucket),
 			slog.String("prefix", cfg.SnapshotS3Prefix),
 		)
@@ -103,11 +104,32 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("snapshot: %w", err)
 		}
-		snapshotWriter = initSnapshotWriter(ctx, store, flagCache, inst, logger, cfg.SnapshotWriteQueueSize,
+		snapshotLoaded, snapshotWriter, snapshotLoadErr = initSnapshotWriter(ctx, store, flagCache, inst, logger, cfg.SnapshotWriteQueueSize,
 			slog.String("dir", cfg.SnapshotLocalDir),
 		)
-	default:
+	}
+
+	// Classify the startup path and emit the metric.
+	// oldest is the zero time when snapshotLoaded==0; Classify guards on loaded==0 before using it.
+	oldest, _ := snapshot.OldestCapturedAt(flagCache)
+	switch snapshot.Classify(cfg.SnapshotBackend != "", snapshotLoaded, oldest, time.Now(), cfg.SnapshotMaxAge) {
+	case snapshot.CaseColdNoPersistence:
 		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", "cold")))
+		logger.Info("startup: no persistence configured, starting cold")
+	case snapshot.CaseSnapshotFresh:
+		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", "snapshot")))
+		logger.Info("startup: serving from fresh snapshot", slog.Int("count", snapshotLoaded))
+	case snapshot.CaseSnapshotStale:
+		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", "snapshot_stale")))
+		logger.Warn("startup: serving stale snapshot — oldest entry meets or exceeds SNAPSHOT_MAX_AGE",
+			slog.Duration("age", time.Since(oldest)),
+			slog.Duration("max_age", cfg.SnapshotMaxAge))
+	case snapshot.CaseEmptyPersistence:
+		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", "empty_persistence")))
+		if snapshotLoadErr != nil {
+			return fmt.Errorf("startup: snapshot backend unreachable and no cached data to serve: %w", snapshotLoadErr)
+		}
+		return fmt.Errorf("startup: persistence configured but snapshot store is empty — proxy has no data to serve")
 	}
 	snapshotReady = true
 
@@ -229,8 +251,10 @@ const billingShutdownGrace = 10 * time.Second
 const snapshotShutdownGrace = 5 * time.Second
 
 // initSnapshotWriter loads existing snapshots from store into flagCache, logs
-// the result, records the startup-path metric, and returns a Writer ready to
-// accept async writes. attrs are extra slog attributes appended to log lines.
+// errors, and returns the loaded count, a Writer ready to accept async writes,
+// and any error from LoadAll. The caller uses the error to distinguish a backend
+// failure from a genuinely empty store. Startup-path classification and metric
+// emission are handled by the caller.
 func initSnapshotWriter(
 	ctx context.Context,
 	store snapshot.Store,
@@ -239,26 +263,17 @@ func initSnapshotWriter(
 	logger *slog.Logger,
 	queueSize int,
 	attrs ...slog.Attr,
-) *snapshot.Writer {
+) (int, *snapshot.Writer, error) {
 	loaded, err := snapshot.LoadAll(ctx, store, flagCache, inst, logger)
 
-	extra := make([]any, len(attrs))
-	for i, a := range attrs {
-		extra[i] = a
-	}
 	if err != nil {
-		logger.Warn("snapshot: startup load failed; starting cold",
+		extra := make([]any, len(attrs))
+		for i, a := range attrs {
+			extra[i] = a
+		}
+		logger.Warn("snapshot: startup load failed",
 			append([]any{slog.String("error", err.Error())}, extra...)...)
-	} else {
-		logger.Info("snapshot: loaded entries",
-			append([]any{slog.Int("count", loaded)}, extra...)...)
 	}
 
-	startupPath := "cold"
-	if loaded > 0 {
-		startupPath = "snapshot"
-	}
-	inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", startupPath)))
-
-	return snapshot.NewWriter(store, inst, logger, queueSize)
+	return loaded, snapshot.NewWriter(store, inst, logger, queueSize), err
 }

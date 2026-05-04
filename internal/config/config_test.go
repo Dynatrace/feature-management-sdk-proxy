@@ -301,3 +301,56 @@ func TestFromEnv_InvalidCDNBaseDomain(t *testing.T) {
 		}
 	}
 }
+
+func TestFromEnv_SnapshotMaxAge_Default(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SnapshotMaxAge != 24*time.Hour {
+		t.Errorf("SnapshotMaxAge = %v, want 24h", cfg.SnapshotMaxAge)
+	}
+}
+
+func TestFromEnv_SnapshotMaxAge_ValidOverride(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("SNAPSHOT_BACKEND", "local")
+	t.Setenv("SNAPSHOT_LOCAL_DIR", "/tmp/snapshots")
+	t.Setenv("SNAPSHOT_MAX_AGE", "6h")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SnapshotMaxAge != 6*time.Hour {
+		t.Errorf("SnapshotMaxAge = %v, want 6h", cfg.SnapshotMaxAge)
+	}
+}
+
+func TestFromEnv_SnapshotMaxAge_Invalid(t *testing.T) {
+	cases := []string{"abc", "-1h", "0s"}
+	for _, v := range cases {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+			t.Setenv("SNAPSHOT_BACKEND", "local")
+			t.Setenv("SNAPSHOT_LOCAL_DIR", "/tmp/snapshots")
+			t.Setenv("SNAPSHOT_MAX_AGE", v)
+			_, err := FromEnv()
+			if err == nil {
+				t.Errorf("SNAPSHOT_MAX_AGE=%q: expected error, got nil", v)
+			}
+		})
+	}
+}
+
+func TestFromEnv_SnapshotMaxAge_WithoutBackend(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("SNAPSHOT_MAX_AGE", "6h")
+
+	_, err := FromEnv()
+	if err == nil {
+		t.Fatal("expected error when SNAPSHOT_MAX_AGE set without SNAPSHOT_BACKEND")
+	}
+}
