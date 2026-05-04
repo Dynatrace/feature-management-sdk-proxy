@@ -220,6 +220,70 @@ func TestFromEnv_BillingRetryBufferSize_TooLarge(t *testing.T) {
 	}
 }
 
+func TestFromEnv_SnapshotBackend_S3(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("SNAPSHOT_BACKEND", "s3")
+	t.Setenv("SNAPSHOT_S3_BUCKET", "my-bucket")
+	t.Setenv("SNAPSHOT_S3_REGION", "us-east-1")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SnapshotBackend != "s3" {
+		t.Errorf("SnapshotBackend = %q, want \"s3\"", cfg.SnapshotBackend)
+	}
+}
+
+func TestFromEnv_SnapshotBackend_Local(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("SNAPSHOT_BACKEND", "local")
+	t.Setenv("SNAPSHOT_LOCAL_DIR", "/tmp/snapshots")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SnapshotBackend != "local" {
+		t.Errorf("SnapshotBackend = %q, want \"local\"", cfg.SnapshotBackend)
+	}
+	if cfg.SnapshotLocalDir != "/tmp/snapshots" {
+		t.Errorf("SnapshotLocalDir = %q, want \"/tmp/snapshots\"", cfg.SnapshotLocalDir)
+	}
+}
+
+func TestFromEnv_SnapshotBackend_Local_MissingDir(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("SNAPSHOT_BACKEND", "local")
+	t.Setenv("SNAPSHOT_LOCAL_DIR", "")
+
+	_, err := FromEnv()
+	if err == nil {
+		t.Fatal("expected error when SNAPSHOT_LOCAL_DIR is empty")
+	}
+}
+
+func TestFromEnv_SnapshotBackend_Local_RelativePath(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("SNAPSHOT_BACKEND", "local")
+	t.Setenv("SNAPSHOT_LOCAL_DIR", "relative/path")
+
+	_, err := FromEnv()
+	if err == nil {
+		t.Fatal("expected error for relative SNAPSHOT_LOCAL_DIR")
+	}
+}
+
+func TestFromEnv_SnapshotBackend_Invalid(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("SNAPSHOT_BACKEND", "gcs")
+
+	_, err := FromEnv()
+	if err == nil {
+		t.Fatal("expected error for invalid SNAPSHOT_BACKEND")
+	}
+}
+
 func TestFromEnv_InvalidCDNBaseDomain(t *testing.T) {
 	cases := []string{
 		"https://fm.example.com",
