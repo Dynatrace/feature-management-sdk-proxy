@@ -69,6 +69,9 @@ func (w *Writer) OnInvalidated(keyHash string) {
 }
 
 func (w *Writer) enqueue(job writeJob) {
+	if w == nil {
+		return
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
