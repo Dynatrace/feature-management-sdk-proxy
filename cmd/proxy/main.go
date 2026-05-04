@@ -81,7 +81,8 @@ func run() error {
 	snapshotReady := false
 	var snapshotWriter *snapshot.Writer
 
-	if cfg.SnapshotBackend == "s3" {
+	switch cfg.SnapshotBackend {
+	case "s3":
 		store, err := snapshot.NewS3Store(ctx, snapshot.S3Config{
 			Endpoint:        cfg.SnapshotS3Endpoint,
 			Bucket:          cfg.SnapshotS3Bucket,
@@ -93,31 +94,19 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("snapshot: %w", err)
 		}
-
-		loaded, err := snapshot.LoadAll(ctx, store, flagCache, inst, logger)
+		snapshotWriter = initSnapshotWriter(ctx, store, flagCache, inst, logger, cfg.SnapshotWriteQueueSize,
+			slog.String("bucket", cfg.SnapshotS3Bucket),
+			slog.String("prefix", cfg.SnapshotS3Prefix),
+		)
+	case "local":
+		store, err := snapshot.NewLocalStore(cfg.SnapshotLocalDir)
 		if err != nil {
-			// Non-fatal: log and continue with a cold start.
-			slog.Warn("snapshot: startup load failed; starting cold",
-				slog.String("error", err.Error()),
-				slog.String("bucket", cfg.SnapshotS3Bucket),
-				slog.String("prefix", cfg.SnapshotS3Prefix),
-			)
-		} else {
-			slog.Info("snapshot: loaded entries",
-				slog.Int("count", loaded),
-				slog.String("bucket", cfg.SnapshotS3Bucket),
-				slog.String("prefix", cfg.SnapshotS3Prefix),
-			)
+			return fmt.Errorf("snapshot: %w", err)
 		}
-
-		startupPath := "cold"
-		if loaded > 0 {
-			startupPath = "snapshot"
-		}
-		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", startupPath)))
-
-		snapshotWriter = snapshot.NewWriter(store, inst, logger, cfg.SnapshotWriteQueueSize)
-	} else {
+		snapshotWriter = initSnapshotWriter(ctx, store, flagCache, inst, logger, cfg.SnapshotWriteQueueSize,
+			slog.String("dir", cfg.SnapshotLocalDir),
+		)
+	default:
 		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", "cold")))
 	}
 	snapshotReady = true
@@ -234,3 +223,38 @@ func run() error {
 
 const billingShutdownGrace = 10 * time.Second
 const snapshotShutdownGrace = 5 * time.Second
+
+// initSnapshotWriter loads existing snapshots from store into flagCache, logs
+// the result, records the startup-path metric, and returns a Writer ready to
+// accept async writes. attrs are extra slog attributes appended to log lines.
+func initSnapshotWriter(
+	ctx context.Context,
+	store snapshot.Store,
+	flagCache *cache.Cache,
+	inst *metrics.Instruments,
+	logger *slog.Logger,
+	queueSize int,
+	attrs ...slog.Attr,
+) *snapshot.Writer {
+	loaded, err := snapshot.LoadAll(ctx, store, flagCache, inst, logger)
+
+	extra := make([]any, len(attrs))
+	for i, a := range attrs {
+		extra[i] = a
+	}
+	if err != nil {
+		logger.Warn("snapshot: startup load failed; starting cold",
+			append([]any{slog.String("error", err.Error())}, extra...)...)
+	} else {
+		logger.Info("snapshot: loaded entries",
+			append([]any{slog.Int("count", loaded)}, extra...)...)
+	}
+
+	startupPath := "cold"
+	if loaded > 0 {
+		startupPath = "snapshot"
+	}
+	inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", startupPath)))
+
+	return snapshot.NewWriter(store, inst, logger, queueSize)
+}

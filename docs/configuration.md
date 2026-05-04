@@ -119,6 +119,139 @@ BILLING_RETRY_BUFFER_SIZE=1000
 
 ---
 
+## Snapshot Persistence Variables
+
+Snapshot persistence is **optional**. When disabled (the default), the proxy starts cold on every restart. When enabled, cache entries are written asynchronously to the configured backend and loaded back on startup to reduce cold-start latency.
+
+Two backends are supported: `s3` (any S3-compatible object store) and `local` (a directory on the local filesystem).
+
+### `SNAPSHOT_BACKEND`
+
+**Optional.** Default: unset (persistence disabled).
+
+Selects the persistence backend.
+
+| Value | Backend |
+|---|---|
+| `s3` | Any S3-compatible object store (AWS S3, MinIO, Ceph, GCS S3-compat) |
+| `local` | Local filesystem directory — suitable for single-node or air-gapped deployments |
+
+```bash
+SNAPSHOT_BACKEND=local
+```
+
+---
+
+### S3 Backend Variables
+
+Used when `SNAPSHOT_BACKEND=s3`.
+
+#### `SNAPSHOT_S3_BUCKET`
+
+**Required when `SNAPSHOT_BACKEND=s3`.**
+
+The name of the S3 bucket that holds snapshot objects.
+
+```bash
+SNAPSHOT_S3_BUCKET=my-proxy-snapshots
+```
+
+---
+
+#### `SNAPSHOT_S3_REGION`
+
+**Required when `SNAPSHOT_BACKEND=s3`.**
+
+The AWS region for the bucket. For self-hosted S3-compatible services, use any non-empty placeholder (e.g. `us-east-1`).
+
+```bash
+SNAPSHOT_S3_REGION=us-east-1
+```
+
+---
+
+#### `SNAPSHOT_S3_ENDPOINT`
+
+**Optional.**
+
+Override the S3 endpoint URL. Leave unset to use the AWS regional endpoint derived from `SNAPSHOT_S3_REGION`. Set this for self-hosted S3-compatible services (MinIO, Ceph, etc.).
+
+```bash
+SNAPSHOT_S3_ENDPOINT=http://minio:9000
+```
+
+---
+
+#### `SNAPSHOT_S3_PREFIX`
+
+**Optional.** Default: `""` (objects stored at the bucket root).
+
+A key prefix applied to all snapshot objects. Useful for sharing a bucket across multiple proxy deployments.
+
+```bash
+SNAPSHOT_S3_PREFIX=prod/sdk-proxy
+```
+
+---
+
+#### `SNAPSHOT_S3_ACCESS_KEY` / `SNAPSHOT_S3_SECRET_KEY`
+
+**Optional.** Default: AWS SDK default credential chain (env vars, IRSA, instance roles, etc.).
+
+Explicit static credentials. When set, both must be provided. Prefer IRSA or instance roles in production.
+
+```bash
+SNAPSHOT_S3_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE
+SNAPSHOT_S3_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+```
+
+---
+
+### Local Backend Variables
+
+Used when `SNAPSHOT_BACKEND=local`.
+
+#### `SNAPSHOT_LOCAL_DIR`
+
+**Required when `SNAPSHOT_BACKEND=local`.**
+
+Absolute path to the directory where snapshot files are stored. The directory is created on startup if it does not exist. Must be an absolute path (not relative) to prevent ambiguity when the process working directory changes.
+
+```bash
+SNAPSHOT_LOCAL_DIR=/var/lib/sdk-proxy/snapshots
+```
+
+**Kubernetes volume example:**
+
+```yaml
+env:
+  - name: SNAPSHOT_BACKEND
+    value: local
+  - name: SNAPSHOT_LOCAL_DIR
+    value: /snapshots
+volumeMounts:
+  - name: snapshots
+    mountPath: /snapshots
+volumes:
+  - name: snapshots
+    persistentVolumeClaim:
+      claimName: sdk-proxy-snapshots
+```
+
+---
+
+### `SNAPSHOT_WRITE_QUEUE_SIZE`
+
+**Optional.** Default: `256`. Range: 1–10000.
+
+Maximum number of pending async snapshot writes queued in memory. Writes are enqueued after each cache update and drained by a background goroutine. When the queue is full, the pending write is dropped and `sdk_proxy.snapshot.write_queue.dropped_total` is incremented.
+
+```bash
+SNAPSHOT_WRITE_QUEUE_SIZE=256
+```
+
+---
+
 ## OTel Variables
 
 Metrics export is disabled by default. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable it; all other OTel variables are optional.
