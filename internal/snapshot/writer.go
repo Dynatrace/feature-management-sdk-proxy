@@ -14,9 +14,10 @@ import (
 
 // writeJob is an item queued for async persistence.
 type writeJob struct {
-	keyHash string
-	etag    string
-	payload []byte
+	keyHash  string
+	etag     string
+	payload  []byte
+	isDelete bool // when true, Delete is called instead of Put
 }
 
 // Writer persists cache entries to a Store asynchronously. It satisfies
@@ -58,6 +59,13 @@ func (w *Writer) OnConfigCached(keyHash, etag string, payload []byte) {
 // refresher after a successful upstream 200 (never for 304 responses).
 func (w *Writer) OnRefreshed(keyHash string, payload []byte) {
 	w.enqueue(writeJob{keyHash: keyHash, payload: payload})
+}
+
+// OnInvalidated queues an async delete of the persisted snapshot for keyHash.
+// It is called by the lifecycle handler when a key is rotated or deleted.
+// A failed delete logs a warning and increments a metric; it never blocks.
+func (w *Writer) OnInvalidated(keyHash string) {
+	w.enqueue(writeJob{keyHash: keyHash, isDelete: true})
 }
 
 func (w *Writer) enqueue(job writeJob) {
@@ -129,6 +137,11 @@ func (w *Writer) Shutdown(ctx context.Context) {
 }
 
 func (w *Writer) persist(job writeJob) {
+	if job.isDelete {
+		w.persistDelete(job.keyHash)
+		return
+	}
+
 	now := time.Now()
 	body, err := EncodeEnvelope(job.keyHash, job.etag, now, job.payload)
 	if err != nil {
@@ -137,7 +150,7 @@ func (w *Writer) persist(job writeJob) {
 			slog.String("error", err.Error()),
 		)
 		w.inst.SnapshotWritesTotal.Add(context.Background(), 1,
-			metric.WithAttributes(attribute.String("result", "failure")))
+			metric.WithAttributes(attribute.String("result", "failure"), attribute.String("operation", "put")))
 		return
 	}
 
@@ -147,12 +160,26 @@ func (w *Writer) persist(job writeJob) {
 			slog.String("error", err.Error()),
 		)
 		w.inst.SnapshotWritesTotal.Add(context.Background(), 1,
-			metric.WithAttributes(attribute.String("result", "failure")))
+			metric.WithAttributes(attribute.String("result", "failure"), attribute.String("operation", "put")))
 		return
 	}
 
 	w.inst.SnapshotWritesTotal.Add(context.Background(), 1,
-		metric.WithAttributes(attribute.String("result", "success")))
+		metric.WithAttributes(attribute.String("result", "success"), attribute.String("operation", "put")))
 	w.inst.SnapshotAgeSeconds.Record(context.Background(), 0,
 		metric.WithAttributes(attribute.String("sdk_key_hash", job.keyHash)))
+}
+
+func (w *Writer) persistDelete(keyHash string) {
+	if err := w.store.Delete(context.Background(), keyHash); err != nil {
+		w.logger.Warn("snapshot: delete failed",
+			slog.String("key", keyHash),
+			slog.String("error", err.Error()),
+		)
+		w.inst.SnapshotWritesTotal.Add(context.Background(), 1,
+			metric.WithAttributes(attribute.String("result", "failure"), attribute.String("operation", "delete")))
+		return
+	}
+	w.inst.SnapshotWritesTotal.Add(context.Background(), 1,
+		metric.WithAttributes(attribute.String("result", "success"), attribute.String("operation", "delete")))
 }

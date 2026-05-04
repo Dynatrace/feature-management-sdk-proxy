@@ -21,9 +21,10 @@ import (
 // Never call either from the snapshot load path — SSE is only established
 // after the proxy confirms upstream reachability via a live HTTP response.
 type Manager struct {
-	client *http.Client
-	inst   *metrics.Instruments
-	logger *slog.Logger
+	client    *http.Client
+	inst      *metrics.Instruments
+	logger    *slog.Logger
+	lifecycle func(Event) bool // optional; set via SetLifecycleHandler
 
 	mu    sync.Mutex
 	conns map[string]*keyState
@@ -36,6 +37,7 @@ type keyState struct {
 	wg                 sync.WaitGroup
 	subsMu             sync.Mutex
 	subs               []*subscriber
+	closed             bool // set by Close under subsMu; checked by Subscribe under subsMu
 }
 
 type subscriber struct {
@@ -116,6 +118,14 @@ func (m *Manager) Subscribe(keyHash string) (<-chan Event, func()) {
 	m.mu.Unlock()
 
 	state.subsMu.Lock()
+	if state.closed {
+		// Close ran between m.mu.Unlock above and this lock; return a
+		// pre-closed channel so the handler exits immediately.
+		state.subsMu.Unlock()
+		closed := make(chan Event)
+		close(closed)
+		return closed, func() {}
+	}
 	state.subs = append(state.subs, sub)
 	state.subsMu.Unlock()
 
@@ -130,6 +140,51 @@ func (m *Manager) Subscribe(keyHash string) (<-chan Event, func()) {
 		}
 	}
 	return ch, unsubscribe
+}
+
+// SetLifecycleHandler registers a function to be called for each upstream SSE
+// event before fan-out. When it returns true the event is a lifecycle event
+// and is not forwarded to SDK subscribers. Must be called before the first
+// OnConfigCached call.
+func (m *Manager) SetLifecycleHandler(fn func(Event) bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lifecycle = fn
+}
+
+// Close cancels the upstream SSE connection for keyHash, closes all subscriber
+// channels, and removes the state from the manager. It is safe to call on a
+// key that has no active connection (no-op). Close does not wait for the
+// upstream goroutine to exit; cancellation is async.
+func (m *Manager) Close(keyHash string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state, ok := m.conns[keyHash]
+	if !ok {
+		return
+	}
+
+	if state.cancel != nil {
+		state.cancel()
+		m.inst.SSEUpstreamReconnects.Add(context.Background(), 1, metric.WithAttributes(
+			attribute.String("sdk_key_hash", keyHash),
+			attribute.String("reason", "lifecycle_invalidated"),
+		))
+	}
+
+	state.subsMu.Lock()
+	state.closed = true
+	for _, sub := range state.subs {
+		close(sub.ch)
+	}
+	state.subs = nil
+	state.subsMu.Unlock()
+
+	delete(m.conns, keyHash)
+	m.logger.Info("sse: lifecycle invalidation closed connection",
+		slog.String("key", keyHash),
+	)
 }
 
 // Shutdown cancels all upstream connections and waits for them to drain, or
@@ -209,6 +264,7 @@ func (m *Manager) startLocked(ctx context.Context, keyHash, sseURL string, inact
 			onEvent: func(evt Event) {
 				m.dispatch(keyHash, evt)
 			},
+			onLifecycle: m.lifecycle,
 		}
 		c.run(connCtx)
 	})

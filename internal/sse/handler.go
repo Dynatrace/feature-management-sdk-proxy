@@ -126,7 +126,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			h.logger.Debug("sse: client disconnected", slog.String("key", keyHash))
 			return
-		case evt := <-ch:
+		case evt, ok := <-ch:
+			if !ok {
+				return
+			}
 			if err := writeSSEEvent(w, evt); err != nil {
 				return
 			}

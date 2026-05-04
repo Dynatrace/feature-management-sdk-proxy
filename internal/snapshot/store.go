@@ -18,4 +18,8 @@ type Store interface {
 
 	// List returns the key hashes of all stored snapshots.
 	List(ctx context.Context) ([]string, error)
+
+	// Delete removes the snapshot for the given key hash.
+	// Returns nil when the object does not exist (idempotent).
+	Delete(ctx context.Context, keyHash string) error
 }

@@ -144,6 +144,20 @@ func run() error {
 	}
 	sseManager := sse.New(sseClient, inst, logger)
 
+	// Wire lifecycle invalidation: on tokenRotated/stageDeleted/projectDeleted events,
+	// drop the cache entry, close SSE fan-out, and (if persistence is configured)
+	// delete the persisted snapshot.
+	var snapshotInvalidator sse.Invalidator
+	if snapshotWriter != nil {
+		snapshotInvalidator = sse.InvalidatorFunc(snapshotWriter.OnInvalidated)
+	}
+	lifecycleHandler := sse.NewLifecycleHandler(inst, logger,
+		sse.InvalidatorFunc(flagCache.Delete),
+		sse.InvalidatorFunc(sseManager.Close),
+		snapshotInvalidator,
+	)
+	sseManager.SetLifecycleHandler(lifecycleHandler.HandleEvent)
+
 	counter := telemetry.NewCounter()
 	logReporter := telemetry.NewLogReporter(logger, cfg.ProxyInstanceID)
 	flusher := telemetry.NewFlusher(counter, logReporter, telemetry.NewBoundedRetryBuffer(cfg.BillingRetryBufferSize, inst, logger), inst, cfg.BillingFlushInterval, logger)

@@ -176,6 +176,43 @@ func TestLocalStore_InvalidKeyHash(t *testing.T) {
 	}
 }
 
+func TestLocalStore_Delete_RemovesFile(t *testing.T) {
+	store, err := NewLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalStore: %v", err)
+	}
+	if err := store.Put(context.Background(), hashA, []byte(`{}`)); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := store.Delete(context.Background(), hashA); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	_, err = store.Get(context.Background(), hashA)
+	if err == nil {
+		t.Error("expected error after Delete, got nil")
+	}
+}
+
+func TestLocalStore_Delete_MissingKeyReturnsNil(t *testing.T) {
+	store, err := NewLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalStore: %v", err)
+	}
+	if err := store.Delete(context.Background(), hashA); err != nil {
+		t.Errorf("Delete on missing key: expected nil, got %v", err)
+	}
+}
+
+func TestLocalStore_Delete_InvalidKeyHash(t *testing.T) {
+	store, err := NewLocalStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalStore: %v", err)
+	}
+	if err := store.Delete(context.Background(), "bad"); err == nil {
+		t.Error("Delete with invalid key hash: expected error, got nil")
+	}
+}
+
 func TestLocalStore_ConcurrentPuts(t *testing.T) {
 	store, err := NewLocalStore(t.TempDir())
 	if err != nil {

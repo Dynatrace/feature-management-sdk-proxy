@@ -62,6 +62,13 @@ func (c *Cache) Set(key string, e Entry) {
 	c.entries[key] = e
 }
 
+// Delete removes the entry for key. It is a no-op when the key is absent.
+func (c *Cache) Delete(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, key)
+}
+
 // ResetTTL updates the FetchedAt timestamp for an existing entry without
 // changing the payload or ETag (used when upstream returns 304 Not Modified).
 func (c *Cache) ResetTTL(key string, now time.Time) {

@@ -90,6 +90,14 @@ func (f *s3Fake) handler() http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(data)
 
+		case http.MethodDelete:
+			if len(parts) < 2 {
+				http.Error(w, "missing key", http.StatusBadRequest)
+				return
+			}
+			delete(f.objects, parts[1])
+			w.WriteHeader(http.StatusNoContent)
+
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -178,6 +186,31 @@ func TestS3Store_ListEmpty(t *testing.T) {
 	}
 	if len(keys) != 0 {
 		t.Errorf("expected empty list, got %v", keys)
+	}
+}
+
+func TestS3Store_Delete_RemovesObject(t *testing.T) {
+	fake := newS3Fake()
+	store, _ := newTestS3Store(t, fake)
+
+	if err := store.Put(context.Background(), "key1", []byte(`{}`)); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := store.Delete(context.Background(), "key1"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	_, err := store.Get(context.Background(), "key1")
+	if err == nil {
+		t.Error("expected error after Delete, got nil")
+	}
+}
+
+func TestS3Store_Delete_MissingKeyReturnsNil(t *testing.T) {
+	fake := newS3Fake()
+	store, _ := newTestS3Store(t, fake)
+
+	if err := store.Delete(context.Background(), "nonexistent"); err != nil {
+		t.Errorf("Delete on missing key: expected nil, got %v", err)
 	}
 }
 

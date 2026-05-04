@@ -62,6 +62,11 @@ func (f *fakeStore) List(_ context.Context) ([]string, error) {
 	return out, nil
 }
 
+func (f *fakeStore) Delete(_ context.Context, keyHash string) error {
+	delete(f.objects, keyHash)
+	return nil
+}
+
 func TestLoadAll_HappyPath(t *testing.T) {
 	store := newFakeStore()
 	payload := []byte(`{"flags":{}}`)
@@ -224,4 +229,8 @@ func (s *selectiveErrorStore) Get(ctx context.Context, k string) ([]byte, error)
 }
 func (s *selectiveErrorStore) List(ctx context.Context) ([]string, error) {
 	return s.inner.List(ctx)
+}
+
+func (s *selectiveErrorStore) Delete(ctx context.Context, k string) error {
+	return s.inner.Delete(ctx, k)
 }

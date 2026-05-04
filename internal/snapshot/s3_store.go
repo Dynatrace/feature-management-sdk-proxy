@@ -3,6 +3,7 @@ package snapshot
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -156,6 +157,24 @@ func extractKeyHash(objectKey, prefix string) string {
 		return ""
 	}
 	return name
+}
+
+// Delete removes the snapshot object for the given key hash.
+// Returns nil when the object does not exist (idempotent).
+func (s *S3Store) Delete(ctx context.Context, keyHash string) error {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(s.objectKey(keyHash)),
+	})
+	if err != nil {
+		// S3 DeleteObject returns NoSuchKey only in certain configurations; treat it as success.
+		var nsk *types.NoSuchKey
+		if errors.As(err, &nsk) {
+			return nil
+		}
+		return fmt.Errorf("snapshot: s3: delete %s: %w", keyHash, err)
+	}
+	return nil
 }
 
 // ensure S3Store implements Store at compile time.
