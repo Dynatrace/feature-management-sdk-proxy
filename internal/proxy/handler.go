@@ -94,10 +94,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if entry, ok := h.cache.Get(key); ok {
+		h.logger.Debug("proxy: cache hit", slog.String("key", key))
 		h.serveFromCache(w, r, entry, sdkKey)
 		return
 	}
 
+	h.logger.Debug("proxy: cache miss — fetching upstream", slog.String("key", key))
 	h.serveMiss(w, r, sdkKey, key, target)
 }
 
