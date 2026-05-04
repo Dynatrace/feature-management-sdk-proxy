@@ -38,12 +38,15 @@ type Handler struct {
 	counter           *telemetry.Counter
 	logger            *slog.Logger
 	heartbeatInterval time.Duration
+	configPath        string
 }
 
 // NewHandler constructs a Handler. heartbeatInterval is the period between
 // keepalive comments sent on idle connections (15s is typical for production).
-// counter may be nil; counting is silently skipped.
-func NewHandler(c *cache.Cache, m Subscriber, inst *metrics.Instruments, counter *telemetry.Counter, logger *slog.Logger, heartbeatInterval time.Duration) *Handler {
+// configPath is the HTTP path prefix at which the proxy serves flagd config
+// (e.g. "/server/"); used in the 412 error hint so it stays in sync with the
+// mux registration. counter may be nil; counting is silently skipped.
+func NewHandler(c *cache.Cache, m Subscriber, inst *metrics.Instruments, counter *telemetry.Counter, logger *slog.Logger, heartbeatInterval time.Duration, configPath string) *Handler {
 	return &Handler{
 		cache:             c,
 		manager:           m,
@@ -51,6 +54,7 @@ func NewHandler(c *cache.Cache, m Subscriber, inst *metrics.Instruments, counter
 		counter:           counter,
 		logger:            logger,
 		heartbeatInterval: heartbeatInterval,
+		configPath:        configPath,
 	}
 }
 
@@ -78,7 +82,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("sse: client connected before config cached; returning 412",
 			slog.String("key", keyHash),
 		)
-		http.Error(w, "config not cached; fetch /v1/config/{sdk_key}.json first", http.StatusPreconditionFailed)
+		http.Error(w, "config not cached; fetch "+h.configPath+"{sdk_key}.json first", http.StatusPreconditionFailed)
 		return
 	}
 

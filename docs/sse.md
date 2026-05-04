@@ -9,7 +9,7 @@ SDK clients connect to `GET /sse?sdk_key={sdk_key}`. The SDK key is passed as a 
 **Prerequisites before a connection is accepted:**
 
 1. The SDK key must match the `dt_server_{region}_{token}` format. Invalid format returns 400.
-2. A flagd config entry for that SDK key must already be cached. If the config has not been fetched yet, the handler returns **412 Precondition Failed** with a message directing the client to fetch `/v1/config/{sdk_key}.json` first.
+2. A flagd config entry for that SDK key must already be cached. If the config has not been fetched yet, the handler returns **412 Precondition Failed** with a message directing the client to fetch `/server/{sdk_key}.json` first.
 
 Only connections that pass both gates are accepted and counted toward billing.
 

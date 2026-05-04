@@ -168,6 +168,46 @@ func TestLoadAll_GetError_SkipsContinues(t *testing.T) {
 	}
 }
 
+func TestOldestCapturedAt_EmptyCache(t *testing.T) {
+	_, ok := OldestCapturedAt(cache.New())
+	if ok {
+		t.Error("expected ok=false for empty cache")
+	}
+}
+
+func TestOldestCapturedAt_SingleEntry(t *testing.T) {
+	c := cache.New()
+	ts := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	c.Set("key1", cache.Entry{FetchedAt: ts})
+
+	got, ok := OldestCapturedAt(c)
+	if !ok {
+		t.Fatal("expected ok=true for populated cache")
+	}
+	if !got.Equal(ts) {
+		t.Errorf("got %v, want %v", got, ts)
+	}
+}
+
+func TestOldestCapturedAt_MultipleEntries(t *testing.T) {
+	c := cache.New()
+	oldest := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	middle := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	newest := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+
+	c.Set("k1", cache.Entry{FetchedAt: middle})
+	c.Set("k2", cache.Entry{FetchedAt: oldest})
+	c.Set("k3", cache.Entry{FetchedAt: newest})
+
+	got, ok := OldestCapturedAt(c)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if !got.Equal(oldest) {
+		t.Errorf("got %v, want %v (oldest)", got, oldest)
+	}
+}
+
 type selectiveErrorStore struct {
 	inner   Store
 	failKey string

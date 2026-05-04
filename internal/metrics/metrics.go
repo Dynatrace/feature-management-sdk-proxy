@@ -74,7 +74,11 @@ type Instruments struct {
 	// BillingFlushLag records the wall-clock lag between the oldest unsent record and flush time.
 	BillingFlushLag metric.Float64Histogram
 
-	// StartupPath counts proxy startups labeled by path (cold/snapshot/cache).
+	// StartupPath counts proxy startups labeled by path
+	// (cold/snapshot/snapshot_stale/empty_persistence).
+	// cold: no persistence configured. snapshot: fresh snapshots loaded.
+	// snapshot_stale: snapshots loaded but oldest entry meets or exceeds SNAPSHOT_MAX_AGE.
+	// empty_persistence: persistence configured but no snapshots loaded — process exits after emit.
 	// Each process instance increments exactly once at startup; useful for fleet-wide aggregation.
 	StartupPath metric.Int64Counter
 
@@ -186,7 +190,7 @@ func Register(meter metric.Meter) (*Instruments, error) {
 	}
 
 	startupPath, err := meter.Int64Counter(StartupPath,
-		metric.WithDescription("Proxy startup count labeled by path (cold/snapshot/cache)"),
+		metric.WithDescription("Proxy startup count labeled by path (cold/snapshot/snapshot_stale/empty_persistence)"),
 		metric.WithUnit("{startup}"),
 	)
 	if err != nil {

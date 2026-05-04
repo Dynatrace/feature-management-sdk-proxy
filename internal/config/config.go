@@ -50,6 +50,13 @@ type Config struct {
 	// SnapshotWriteQueueSize is the maximum pending async snapshot writes.
 	// Range 1–10000, default 256.
 	SnapshotWriteQueueSize int
+
+	// SnapshotMaxAge is the threshold above which a loaded snapshot is classified
+	// as stale, triggering a loud warning and metric at startup. It is a warning
+	// threshold only — stale snapshots are still served. Ignored when SnapshotBackend
+	// is empty; setting SNAPSHOT_MAX_AGE without SNAPSHOT_BACKEND is an error.
+	// Env: SNAPSHOT_MAX_AGE, default 24h, must be > 0.
+	SnapshotMaxAge time.Duration
 }
 
 // FromEnv loads configuration from environment variables.
@@ -62,6 +69,7 @@ func FromEnv() (Config, error) {
 		BillingFlushInterval:   60 * time.Second,
 		BillingRetryBufferSize: 1000,
 		SnapshotWriteQueueSize: 256,
+		SnapshotMaxAge:         24 * time.Hour,
 	}
 
 	if v := os.Getenv("PORT"); v != "" {
@@ -166,6 +174,17 @@ func FromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("invalid SNAPSHOT_WRITE_QUEUE_SIZE %q: must be an integer between 1 and 10000", v)
 		}
 		cfg.SnapshotWriteQueueSize = n
+	}
+
+	if v := os.Getenv("SNAPSHOT_MAX_AGE"); v != "" {
+		if cfg.SnapshotBackend == "" {
+			return Config{}, fmt.Errorf("SNAPSHOT_MAX_AGE is set but SNAPSHOT_BACKEND is not configured — SNAPSHOT_MAX_AGE has no effect without a snapshot backend")
+		}
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return Config{}, fmt.Errorf("invalid SNAPSHOT_MAX_AGE %q: must be a positive duration (e.g. 24h)", v)
+		}
+		cfg.SnapshotMaxAge = d
 	}
 
 	return cfg, nil
