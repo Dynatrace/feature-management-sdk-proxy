@@ -1,5 +1,7 @@
 //go:build integration
 
+// docs: docs/monitoring.md — Cache Health
+
 package e2e
 
 import (

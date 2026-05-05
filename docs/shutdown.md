@@ -1,26 +1,23 @@
 # Shutdown Behavior
 
-The proxy handles `SIGTERM` and `SIGINT` gracefully. On either signal, it drains in-flight requests, flushes billing data, and exits cleanly.
+The proxy handles `SIGTERM` and `SIGINT` gracefully. On either signal, it drains in-flight requests, flushes pending data, and exits cleanly.
 
 ## Shutdown Sequence
 
-1. **HTTP server drains** — `srv.Shutdown` waits for in-flight requests to complete, up to `SHUTDOWN_TIMEOUT` (default 30s). New connections are rejected immediately.
-2. **SSE manager shuts down** — all upstream SSE connections are cancelled and subscriber channels are closed. A 5-second deadline applies.
-3. **Final billing flush** — the flusher performs one last drain of the counter and retry buffer and attempts to deliver all pending samples. A 10-second deadline applies (`billingShutdownGrace`).
+1. **HTTP server drains** — waits for in-flight requests to complete, up to `SHUTDOWN_TIMEOUT` (default 30s). New connections are rejected immediately.
+2. **SSE manager shuts down** — all upstream SSE connections are closed and subscriber channels are drained. A 5-second deadline applies.
+3. **Snapshot writer drains** — if snapshot persistence is configured, the async write queue is drained. Pending writes are given a best-effort opportunity to complete; writes that cannot finish in time are logged and dropped. A failed snapshot write never fails the shutdown.
+4. **Final usage flush** — pending usage records are flushed. A 10-second deadline applies.
 
-Counter increments happen during request handling (step 1), so the billing flush (step 3) is guaranteed to see all counts from requests that completed before the server shut down.
+Usage counts are incremented during request handling (step 1), so the final flush (step 4) is guaranteed to capture all counts from requests that completed before the server stopped.
 
 ## Always Exit 0 on Signal-Driven Shutdown
 
-`run()` returns `nil` from the signal branch, even when `srv.Shutdown`, the listener, or the SSE manager returns a non-nil error during teardown. Those errors are logged at `WARN` level and the process exits 0.
-
-This is intentional. Process supervisors (systemd, Kubernetes) and CI pipelines that watch exit codes should not treat a clean, signal-driven shutdown as a failure. A non-zero exit from a SIGTERM is typically used to signal that the process crashed or could not start — not that it shut down on request.
-
-> ⚠️ Do not revert this behavior. If error propagation from shutdown paths is added in the future, make sure the signal branch still returns `nil` so that pod restarts and rolling deployments do not generate false failure alerts.
+The proxy always exits 0 when shutdown is triggered by a signal, even if non-critical teardown steps log errors. Process supervisors and Kubernetes should not treat a SIGTERM-driven shutdown as a failure.
 
 ## What Still Exits Non-Zero
 
-`run()` returns an error (and the process exits 1) in two cases:
+The process exits 1 in two cases:
 
 - **Startup failure** — config validation, metrics registration, or server construction fails.
-- **Listener error before any signal** — the HTTP server fails to start or dies unexpectedly before a SIGTERM is received.
+- **Listener error before any signal** — the HTTP server dies unexpectedly before a SIGTERM is received.

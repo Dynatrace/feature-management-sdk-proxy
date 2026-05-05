@@ -1,5 +1,7 @@
 //go:build integration
 
+// docs: docs/monitoring.md — SSE Connections
+
 package e2e
 
 import (

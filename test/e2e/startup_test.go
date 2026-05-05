@@ -1,5 +1,7 @@
 //go:build integration
 
+// docs: docs/monitoring.md — Startup, Health Probes; docs/snapshot.md — Startup Behavior
+
 package e2e
 
 import (
