@@ -46,7 +46,7 @@ Structured log verbosity. All logs are JSON to stdout.
 |---|---|
 | `DEBUG` | Per-request cache decisions, SSE connection events |
 | `INFO` | Server start/stop, cache refresh outcomes |
-| `WARN` | Upstream errors, SSE disconnects, billing retries |
+| `WARN` | Upstream errors, SSE disconnects, retryable failures |
 | `ERROR` | Internal errors that should never occur |
 
 ```bash
@@ -73,7 +73,7 @@ SHUTDOWN_TIMEOUT=30s
 
 **Optional.** Default: `os.Hostname()`, or `unknown` if hostname lookup fails.
 
-An opaque string included in every billing record to identify which proxy replica generated it. Useful for correlating fleet-wide usage counts across replicas. In Kubernetes, set this to the pod name via the Downward API.
+An opaque identifier for this proxy replica. Used in usage records to distinguish replicas in a fleet. In Kubernetes, set this to the pod name via the Downward API.
 
 ```bash
 PROXY_INSTANCE_ID=pod-abc-123
@@ -91,39 +91,13 @@ env:
 
 ---
 
-## Billing Variables
-
-### `BILLING_FLUSH_INTERVAL`
-
-**Optional.** Default: `60s`. Minimum: `10s`.
-
-How often per-SDK-token request counts are flushed to the billing endpoint. Shorter intervals reduce the window of data loss on an unexpected crash but increase billing endpoint traffic. Must be a Go duration string ≥ `10s`.
-
-```bash
-BILLING_FLUSH_INTERVAL=60s
-```
-
----
-
-### `BILLING_RETRY_BUFFER_SIZE`
-
-**Optional.** Default: `1000`. Range: 1–100000.
-
-Maximum number of failed billing samples held in the retry buffer for re-attempt on the next flush. When the buffer is full, the oldest sample is evicted and `proxy.billing.retry_buffer.dropped_total` is incremented.
-
-Size the buffer to hold at least `(expected outage duration / flush interval)` samples per active SDK token. At the default 60s flush interval, a 1000-sample buffer covers ~16 hours of retries for a single SDK token, or proportionally less for multiple tokens.
-
-```bash
-BILLING_RETRY_BUFFER_SIZE=1000
-```
-
----
-
 ## Snapshot Persistence Variables
 
 Snapshot persistence is **optional**. When disabled (the default), the proxy starts cold on every restart. When enabled, cache entries are written asynchronously to the configured backend and loaded back on startup to reduce cold-start latency.
 
 Two backends are supported: `s3` (any S3-compatible object store) and `local` (a directory on the local filesystem).
+
+See [snapshot.md](snapshot.md) for startup behavior and deployment guidance.
 
 ### `SNAPSHOT_BACKEND`
 
@@ -139,6 +113,22 @@ Selects the persistence backend.
 ```bash
 SNAPSHOT_BACKEND=local
 ```
+
+---
+
+### `SNAPSHOT_MAX_AGE`
+
+**Optional.** Default: `24h`.
+
+Maximum age of a snapshot before it is considered stale at startup. Stale snapshots are still loaded and served; the proxy schedules a background refresh to replace them. Must be a positive Go duration string.
+
+Setting this too short defeats the purpose of persistence; setting it too long means the proxy may serve stale configs after an extended outage. The default of 24 hours is suitable for most deployments.
+
+```bash
+SNAPSHOT_MAX_AGE=24h
+```
+
+> ⚠️ `SNAPSHOT_MAX_AGE` has no effect unless `SNAPSHOT_BACKEND` is also set.
 
 ---
 
@@ -215,7 +205,7 @@ Used when `SNAPSHOT_BACKEND=local`.
 
 **Required when `SNAPSHOT_BACKEND=local`.**
 
-Absolute path to the directory where snapshot files are stored. The directory is created on startup if it does not exist. Must be an absolute path (not relative) to prevent ambiguity when the process working directory changes.
+Absolute path to the directory where snapshot files are stored. The directory is created on startup if it does not exist. Must be an absolute path (not relative).
 
 ```bash
 SNAPSHOT_LOCAL_DIR=/var/lib/sdk-proxy/snapshots
@@ -244,7 +234,7 @@ volumes:
 
 **Optional.** Default: `256`. Range: 1–10000.
 
-Maximum number of pending async snapshot writes queued in memory. Writes are enqueued after each cache update and drained by a background goroutine. When the queue is full, the pending write is dropped and `sdk_proxy.snapshot.write_queue.dropped_total` is incremented.
+Maximum number of pending async snapshot writes queued in memory. Writes are enqueued after each cache update and drained by a background goroutine. When the queue is full, the pending write is dropped and `proxy.snapshot.write_queue.dropped_total` is incremented.
 
 ```bash
 SNAPSHOT_WRITE_QUEUE_SIZE=256
@@ -254,7 +244,7 @@ SNAPSHOT_WRITE_QUEUE_SIZE=256
 
 ## OTel Variables
 
-Metrics export is disabled by default. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable it; all other OTel variables are optional.
+Metrics export is disabled by default. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable it; all other OTel variables are optional. See [telemetry.md](telemetry.md) for the full metrics reference.
 
 ### `OTEL_EXPORTER_OTLP_ENDPOINT`
 
@@ -301,16 +291,21 @@ CDN_BASE_DOMAIN=fm.dynatracelabs.com
 PORT=8080
 LOG_LEVEL=INFO
 SHUTDOWN_TIMEOUT=30s
-BILLING_FLUSH_INTERVAL=60s
-BILLING_RETRY_BUFFER_SIZE=1000
 PROXY_INSTANCE_ID=pod-abc-123
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production
 ```
 
-## Kubernetes ConfigMap Example
+With snapshot persistence:
 
-Non-secret configuration can be managed in a `ConfigMap`. The SDK token is a secret and should be provided via the request, not the proxy config — the proxy holds no credentials.
+```bash
+SNAPSHOT_BACKEND=s3
+SNAPSHOT_S3_BUCKET=my-proxy-snapshots
+SNAPSHOT_S3_REGION=us-east-1
+SNAPSHOT_MAX_AGE=24h
+```
+
+## Kubernetes Deployment Example
 
 ```yaml
 apiVersion: v1
@@ -322,8 +317,6 @@ data:
   PORT: "8080"
   LOG_LEVEL: INFO
   SHUTDOWN_TIMEOUT: 30s
-  BILLING_FLUSH_INTERVAL: 60s
-  BILLING_RETRY_BUFFER_SIZE: "1000"
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.monitoring:4317
   OTEL_RESOURCE_ATTRIBUTES: deployment.environment=production
 ---

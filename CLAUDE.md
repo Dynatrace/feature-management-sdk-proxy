@@ -119,6 +119,18 @@ These are load-bearing constraints — do not break them without an explicit des
 - Every dropped record (billing buffer overflow, cache miss during outage, malformed request) must produce a structured log entry with enough context to diagnose the cause.
 - Full metrics reference (names, labels, instrument types): [`docs/telemetry.md`](docs/telemetry.md).
 
+### Startup Sequence
+
+Four paths: `cold` (no backend), `snapshot` (fresh), `snapshot_stale` (age > `SNAPSHOT_MAX_AGE`), `empty_persistence` (backend + no snapshots → **Exit 1**). Defined in `internal/snapshot`. See [`docs/snapshot.md`](docs/snapshot.md).
+
+### Lifecycle Event Invalidation
+
+`tokenRotated`, `stageDeleted`, and `projectDeleted` → evict cache entry + close upstream SSE connection for the affected key. See [`docs/monitoring.md`](docs/monitoring.md).
+
+### Health Probes
+
+`/live` always 200. `/ready` and `/health` return 200 after snapshot load completes (or immediately if no persistence), 503 otherwise. Never route traffic before `/ready` returns 200. See [`docs/monitoring.md`](docs/monitoring.md).
+
 ### Shutdown
 
-- On SIGTERM, `run()` always exits 0 — signal-driven shutdown is not an error. See [`docs/shutdown.md`](docs/shutdown.md) for the full shutdown sequence and rationale.
+On SIGTERM, `run()` always exits 0 — signal-driven shutdown is not an error. See [`docs/shutdown.md`](docs/shutdown.md).

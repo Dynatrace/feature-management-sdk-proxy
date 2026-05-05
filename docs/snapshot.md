@@ -1,0 +1,74 @@
+# Snapshot Persistence
+
+Without persistence, every proxy restart starts cold: the first request for each SDK key triggers a CDN fetch before the cache is warm. With persistence enabled, the proxy saves its cache to durable storage and loads it back on startup — so it can serve requests immediately, even before the upstream CDN is reachable.
+
+## Why Use It
+
+- **Faster restarts.** Cached configs are available the moment the process starts.
+- **CDN outage resilience.** If the upstream CDN is unreachable at startup, the proxy can still serve traffic from the last saved state.
+- **Rolling deploys.** New replicas come up ready to serve without a cold-start CDN burst.
+
+## Backends
+
+Two backends are available, selected by `SNAPSHOT_BACKEND`:
+
+| Backend | Use case |
+|---|---|
+| `local` | Single-node deployments or development. Snapshots are written to a local directory on disk. |
+| `s3` | Multi-replica or Kubernetes deployments. Snapshots are stored in an S3-compatible bucket shared across replicas. |
+
+When `SNAPSHOT_BACKEND` is unset, persistence is disabled and the proxy always starts cold.
+
+## Startup Behavior
+
+At startup, the proxy classifies itself into one of four paths. The `proxy.startup.path` metric records which path each instance took.
+
+| Path | Condition | Behavior |
+|------|-----------|----------|
+| `cold` | No backend configured | Starts with an empty cache; fetches from CDN on first request per key |
+| `snapshot` | Backend configured, fresh snapshots present | Loads snapshots into cache; serves immediately without CDN fetches |
+| `snapshot_stale` | Backend configured, snapshots older than `SNAPSHOT_MAX_AGE` | Loads stale snapshots and serves them; schedules background refresh |
+| `empty_persistence` | Backend configured, no snapshots found | Exits immediately. The process will not start serving with an empty store — use `cold` mode (no backend) if intentional. |
+
+> ⚠️ The `empty_persistence` path exits with code 1. This is a safety guard: an empty snapshot store most likely indicates a misconfiguration or a data loss event, not a clean first-run.
+
+For a clean first run with persistence, start with no backend configured (`cold`), let the cache warm, then enable persistence on the next deploy.
+
+## Configuration
+
+See [configuration.md](configuration.md) for the full variable reference. Common setup examples:
+
+**Local backend (single node):**
+```bash
+SNAPSHOT_BACKEND=local
+SNAPSHOT_LOCAL_DIR=/var/lib/sdk-proxy/snapshots
+```
+
+**S3 backend (multi-replica):**
+```bash
+SNAPSHOT_BACKEND=s3
+SNAPSHOT_S3_BUCKET=my-proxy-snapshots
+SNAPSHOT_S3_REGION=us-east-1
+SNAPSHOT_S3_PREFIX=prod/
+```
+
+**Staleness threshold:**
+```bash
+SNAPSHOT_MAX_AGE=24h   # snapshots older than this are considered stale at startup
+```
+
+## Write Behavior
+
+Snapshots are written asynchronously after each cache update. A snapshot write failure is logged and counted (`proxy.snapshot.writes.total{result="failure"}`) but never fails an SDK request or delays the response.
+
+If the write queue fills faster than the backend can drain it, excess writes are dropped and counted by `proxy.snapshot.write_queue.dropped_total`. Under normal load this counter should be zero.
+
+## Multi-Replica Deployments
+
+When multiple replicas share the same S3 backend:
+
+- Each replica writes independently. Writes are not coordinated — the last write for a key wins.
+- Reads at startup are independent. Each replica loads the full set of stored snapshots.
+- There is no fencing or locking. A snapshot written by a replica running an older version may briefly coexist with a newer version's entry. The snapshot envelope format is versioned; unknown versions are skipped at load time with a `skipped_unknown_version` result on `proxy.snapshot.load.total`.
+
+During a rolling deploy, replicas on different versions may read each other's snapshots. Stale but valid snapshots are loaded and served; the background TTL refresh will replace them within the cache TTL window.

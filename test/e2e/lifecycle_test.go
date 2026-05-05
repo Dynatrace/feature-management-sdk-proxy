@@ -1,5 +1,7 @@
 //go:build integration
 
+// docs: docs/monitoring.md — Lifecycle Events
+
 package e2e
 
 import (

@@ -1,5 +1,7 @@
 //go:build integration
 
+// docs: docs/monitoring.md — Shutdown; docs/shutdown.md
+
 package e2e
 
 import (
