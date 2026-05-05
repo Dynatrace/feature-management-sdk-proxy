@@ -30,6 +30,12 @@ type Config struct {
 	// Range 1–100000, default 1000.
 	BillingRetryBufferSize int
 
+	// LifecycleKeysCap is the maximum combined number of sdkKeyHashes + sdkKeys
+	// entries accepted in a single lifecycle SSE event. Events exceeding this cap
+	// are rejected as malformed before any SHA-256 work is performed (CPU-amplification DoS guard).
+	// Range 1–100000, default 10000. Env: LIFECYCLE_KEYS_CAP.
+	LifecycleKeysCap int
+
 	// Snapshot persistence (optional). When SnapshotBackend is "", persistence
 	// is disabled and all other Snapshot* fields are ignored.
 	//
@@ -68,6 +74,7 @@ func FromEnv() (Config, error) {
 		ShutdownTimeout:        30 * time.Second,
 		BillingFlushInterval:   60 * time.Second,
 		BillingRetryBufferSize: 1000,
+		LifecycleKeysCap:       10000,
 		SnapshotWriteQueueSize: 256,
 		SnapshotMaxAge:         24 * time.Hour,
 	}
@@ -121,6 +128,14 @@ func FromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("invalid BILLING_RETRY_BUFFER_SIZE %q: must be an integer between 1 and 100000", v)
 		}
 		cfg.BillingRetryBufferSize = n
+	}
+
+	if v := os.Getenv("LIFECYCLE_KEYS_CAP"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 100_000 {
+			return Config{}, fmt.Errorf("invalid LIFECYCLE_KEYS_CAP %q: must be an integer between 1 and 100000", v)
+		}
+		cfg.LifecycleKeysCap = n
 	}
 
 	if v := os.Getenv("PROXY_INSTANCE_ID"); v != "" {

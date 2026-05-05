@@ -1,6 +1,8 @@
 package sse
 
 import (
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 	"testing"
@@ -31,6 +33,7 @@ func TestLifecycleHandler_KnownEventType_CallsInvalidators(t *testing.T) {
 		invalidators: []Invalidator{inv},
 		inst:         newTestInstruments(t),
 		logger:       slog.New(slog.DiscardHandler),
+		keysCap:      defaultLifecycleKeysCap,
 	}
 
 	for _, evtType := range []string{EventTypeTokenRotated, EventTypeStageDeleted, EventTypeProjectDeleted} {
@@ -59,6 +62,7 @@ func TestLifecycleHandler_UnknownEventType_ReturnsFalse(t *testing.T) {
 		invalidators: []Invalidator{inv},
 		inst:         newTestInstruments(t),
 		logger:       slog.New(slog.DiscardHandler),
+		keysCap:      defaultLifecycleKeysCap,
 	}
 
 	evt := Event{EventType: "refetchEvaluation", Data: []byte(`{}`)}
@@ -76,6 +80,7 @@ func TestLifecycleHandler_MalformedJSON_ReturnsTrue_NoInvalidation(t *testing.T)
 		invalidators: []Invalidator{inv},
 		inst:         newTestInstruments(t),
 		logger:       slog.New(slog.DiscardHandler),
+		keysCap:      defaultLifecycleKeysCap,
 	}
 
 	evt := Event{EventType: EventTypeTokenRotated, Data: []byte(`not json`)}
@@ -93,6 +98,7 @@ func TestLifecycleHandler_EmptyData_ReturnsTrue_NoInvalidation(t *testing.T) {
 		invalidators: []Invalidator{inv},
 		inst:         newTestInstruments(t),
 		logger:       slog.New(slog.DiscardHandler),
+		keysCap:      defaultLifecycleKeysCap,
 	}
 
 	evt := Event{EventType: EventTypeStageDeleted, Data: nil}
@@ -110,6 +116,7 @@ func TestLifecycleHandler_SDKKeys_AreHashed(t *testing.T) {
 		invalidators: []Invalidator{inv},
 		inst:         newTestInstruments(t),
 		logger:       slog.New(slog.DiscardHandler),
+		keysCap:      defaultLifecycleKeysCap,
 	}
 
 	evt := Event{
@@ -135,6 +142,7 @@ func TestLifecycleHandler_MultipleKeys_AllInvalidated(t *testing.T) {
 		invalidators: []Invalidator{inv},
 		inst:         newTestInstruments(t),
 		logger:       slog.New(slog.DiscardHandler),
+		keysCap:      defaultLifecycleKeysCap,
 	}
 
 	evt := Event{
@@ -156,6 +164,7 @@ func TestLifecycleHandler_InvalidHashFormat_MalformedResult(t *testing.T) {
 		invalidators: []Invalidator{inv},
 		inst:         newTestInstruments(t),
 		logger:       slog.New(slog.DiscardHandler),
+		keysCap:      defaultLifecycleKeysCap,
 	}
 
 	// Hash contains uppercase — should be rejected as malformed.
@@ -173,7 +182,7 @@ func TestLifecycleHandler_InvalidHashFormat_MalformedResult(t *testing.T) {
 
 func TestLifecycleHandler_NilInvalidatorsFiltered(t *testing.T) {
 	inv := &mockInvalidator{}
-	h := NewLifecycleHandler(newTestInstruments(t), slog.New(slog.DiscardHandler),
+	h := NewLifecycleHandler(newTestInstruments(t), slog.New(slog.DiscardHandler), defaultLifecycleKeysCap,
 		inv,
 		nil, // nil should be silently ignored
 	)
@@ -185,6 +194,96 @@ func TestLifecycleHandler_NilInvalidatorsFiltered(t *testing.T) {
 	h.HandleEvent(evt)
 	if len(inv.called()) != 1 {
 		t.Errorf("expected 1 invalidation, got %v", inv.called())
+	}
+}
+
+// makeLifecycleData builds lifecycle event JSON with numHashes sdkKeyHashes
+// entries (valid 16-char hex) and numKeys sdkKeys entries.
+func makeLifecycleData(t *testing.T, numHashes, numKeys int) []byte {
+	t.Helper()
+	type payload struct {
+		SDKKeyHashes []string `json:"sdkKeyHashes,omitempty"`
+		SDKKeys      []string `json:"sdkKeys,omitempty"`
+	}
+	p := payload{}
+	for i := range numHashes {
+		p.SDKKeyHashes = append(p.SDKKeyHashes, fmt.Sprintf("%016x", i))
+	}
+	for i := range numKeys {
+		p.SDKKeys = append(p.SDKKeys, fmt.Sprintf("sdk-key-%d", i))
+	}
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("makeLifecycleData: marshal: %v", err)
+	}
+	return data
+}
+
+func TestLifecycleHandler_KeyArrayCap(t *testing.T) {
+	const testCap = 5 // small cap keeps the test fast regardless of defaultLifecycleKeysCap changes
+
+	tests := []struct {
+		name       string
+		numHashes  int
+		numKeys    int
+		wantOK     bool // true = event consumed without rejection
+		wantCalled bool // true = invalidators should have been called
+	}{
+		{
+			name:       "exactly at cap is accepted",
+			numHashes:  testCap,
+			numKeys:    0,
+			wantOK:     true,
+			wantCalled: true,
+		},
+		{
+			name:       "one over cap is rejected",
+			numHashes:  testCap + 1,
+			numKeys:    0,
+			wantOK:     true, // HandleEvent returns true (consumed) even for malformed
+			wantCalled: false,
+		},
+		{
+			name:       "combined total over cap is rejected",
+			numHashes:  testCap/2 + 1,
+			numKeys:    testCap/2 + 1,
+			wantOK:     true,
+			wantCalled: false,
+		},
+		{
+			name:       "sdkKeys only over cap is rejected",
+			numHashes:  0,
+			numKeys:    testCap + 1,
+			wantOK:     true,
+			wantCalled: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			inv := &mockInvalidator{}
+			h := &LifecycleHandler{
+				invalidators: []Invalidator{inv},
+				inst:         newTestInstruments(t),
+				logger:       slog.New(slog.DiscardHandler),
+				keysCap:      testCap,
+			}
+			evt := Event{
+				EventType: EventTypeTokenRotated,
+				Data:      makeLifecycleData(t, tc.numHashes, tc.numKeys),
+			}
+			got := h.HandleEvent(evt)
+			if got != tc.wantOK {
+				t.Errorf("HandleEvent returned %v, want %v", got, tc.wantOK)
+			}
+			calls := inv.called()
+			if tc.wantCalled && len(calls) == 0 {
+				t.Error("expected invalidator to be called, was not")
+			}
+			if !tc.wantCalled && len(calls) != 0 {
+				t.Errorf("expected no invalidator calls, got %d", len(calls))
+			}
+		})
 	}
 }
 

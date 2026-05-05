@@ -91,6 +91,20 @@ env:
 
 ---
 
+### `LIFECYCLE_KEYS_CAP`
+
+**Optional.** Default: `10000`. Range: 1–100000.
+
+Maximum combined number of `sdkKeyHashes` + `sdkKeys` entries accepted in a single lifecycle SSE event (`tokenRotated`, `stageDeleted`, `projectDeleted`). Events exceeding this cap are rejected before any SHA-256 hashing work is performed and counted under `proxy.lifecycle.events_total{result="malformed"}`.
+
+The default of 10,000 is well above any realistic rotation or deletion batch. Lower this value in environments where the upstream is untrusted or resource-constrained; raise it only if legitimate lifecycle events routinely exceed the cap.
+
+```bash
+LIFECYCLE_KEYS_CAP=10000
+```
+
+---
+
 ## Snapshot Persistence Variables
 
 Snapshot persistence is **optional**. When disabled (the default), the proxy starts cold on every restart. When enabled, cache entries are written asynchronously to the configured backend and loaded back on startup to reduce cold-start latency.

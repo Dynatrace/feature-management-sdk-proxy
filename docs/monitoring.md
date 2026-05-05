@@ -72,12 +72,14 @@ The upstream SSE service emits lifecycle events when SDK keys are rotated or the
 
 After invalidation, the next SDK request for that key triggers a fresh CDN fetch. If the key was rotated, the SDK must be reconfigured with the new key — the proxy has no knowledge of the new key until an SDK instance requests it.
 
+**Key array cap:** Lifecycle events with more than `LIFECYCLE_KEYS_CAP` combined `sdkKeyHashes` + `sdkKeys` entries (default 10,000) are rejected as malformed (`result="malformed"`) before any hashing work is performed. This prevents a compromised upstream from triggering unbounded SHA-256 work on the SSE receive goroutine. See [`LIFECYCLE_KEYS_CAP`](configuration.md#lifecycle_keys_cap) in the configuration reference.
+
 **What to watch:**
 
 | Signal | Healthy | Investigate if |
 |--------|---------|----------------|
 | `proxy.lifecycle.events_total{result="handled"}` | Matches expected rotation/deletion activity | Low compared to known rotation events — lifecycle channel may be disconnected |
-| `proxy.lifecycle.events_total{result="malformed"}` | Zero | Non-zero — upstream is sending unrecognized events |
+| `proxy.lifecycle.events_total{result="malformed"}` | Zero | Non-zero — upstream is sending unrecognized or oversized events (see cap description above) |
 | `proxy.lifecycle.invalidated_keys_total` | Proportional to events handled | Zero when events are received — invalidation may be silently failing |
 
 ---
