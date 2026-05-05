@@ -112,7 +112,7 @@ func run() error {
 	// Classify the startup path and emit the metric.
 	// oldest is the zero time when snapshotLoaded==0; Classify guards on loaded==0 before using it.
 	oldest, _ := snapshot.OldestCapturedAt(flagCache)
-	switch snapshot.Classify(cfg.SnapshotBackend != "", snapshotLoaded, oldest, time.Now(), cfg.SnapshotMaxAge) {
+	switch snapshot.Classify(cfg.SnapshotBackend != "", snapshotLoaded, snapshotLoadErr != nil, oldest, time.Now(), cfg.SnapshotMaxAge) {
 	case snapshot.CaseColdNoPersistence:
 		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", "cold")))
 		logger.Info("startup: no persistence configured, starting cold")
@@ -124,12 +124,12 @@ func run() error {
 		logger.Warn("startup: serving stale snapshot — oldest entry meets or exceeds SNAPSHOT_MAX_AGE",
 			slog.Duration("age", time.Since(oldest)),
 			slog.Duration("max_age", cfg.SnapshotMaxAge))
-	case snapshot.CaseEmptyPersistence:
-		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", "empty_persistence")))
-		if snapshotLoadErr != nil {
-			return fmt.Errorf("startup: snapshot backend unreachable and no cached data to serve: %w", snapshotLoadErr)
-		}
-		return fmt.Errorf("startup: persistence configured but snapshot store is empty — proxy has no data to serve")
+	case snapshot.CaseEmptyPersistenceCold:
+		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", "empty_persistence_cold")))
+		logger.Info("startup: persistence configured but store is empty — starting cold; snapshots will be written after first upstream fetch")
+	case snapshot.CaseBackendUnreachable:
+		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", "backend_unreachable")))
+		return fmt.Errorf("startup: snapshot backend unreachable and no cached data to serve: %w", snapshotLoadErr)
 	}
 	snapshotReady = true
 

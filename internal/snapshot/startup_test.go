@@ -20,6 +20,7 @@ func TestClassify(t *testing.T) {
 		name              string
 		persistConfigured bool
 		loaded            int
+		listErrored       bool
 		oldest            time.Time
 		want              StartupCase
 	}{
@@ -38,11 +39,20 @@ func TestClassify(t *testing.T) {
 			want:              CaseColdNoPersistence,
 		},
 		{
-			name:              "persistence + 0 loaded → empty persistence",
+			name:              "persistence + 0 loaded + reachable store → cold start",
 			persistConfigured: true,
 			loaded:            0,
+			listErrored:       false,
 			oldest:            time.Time{},
-			want:              CaseEmptyPersistence,
+			want:              CaseEmptyPersistenceCold,
+		},
+		{
+			name:              "persistence + 0 loaded + backend unreachable → fatal",
+			persistConfigured: true,
+			loaded:            0,
+			listErrored:       true,
+			oldest:            time.Time{},
+			want:              CaseBackendUnreachable,
 		},
 		{
 			name:              "persistence + loaded + fresh snapshot",
@@ -69,7 +79,7 @@ func TestClassify(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Classify(tt.persistConfigured, tt.loaded, tt.oldest, now, maxAge)
+			got := Classify(tt.persistConfigured, tt.loaded, tt.listErrored, tt.oldest, now, maxAge)
 			if got != tt.want {
 				t.Errorf("Classify() = %v, want %v", got, tt.want)
 			}

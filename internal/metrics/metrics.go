@@ -77,10 +77,11 @@ type Instruments struct {
 	BillingFlushLag metric.Float64Histogram
 
 	// StartupPath counts proxy startups labeled by path
-	// (cold/snapshot/snapshot_stale/empty_persistence).
+	// (cold/snapshot/snapshot_stale/empty_persistence_cold/backend_unreachable).
 	// cold: no persistence configured. snapshot: fresh snapshots loaded.
 	// snapshot_stale: snapshots loaded but oldest entry meets or exceeds SNAPSHOT_MAX_AGE.
-	// empty_persistence: persistence configured but no snapshots loaded — process exits after emit.
+	// empty_persistence_cold: backend reachable but store empty — proxy starts cold.
+	// backend_unreachable: backend unreachable — process exits after emit.
 	// Each process instance increments exactly once at startup; useful for fleet-wide aggregation.
 	StartupPath metric.Int64Counter
 
@@ -198,7 +199,7 @@ func Register(meter metric.Meter) (*Instruments, error) {
 	}
 
 	startupPath, err := meter.Int64Counter(StartupPath,
-		metric.WithDescription("Proxy startup count labeled by path (cold/snapshot/snapshot_stale/empty_persistence)"),
+		metric.WithDescription("Proxy startup count labeled by path (cold/snapshot/snapshot_stale/empty_persistence_cold/backend_unreachable)"),
 		metric.WithUnit("{startup}"),
 	)
 	if err != nil {

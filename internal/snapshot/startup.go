@@ -19,22 +19,32 @@ const (
 	// Proxy serves from cache with a loud warning and metric.
 	CaseSnapshotStale
 
-	// CaseEmptyPersistence is the startup case when persistence is configured
-	// but no snapshot entries were loaded. Proxy has no data source — it must
-	// exit non-zero so the orchestrator restarts and surfaces the failure.
-	CaseEmptyPersistence
+	// CaseEmptyPersistenceCold is the startup case when persistence is configured,
+	// the backend is reachable, but the store is empty. Proxy starts cold and warms
+	// its cache from upstream — valid on first deploy or after a store wipe.
+	CaseEmptyPersistenceCold
+
+	// CaseBackendUnreachable is the startup case when persistence is configured
+	// but the backend could not be contacted. Proxy exits non-zero so the
+	// orchestrator surfaces the failure.
+	CaseBackendUnreachable
 )
 
 // Classify maps startup state to a StartupCase. persistConfigured reports
 // whether a snapshot backend is configured; loaded is the count returned by
-// LoadAll; oldest is the minimum FetchedAt across loaded entries (ignored when
-// loaded==0); now and maxAge define the freshness boundary.
-func Classify(persistConfigured bool, loaded int, oldest, now time.Time, maxAge time.Duration) StartupCase {
+// LoadAll; listErrored reports whether the backend List call itself failed
+// (distinguishes an unreachable backend from a reachable-but-empty store);
+// oldest is the minimum FetchedAt across loaded entries (ignored when loaded==0);
+// now and maxAge define the freshness boundary.
+func Classify(persistConfigured bool, loaded int, listErrored bool, oldest, now time.Time, maxAge time.Duration) StartupCase {
 	if !persistConfigured {
 		return CaseColdNoPersistence
 	}
 	if loaded == 0 {
-		return CaseEmptyPersistence
+		if listErrored {
+			return CaseBackendUnreachable
+		}
+		return CaseEmptyPersistenceCold
 	}
 	if now.Sub(oldest) < maxAge {
 		return CaseSnapshotFresh

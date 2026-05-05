@@ -42,7 +42,7 @@ The proxy maintains exactly one upstream SSE connection per SDK key, regardless 
 
 ## Startup
 
-The proxy classifies each startup into one of four paths based on persistence configuration and snapshot state. See [snapshot.md](snapshot.md) for details on each path.
+The proxy classifies each startup into one of five paths based on persistence configuration and snapshot state. See [snapshot.md](snapshot.md) for details on each path.
 
 **What to watch:**
 
@@ -51,7 +51,8 @@ The proxy classifies each startup into one of four paths based on persistence co
 | `proxy.startup.path{path="cold"}` | Expected when no persistence is configured | Unexpected cold starts in a fleet using persistence — check backend connectivity |
 | `proxy.startup.path{path="snapshot"}` | Expected in a steady-state fleet with persistence | Absent when persistence is configured — may indicate snapshot write failures |
 | `proxy.startup.path{path="snapshot_stale"}` | Occasional during long outages | Frequent stale starts suggest `SNAPSHOT_MAX_AGE` may be too short or writes are failing |
-| `proxy.startup.path{path="empty_persistence"}` | Should never occur in production | Persistence is configured but no snapshots exist — check backend and storage |
+| `proxy.startup.path{path="empty_persistence_cold"}` | Expected on first deploy or after a store wipe when upstream is reachable | Recurring in a steady-state fleet — snapshots may not be persisting correctly |
+| `proxy.startup.path{path="backend_unreachable"}` | Should never occur in production | Backend is unreachable at startup — check connectivity and credentials |
 | `proxy.snapshot.load.total{result="loaded"}` | Increases proportionally to active SDK keys | Unexpectedly low — snapshot writes may be failing |
 | `proxy.snapshot.load.total{result!="loaded"}` | Near zero | `skipped_corrupt` or `backend_error` results indicate storage issues |
 

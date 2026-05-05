@@ -21,18 +21,17 @@ When `SNAPSHOT_BACKEND` is unset, persistence is disabled and the proxy always s
 
 ## Startup Behavior
 
-At startup, the proxy classifies itself into one of four paths. The `proxy.startup.path` metric records which path each instance took.
+At startup, the proxy classifies itself into one of five paths. The `proxy.startup.path` metric records which path each instance took.
 
 | Path | Condition | Behavior |
 |------|-----------|----------|
 | `cold` | No backend configured | Starts with an empty cache; fetches from CDN on first request per key |
 | `snapshot` | Backend configured, fresh snapshots present | Loads snapshots into cache; serves immediately without CDN fetches |
 | `snapshot_stale` | Backend configured, snapshots older than `SNAPSHOT_MAX_AGE` | Loads stale snapshots and serves them; schedules background refresh |
-| `empty_persistence` | Backend configured, no snapshots found | Exits immediately. The process will not start serving with an empty store — use `cold` mode (no backend) if intentional. |
+| `empty_persistence_cold` | Backend configured and reachable, store is empty | Starts cold; warms cache from upstream on first request per key; snapshots are written normally after each fetch |
+| `backend_unreachable` | Backend configured but unreachable | Exits with code 1. The backend must be reachable before the proxy can start — check connectivity and credentials. |
 
-> ⚠️ The `empty_persistence` path exits with code 1. This is a safety guard: an empty snapshot store most likely indicates a misconfiguration or a data loss event, not a clean first-run.
-
-For a clean first run with persistence, start with no backend configured (`cold`), let the cache warm, then enable persistence on the next deploy.
+> ⚠️ The `backend_unreachable` path exits with code 1 when the backend itself cannot be reached. An empty but reachable store is now handled gracefully via `empty_persistence_cold`.
 
 ## Configuration
 

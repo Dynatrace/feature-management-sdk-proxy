@@ -74,7 +74,7 @@ type Harness struct {
 }
 
 // New creates and starts a Harness. Returns an error only on startup failure
-// (e.g. CaseEmptyPersistence: snapshot backend configured but store is empty).
+// (e.g. CaseBackendUnreachable: persistence configured but backend unreachable).
 // Use MustNew for tests that don't test startup failure paths.
 // t.Cleanup is registered to call Close on test completion.
 func New(t *testing.T, opts Options) (*Harness, error) {
@@ -117,17 +117,14 @@ func New(t *testing.T, opts Options) (*Harness, error) {
 		snapshotWriter = writer
 
 		oldest, _ := snapshot.OldestCapturedAt(flagCache)
-		switch snapshot.Classify(true, loaded, oldest, time.Now(), maxAge) {
+		switch snapshot.Classify(true, loaded, loadErr != nil, oldest, time.Now(), maxAge) {
 		case snapshot.CaseColdNoPersistence:
 			// unreachable (persistConfigured=true)
-		case snapshot.CaseSnapshotFresh, snapshot.CaseSnapshotStale:
-			// ok — serve from cache
-		case snapshot.CaseEmptyPersistence:
+		case snapshot.CaseSnapshotFresh, snapshot.CaseSnapshotStale, snapshot.CaseEmptyPersistenceCold:
+			// ok — serve from cache or start cold
+		case snapshot.CaseBackendUnreachable:
 			cancel()
-			if loadErr != nil {
-				return nil, fmt.Errorf("startup: snapshot backend unreachable: %w", loadErr)
-			}
-			return nil, fmt.Errorf("startup: persistence configured but snapshot store is empty — proxy has no data to serve")
+			return nil, fmt.Errorf("startup: snapshot backend unreachable: %w", loadErr)
 		}
 	}
 

@@ -81,34 +81,36 @@ func TestStartup_SnapshotStale(t *testing.T) {
 	drainBody(t, resp)
 }
 
-// TestStartup_EmptyPersistence verifies that when a snapshot backend is
-// configured but the store is empty, New returns an error (proxy cannot serve).
-func TestStartup_EmptyPersistence(t *testing.T) {
+// TestStartup_EmptyPersistenceCold verifies that when a snapshot backend is
+// configured but the store is empty (and reachable), the proxy starts cold and
+// serves from upstream on first request.
+func TestStartup_EmptyPersistenceCold(t *testing.T) {
 	dir := t.TempDir()
 
-	// Empty dir — no snapshot files written.
-	_, err := New(t, Options{
+	// Empty dir — no snapshot files written. Proxy should start cold.
+	h := MustNew(t, Options{
 		SnapshotDir:    dir,
 		SnapshotMaxAge: 24 * time.Hour,
 	})
-	if err == nil {
-		t.Fatal("New should return an error for CaseEmptyPersistence; got nil")
+
+	resp := h.GetConfig(t, TestSDKKey)
+	assertStatus(t, resp, http.StatusOK)
+	drainBody(t, resp)
+
+	if got := h.CDN.Calls(); got != 1 {
+		t.Errorf("CDN calls = %d, want 1 (empty store must fetch upstream on cold start)", got)
 	}
-	t.Logf("got expected startup error: %v", err)
 }
 
 // TestStartup_SnapshotWrittenDuringOperation verifies that when persistence is
 // configured and snapshots already exist, a cold fetch for a NEW key writes a
-// new snapshot to the store. This exercises the async snapshot write path
-// without hitting the CaseEmptyPersistence startup guard.
-//
-// Note: CaseEmptyPersistence prevents a proxy from starting when persistence is
-// configured but the store is empty. Pre-seeding the store (as done here with
-// writeTestSnapshot) is the intended first-deployment pattern.
+// new snapshot to the store. This exercises the async snapshot write path.
 func TestStartup_SnapshotWrittenDuringOperation(t *testing.T) {
 	dir := t.TempDir()
 
-	// Pre-seed the store so the harness can start (avoids CaseEmptyPersistence).
+	// Pre-seed the store so the proxy starts via CaseSnapshotFresh rather than
+	// CaseEmptyPersistenceCold — either path would work, but pre-seeding also
+	// verifies the snapshot load path.
 	writeTestSnapshot(t, dir, TestSDKKey, buildCDNPayload(h2sseURL), time.Now().Add(-1*time.Minute))
 
 	h := MustNew(t, Options{

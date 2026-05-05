@@ -28,7 +28,7 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable metric export. The exporter pushes e
 | `proxy.snapshot.writes.total` | Counter | `{write}` | `result`, `operation` | Snapshot write attempts. `result`: `success`, `failure`; `operation`: `put`, `delete` |
 | `proxy.snapshot.load.total` | Counter | `{object}` | `result` | Snapshot objects processed at startup. `result`: `loaded`, `skipped_unknown_version`, `skipped_corrupt`, `backend_error` |
 | `proxy.snapshot.write_queue.dropped_total` | Counter | `{write}` | — | Snapshot writes dropped due to write queue overflow |
-| `proxy.startup.path` | Counter | `{startup}` | `path` | Startup count by path. `path`: `cold`, `snapshot`, `snapshot_stale`, `empty_persistence` (see [snapshot.md](snapshot.md)) |
+| `proxy.startup.path` | Counter | `{startup}` | `path` | Startup count by path. `path`: `cold`, `snapshot`, `snapshot_stale`, `empty_persistence_cold`, `backend_unreachable` (see [snapshot.md](snapshot.md)) |
 | `proxy.lifecycle.events_total` | Counter | `{event}` | `event_type`, `result` | Lifecycle SSE events received. `result`: `handled`, `malformed` |
 | `proxy.lifecycle.invalidated_keys_total` | Counter | `{key}` | `event_type` | Keys invalidated by lifecycle events |
 
