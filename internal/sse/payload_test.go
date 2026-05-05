@@ -3,6 +3,8 @@ package sse
 import (
 	"bytes"
 	"testing"
+
+	"github.com/dynatrace/sdk-proxy/internal/cache"
 )
 
 func TestExtractSSEURL(t *testing.T) {
@@ -86,7 +88,7 @@ func TestExtractSSEURL(t *testing.T) {
 
 func TestRewriteSSEURL(t *testing.T) {
 	const upstream = "https://upstream.sse.example.com/stream?ch=abc"
-	const proxy = "http://proxy.example.com/sse?sdk_key=dt_server_us_abc123"
+	proxy := "http://proxy.example.com/sse?stream_id=" + cache.Key("dt_server_us_abc123")
 
 	cases := []struct {
 		name       string

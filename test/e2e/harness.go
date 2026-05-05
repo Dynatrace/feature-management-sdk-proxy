@@ -134,7 +134,7 @@ func New(t *testing.T, opts Options) (*Harness, error) {
 	if snapshotWriter != nil {
 		snapshotInvalidator = sse.InvalidatorFunc(snapshotWriter.OnInvalidated)
 	}
-	lifecycleHandler := sse.NewLifecycleHandler(inst, logger,
+	lifecycleHandler := sse.NewLifecycleHandler(inst, logger, 10000,
 		sse.InvalidatorFunc(flagCache.Delete),
 		sse.InvalidatorFunc(sseManager.Close),
 		snapshotInvalidator,
@@ -258,6 +258,11 @@ func (h *Harness) URL(path string) string {
 // ConfigPath returns the proxy config path for the given SDK key.
 func (h *Harness) ConfigPath(sdkKey string) string {
 	return configHandlerPath + sdkKey + ".json"
+}
+
+// SSEPath returns the proxy SSE path for the given SDK key using stream_id.
+func (h *Harness) SSEPath(sdkKey string) string {
+	return sse.HandlerPath + "?stream_id=" + cache.Key(sdkKey)
 }
 
 // GetConfig makes a GET request to the proxy's config endpoint for sdkKey.

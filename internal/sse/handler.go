@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -64,19 +63,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sdkKey := r.URL.Query().Get("sdk_key")
-	if sdkKey == "" {
-		http.Error(w, "missing sdk_key query parameter", http.StatusBadRequest)
+	streamID := r.URL.Query().Get("stream_id")
+	if streamID == "" {
+		http.Error(w, "missing stream_id query parameter", http.StatusBadRequest)
 		return
 	}
 
-	if _, ok := validateSDKKeyRegion(sdkKey); !ok {
-		h.logger.Warn("sse: unrecognized SDK key format", slog.String("key", cache.Key(sdkKey)))
-		http.Error(w, "unrecognized SDK key format: must be dt_server_{region}_{token}", http.StatusBadRequest)
+	if !isValidStreamID(streamID) {
+		h.logger.Warn("sse: invalid stream_id format",
+			slog.Int("len", len(streamID)),
+		)
+		http.Error(w, "invalid stream_id: must be 16 lowercase hex characters", http.StatusBadRequest)
 		return
 	}
 
-	keyHash := cache.Key(sdkKey)
+	keyHash := streamID
 
 	if _, ok := h.cache.Get(keyHash); !ok {
 		h.logger.Warn("sse: client connected before config cached; returning 412",
@@ -86,11 +87,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Count only accepted SSE subscription requests (after key and cache gate).
-	// Rejected requests (412 no config, invalid key format) are not counted —
+	// Count only accepted SSE subscription requests (after stream_id and cache gate).
+	// Rejected requests (412 no config, invalid stream_id) are not counted —
 	// they never establish a connection and consume no ongoing proxy resources.
 	if h.counter != nil {
-		h.counter.Increment(sdkKey)
+		h.counter.IncrementByHash(keyHash)
 	}
 
 	flusher, ok := w.(http.Flusher)
@@ -170,22 +171,16 @@ func writeSSEEvent(w http.ResponseWriter, evt Event) error {
 	return err
 }
 
-// validateSDKKeyRegion parses the region segment from an SDK key in the format
-// dt_server_{region}_{token}. Returns ("", false) for any other format.
-// Region is restricted to [a-z0-9-] to prevent SSRF via crafted CDN hostnames.
-//
-// This is a local copy of proxy.extractRegion. Both should be consolidated into
-// internal/sdkkey once this package is stable.
-func validateSDKKeyRegion(sdkKey string) (string, bool) {
-	parts := strings.SplitN(sdkKey, "_", 4)
-	if len(parts) != 4 || parts[0] != "dt" || parts[1] != "server" || parts[2] == "" || parts[3] == "" {
-		return "", false
+// isValidStreamID returns true if s is exactly 16 lowercase hex characters —
+// the format produced by cache.Key(sdkKey).
+func isValidStreamID(s string) bool {
+	if len(s) != 16 {
+		return false
 	}
-	region := parts[2]
-	for _, c := range region {
-		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
-			return "", false
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
 		}
 	}
-	return region, true
+	return true
 }

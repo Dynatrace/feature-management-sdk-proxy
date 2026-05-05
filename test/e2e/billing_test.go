@@ -86,7 +86,7 @@ func TestBilling_RejectedSSE_NotCounted(t *testing.T) {
 	h := MustNew(t, Options{BillingFlushInterval: 50 * time.Millisecond})
 
 	// SSE connect before config → 412; must not increment counter.
-	sseURL := h.URL("/sse?sdk_key=" + TestSDKKey)
+	sseURL := h.URL(h.SSEPath(TestSDKKey))
 	req, err := http.NewRequest(http.MethodGet, sseURL, nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
