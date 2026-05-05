@@ -4,12 +4,12 @@ The proxy maintains exactly one upstream SSE connection per SDK key and fans eve
 
 ## Client Endpoint: `GET /sse`
 
-SDK clients connect to `GET /sse?sdk_key={sdk_key}`. The SDK key is passed as a query parameter.
+SDK clients connect to `GET /sse?stream_id={stream_id}`. The `stream_id` is the SDK key hash — the same 16 lowercase hex characters produced by `SHA-256(sdk_key)[:8]` (i.e. `cache.Key(sdkKey)`). It is embedded in the flagd config's `eventStreamEndpoint` URL by the proxy rewrite step, so clients receive it automatically.
 
 **Prerequisites before a connection is accepted:**
 
-1. The SDK key must match the `dt_server_{region}_{token}` format. Invalid format returns 400.
-2. A flagd config entry for that SDK key must already be cached. If the config has not been fetched yet, the handler returns **412 Precondition Failed** with a message directing the client to fetch `/server/{sdk_key}.json` first.
+1. `stream_id` must be present and exactly 16 lowercase hex characters. Invalid format returns 400.
+2. A flagd config entry for that `stream_id` must already be cached. If the config has not been fetched yet, the handler returns **412 Precondition Failed** with a message directing the client to fetch `/server/{sdk_key}.json` first.
 
 Only connections that pass both gates are accepted and counted toward billing.
 
