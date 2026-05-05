@@ -50,9 +50,51 @@ func NewCounter() *Counter {
 }
 
 // Increment records one request for sdkKey. It is safe to call concurrently.
+// If an entry already exists with an empty rawKey (created by IncrementByHash),
+// Increment repairs it so the entry becomes eligible for billing flush.
 func (c *Counter) Increment(sdkKey string) {
 	keyHash := cache.Key(sdkKey)
 
+	c.mu.RLock()
+	e, ok := c.entries[keyHash]
+	rawKey := ""
+	if ok {
+		rawKey = e.rawKey
+	}
+	c.mu.RUnlock()
+
+	if ok {
+		if rawKey == "" {
+			// Repair rawKey under write lock (double-checked to handle concurrent repairs).
+			// Note: rawKey repair and count.Add are not atomic — Drain may observe the
+			// incremented count with an empty rawKey in the same cycle the repair executes.
+			// The entry will flush correctly on the following cycle.
+			c.mu.Lock()
+			if e.rawKey == "" {
+				e.rawKey = sdkKey
+			}
+			c.mu.Unlock()
+		}
+		e.count.Add(1)
+		return
+	}
+
+	c.mu.Lock()
+	if e, ok = c.entries[keyHash]; !ok {
+		e = &entry{rawKey: sdkKey}
+		c.entries[keyHash] = e
+	} else if e.rawKey == "" {
+		e.rawKey = sdkKey
+	}
+	c.mu.Unlock()
+	e.count.Add(1)
+}
+
+// IncrementByHash records one request for a key known only by its hash.
+// Used by the SSE handler, which receives stream_id (a key hash) rather than
+// the raw SDK key. Entries created this way have an empty rawKey and are
+// skipped at billing flush until a paired Increment(sdkKey) repairs the entry.
+func (c *Counter) IncrementByHash(keyHash string) {
 	c.mu.RLock()
 	e, ok := c.entries[keyHash]
 	c.mu.RUnlock()
@@ -64,7 +106,7 @@ func (c *Counter) Increment(sdkKey string) {
 
 	c.mu.Lock()
 	if e, ok = c.entries[keyHash]; !ok {
-		e = &entry{rawKey: sdkKey}
+		e = &entry{} // rawKey intentionally empty; repaired by Increment when HTTP path sees the key
 		c.entries[keyHash] = e
 	}
 	c.mu.Unlock()

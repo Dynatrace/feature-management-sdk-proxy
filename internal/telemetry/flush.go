@@ -124,6 +124,18 @@ func (f *Flusher) Shutdown(ctx context.Context) {
 }
 
 func (f *Flusher) dispatchSample(ctx context.Context, s Sample) {
+	// SSE-only entries (created by IncrementByHash) have no raw SDK key, which
+	// is required for billing flush authentication. Skip them until a paired
+	// HTTP request repairs the entry via Increment(sdkKey).
+	if s.SDKKey == "" {
+		f.logger.Warn("billing: dropping SSE-only sample (no SDK key available)",
+			slog.String("key_hash", s.KeyHash),
+			slog.Int64("count", s.Count),
+		)
+		f.inst.BillingFlushTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "missing_sdk_key")))
+		return
+	}
+
 	timeout := min(2*f.interval, 30*time.Second)
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

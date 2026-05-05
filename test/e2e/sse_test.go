@@ -5,7 +5,6 @@
 package e2e
 
 import (
-	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -28,7 +27,7 @@ func TestSSE_FanOut_OneUpstreamConnection(t *testing.T) {
 		"upstream SSE connection not established after config cached",
 	)
 
-	sseURL := h.URL(fmt.Sprintf("%s?sdk_key=%s", "/sse", TestSDKKey))
+	sseURL := h.URL(h.SSEPath(TestSDKKey))
 
 	// Connect 5 clients.
 	const nClients = 5
@@ -68,7 +67,7 @@ func TestSSE_EventDelivery(t *testing.T) {
 		"upstream SSE connection not established",
 	)
 
-	sseURL := h.URL(fmt.Sprintf("%s?sdk_key=%s", "/sse", TestSDKKey))
+	sseURL := h.URL(h.SSEPath(TestSDKKey))
 
 	ch1, cancel1 := connectSSE(t, sseURL)
 	ch2, cancel2 := connectSSE(t, sseURL)
@@ -90,7 +89,7 @@ func TestSSE_EventDelivery(t *testing.T) {
 func TestSSE_BeforeConfigCached_Returns412(t *testing.T) {
 	h := MustNew(t, Options{})
 
-	sseURL := h.URL(fmt.Sprintf("%s?sdk_key=%s", "/sse", TestSDKKey))
+	sseURL := h.URL(h.SSEPath(TestSDKKey))
 	req, err := http.NewRequest(http.MethodGet, sseURL, nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)

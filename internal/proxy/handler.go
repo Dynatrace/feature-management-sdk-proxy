@@ -132,7 +132,7 @@ func (h *Handler) serveFromCache(w http.ResponseWriter, r *http.Request, entry c
 	if r.Method == http.MethodHead {
 		return
 	}
-	payload, result := sse.RewriteSSEURL(entry.Payload, h.proxySSEURL(r, sdkKey))
+	payload, result := sse.RewriteSSEURL(entry.Payload, h.proxySSEURL(r, cache.Key(sdkKey)))
 	h.recordRewriteResult(result, cache.Key(sdkKey))
 	_, _ = w.Write(payload)
 }
@@ -341,19 +341,22 @@ func derivedScheme(r *http.Request) string {
 // config payload. The scheme and host are derived from the incoming request,
 // so no static PROXY_PUBLIC_URL configuration is required.
 //
+// keyHash is the SDK key hash (cache.Key(sdkKey)) — the raw SDK key must
+// never appear in the rewritten URL (logs, browser history, reverse proxies).
+//
 // r.Host is client-controlled, but the URL is returned only to the same client
 // that provided the header — there is no SSRF surface here. The host is
 // validated to reject values containing whitespace or control characters that
 // could malform the resulting URL string.
-func (h *Handler) proxySSEURL(r *http.Request, sdkKey string) string {
+func (h *Handler) proxySSEURL(r *http.Request, keyHash string) string {
 	host := r.Host
 	if strings.ContainsAny(host, " \t\r\n") {
 		h.logger.Warn("proxy: malformed Host header discarded in SSE URL rewrite",
-			slog.String("key", cache.Key(sdkKey)),
+			slog.String("key", keyHash),
 		)
 		host = "unknown"
 	}
-	return derivedScheme(r) + "://" + host + sse.HandlerPath + "?sdk_key=" + url.QueryEscape(sdkKey)
+	return derivedScheme(r) + "://" + host + sse.HandlerPath + "?stream_id=" + keyHash
 }
 
 // recordRewriteResult increments the ConfigSSERewriteTotal counter and emits

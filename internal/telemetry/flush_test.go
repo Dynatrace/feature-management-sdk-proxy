@@ -425,6 +425,28 @@ func TestFlusher_Shutdown_AfterRunExits(t *testing.T) {
 	f.Shutdown(ctx) // must not panic or deadlock
 }
 
+func TestFlusher_SkipsSampleWithEmptySDKKey(t *testing.T) {
+	// IncrementByHash creates entries with empty SDKKey. The flusher must skip
+	// them (can't authenticate billing request without the raw key) and record
+	// a missing_sdk_key metric instead of calling the reporter.
+	reporter := &spyReporter{}
+	spy := &spyRetryBuffer{}
+	counter := NewCounter()
+	counter.IncrementByHash("abcdef0123456789")
+
+	f := newFlusher(counter, reporter, spy, newTestInst(t))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	f.Shutdown(ctx)
+
+	if len(reporter.Calls()) != 0 {
+		t.Errorf("reporter must not be called for hash-only sample, got %d calls", len(reporter.Calls()))
+	}
+	if len(spy.History()) != 0 {
+		t.Errorf("hash-only sample must not be enqueued for retry, got %d entries", len(spy.History()))
+	}
+}
+
 func TestFlusher_CtxCancel_ExitsRun(t *testing.T) {
 	reporter := &spyReporter{}
 	f := newFlusher(NewCounter(), reporter, NewNoopRetryBuffer(), newTestInst(t))

@@ -554,8 +554,12 @@ func TestHandler_CacheHit_RewritesSSEURL(t *testing.T) {
 	if strings.Contains(body, "upstream.sse.example.com") {
 		t.Errorf("response still contains upstream SSE URL: %q", body)
 	}
-	if !strings.Contains(body, "proxy.example.com/sse?sdk_key=dt_server_us_abc123") {
-		t.Errorf("response missing proxy SSE URL, got: %q", body)
+	wantStreamID := cache.Key("dt_server_us_abc123")
+	if !strings.Contains(body, "proxy.example.com/sse?stream_id="+wantStreamID) {
+		t.Errorf("response missing proxy SSE URL with stream_id, got: %q", body)
+	}
+	if strings.Contains(body, "dt_server_us_abc123") {
+		t.Errorf("response contains raw SDK key in URL: %q", body)
 	}
 }
 
@@ -578,13 +582,17 @@ func TestHandler_CacheMiss_RewritesSSEURLInResponse_StoresRawInCache(t *testing.
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 
-	// Response served to SDK should have the proxy SSE URL.
+	// Response served to SDK should have the proxy SSE URL with stream_id.
 	body := rec.Body.String()
+	wantStreamID := cache.Key("dt_server_us_abc123")
 	if strings.Contains(body, "upstream.sse.example.com") {
 		t.Errorf("response still contains upstream SSE URL: %q", body)
 	}
-	if !strings.Contains(body, "proxy.example.com/sse?sdk_key=dt_server_us_abc123") {
-		t.Errorf("response missing proxy SSE URL, got: %q", body)
+	if !strings.Contains(body, "proxy.example.com/sse?stream_id="+wantStreamID) {
+		t.Errorf("response missing proxy SSE URL with stream_id, got: %q", body)
+	}
+	if strings.Contains(body, "dt_server_us_abc123") {
+		t.Errorf("response contains raw SDK key in URL: %q", body)
 	}
 
 	// Cache must store raw upstream bytes so the SSE manager can dial the real upstream.
@@ -728,21 +736,20 @@ func TestHandler_MalformedHostHeader_FallsBackToUnknown(t *testing.T) {
 	if strings.Contains(body, "\r\n") {
 		t.Errorf("malformed host header leaked into response body: %q", body)
 	}
-	if !strings.Contains(body, "unknown/sse") {
-		t.Errorf("expected fallback 'unknown' in rewritten URL, got: %q", body)
+	if !strings.Contains(body, "unknown/sse?stream_id=") {
+		t.Errorf("expected fallback 'unknown' with stream_id in rewritten URL, got: %q", body)
 	}
 }
 
-func TestHandler_Rewrite_SDKKeyQueryEscaped(t *testing.T) {
-	// SDK keys containing + or other special chars must be query-escaped in the SSE URL.
-	// Use a key whose token portion requires no escaping but verify the full URL form.
+func TestHandler_Rewrite_StreamIDFormat(t *testing.T) {
+	// The rewritten SSE URL must use stream_id=<hash> — never the raw SDK key.
+	// Verify this for a key with a hyphenated region (valid per SSRF guard).
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("upstream should not be called on cache hit")
 	}))
 	defer upstream.Close()
 
 	c := cache.New()
-	// Use a key with a region that contains a hyphen (valid per SSRF guard).
 	sdkKey := "dt_server_us-east_abc123"
 	key := cache.Key(sdkKey)
 	c.Set(key, cache.Entry{
@@ -761,9 +768,11 @@ func TestHandler_Rewrite_SDKKeyQueryEscaped(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
-	// sdk_key value must appear URL-encoded in the rewritten URL.
-	if !strings.Contains(body, "sdk_key=dt_server_us-east_abc123") {
-		t.Errorf("rewritten URL missing sdk_key, got: %q", body)
+	if !strings.Contains(body, "stream_id="+key) {
+		t.Errorf("rewritten URL missing stream_id hash, got: %q", body)
+	}
+	if strings.Contains(body, sdkKey) {
+		t.Errorf("rewritten URL contains raw SDK key %q: %q", sdkKey, body)
 	}
 }
 
@@ -789,8 +798,9 @@ func TestHandler_Rewrite_HTTPSSchemeFromXForwardedProto(t *testing.T) {
 	h.ServeHTTP(rec, req)
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "https://proxy.example.com/sse") {
-		t.Errorf("expected https scheme in rewritten URL, got: %q", body)
+	wantStreamID := cache.Key("dt_server_us_abc123")
+	if !strings.Contains(body, "https://proxy.example.com/sse?stream_id="+wantStreamID) {
+		t.Errorf("expected https URL with stream_id in rewritten URL, got: %q", body)
 	}
 }
 
