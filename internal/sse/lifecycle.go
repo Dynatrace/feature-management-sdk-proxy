@@ -21,6 +21,10 @@ const (
 	EventTypeProjectDeleted = "projectDeleted"
 )
 
+// defaultLifecycleKeysCap is the default value for LifecycleHandler.keysCap.
+// Configurable via LIFECYCLE_KEYS_CAP; see internal/config.
+const defaultLifecycleKeysCap = 10000
+
 // Invalidator is called for each key hash affected by a lifecycle event.
 type Invalidator interface {
 	Invalidate(keyHash string)
@@ -47,10 +51,13 @@ type LifecycleHandler struct {
 	invalidators []Invalidator
 	inst         *metrics.Instruments
 	logger       *slog.Logger
+	keysCap      int
 }
 
-// NewLifecycleHandler constructs a LifecycleHandler. Nil invalidators are filtered.
-func NewLifecycleHandler(inst *metrics.Instruments, logger *slog.Logger, invalidators ...Invalidator) *LifecycleHandler {
+// NewLifecycleHandler constructs a LifecycleHandler. keysCap is the maximum
+// combined number of sdkKeyHashes + sdkKeys entries accepted in a single event;
+// use config.LifecycleKeysCap (default 10000). Nil invalidators are filtered.
+func NewLifecycleHandler(inst *metrics.Instruments, logger *slog.Logger, keysCap int, invalidators ...Invalidator) *LifecycleHandler {
 	var filtered []Invalidator
 	for _, inv := range invalidators {
 		if inv != nil {
@@ -61,6 +68,7 @@ func NewLifecycleHandler(inst *metrics.Instruments, logger *slog.Logger, invalid
 		invalidators: filtered,
 		inst:         inst,
 		logger:       logger,
+		keysCap:      keysCap,
 	}
 }
 
@@ -129,6 +137,17 @@ func (h *LifecycleHandler) parseKeyHashes(evt Event) ([]string, bool) {
 	if len(d.SDKKeyHashes) == 0 && len(d.SDKKeys) == 0 {
 		h.logger.Warn("sse: lifecycle event data has no key identifiers",
 			slog.String("event_type", evt.EventType),
+		)
+		return nil, false
+	}
+
+	if total := len(d.SDKKeyHashes) + len(d.SDKKeys); total > h.keysCap {
+		h.logger.Warn("sse: lifecycle event exceeds key array cap, rejecting",
+			slog.String("event_type", evt.EventType),
+			slog.Int("key_hashes_len", len(d.SDKKeyHashes)),
+			slog.Int("keys_len", len(d.SDKKeys)),
+			slog.Int("total", total),
+			slog.Int("cap", h.keysCap),
 		)
 		return nil, false
 	}

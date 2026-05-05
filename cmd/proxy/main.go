@@ -151,7 +151,7 @@ func run() error {
 	if snapshotWriter != nil {
 		snapshotInvalidator = sse.InvalidatorFunc(snapshotWriter.OnInvalidated)
 	}
-	lifecycleHandler := sse.NewLifecycleHandler(inst, logger,
+	lifecycleHandler := sse.NewLifecycleHandler(inst, logger, cfg.LifecycleKeysCap,
 		sse.InvalidatorFunc(flagCache.Delete),
 		sse.InvalidatorFunc(sseManager.Close),
 		snapshotInvalidator,
