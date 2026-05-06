@@ -1,11 +1,13 @@
 ---
 name: next-task
-version: 1.1.0
+version: 1.2.0
 description: |
   Full-cycle implementation workflow for sdk-proxy. Discovers the next ready
-  issue via bd, runs deep Opus planning (/nt-plan), gates on approval,
-  implements on a feature branch, runs parallel Sonnet code review (/nt-review),
-  passes quality gates, commits, merges to main, and ships (/nt-ship).
+  issue via bd, classifies complexity, runs deep Opus planning (/nt-plan) for
+  architectural work or lightweight inline planning for docs/trivial changes,
+  gates on approval, implements on a feature branch, runs parallel Sonnet code
+  review (/nt-review) for non-trivial changes, passes quality gates (including
+  integration tests), commits, merges to main, and ships (/nt-ship).
   Each sub-skill can be invoked independently.
   Use when asked to "pick up the next task", "next task", "work on the backlog",
   "implement the next issue", or simply "let's get to work".
@@ -80,24 +82,71 @@ Store the selected issue as `ISSUE_ID` and `ISSUE_TITLE`.
 
 ---
 
-## Phase 2 — Deep Planning (Opus)
+## Phase 2 — Complexity Classification
 
-Read the full issue:
+**Before reading any sub-skill or spawning any agent**, classify the issue complexity using the details already in context from Phase 1.
+
+```
+LIGHTWEIGHT — skip nt-plan and nt-review entirely:
+  - bd issue type == "docs"
+  - OR title/description contains any of:
+    "update docs", "fix docs", "clarify", "typo", "update readme",
+    "documentation", "correct", "stale doc", "inaccurate"
+
+STANDARD — use nt-plan with model=sonnet:
+  - type is task or bug
+  - scope touches 1–2 known packages
+  - No new interfaces or abstraction layers mentioned
+
+ARCHITECTURAL — use nt-plan with model=opus:
+  - New interfaces or abstract types proposed
+  - 3+ packages touched or mentioned
+  - Cross-cutting concerns (cache + SSE + telemetry together)
+  - Anything that affects key design invariants
+  - Default for any ambiguous case
+```
+
+Store result as `COMPLEXITY_CLASS`.
+
+---
+
+## Phase 3 — Planning
+
+### If COMPLEXITY_CLASS == LIGHTWEIGHT
+
+Read only the specific files mentioned in the issue. Do NOT read `nt-plan/SKILL.md` or spawn a planning agent.
+
+Present a brief change summary:
+
+```
+Proposed changes:
+- <file>: <what will change and where>
+- <file>: <what will change and where>
+```
+
+Use `AskUserQuestion` (D3-LIGHT):
+- A) Proceed with these changes (recommended)
+- B) Abort
+
+If B: exit cleanly. Skip to end.
+
+### If COMPLEXITY_CLASS == STANDARD or ARCHITECTURAL
+
+Read the full issue and the sub-skill:
 
 ```bash
 bd show <ISSUE_ID>
 ```
 
-Read the sub-skill instructions:
-
 ```
 Read .claude/skills/nt-plan/SKILL.md
 ```
 
-Then spawn a **single Agent call** using those instructions as the system prompt:
+Spawn a **single Agent call** using those instructions as the system prompt:
 
 ```
-model: opus
+model: sonnet   ← for STANDARD
+model: opus     ← for ARCHITECTURAL
 description: Deep implementation planning for <ISSUE_TITLE>
 prompt:
   [Full contents of .claude/skills/nt-plan/SKILL.md]
@@ -106,6 +155,7 @@ prompt:
 
   ISSUE_ID: <ISSUE_ID>
   ISSUE_TITLE: <ISSUE_TITLE>
+  COMPLEXITY_CLASS: <COMPLEXITY_CLASS>
 
   Issue details:
   <full output of bd show <ISSUE_ID>>
@@ -113,13 +163,7 @@ prompt:
 
 The agent will explore the codebase, grep for reuse opportunities, check invariants, and return a structured implementation plan. The plan will include a "Conventional Commit" line with `<type>(<scope>): <description>` — store these values as `COMMIT_TYPE`, `COMMIT_SCOPE`, and `COMMIT_DESC`.
 
-Do NOT claim the issue yet — wait for plan approval.
-
----
-
-## Phase 3 — Plan Review Gate
-
-Render the plan returned by the planning agent in full.
+**Render the plan in full**, leading with the "⚠️ Early Risk Signals" section.
 
 Use `AskUserQuestion` (D3):
 
@@ -127,26 +171,35 @@ Use `AskUserQuestion` (D3):
 
 Options:
 - A) Approve — claim the issue and start implementing (recommended)
-- B) Revise — I have feedback; collect it inline, re-run Phase 2 with the feedback appended to the issue context, then re-present at D3
+- B) Revise — collect feedback, re-run Phase 3 with feedback appended, loop back to D3
 - C) Abort — exit without claiming or modifying anything
 
-**If B**: Collect the user's revision notes. Re-run the planning Agent with the original issue details plus:
+**If B**: Collect revision notes. Re-run the planning Agent with original details plus:
 ```
 REVISION FEEDBACK:
 <user's notes>
 ```
-Loop back to D3 until approved or aborted.
+Loop until approved or aborted.
 
-**If C**: Exit cleanly. No claim made, no files touched.
+**If C**: Exit cleanly.
+
+Do NOT claim the issue yet — wait for plan approval.
 
 ---
 
 ## Phase 4 — Implementation
 
-Immediately after approval, claim the issue and create the feature branch:
+Immediately after approval, claim the issue:
 
 ```bash
 bd update <ISSUE_ID> --claim
+```
+
+**For LIGHTWEIGHT tasks**: implement the changes described in the brief summary. No feature branch required for docs-only changes — commit directly on `main` unless the scope grows.
+
+**For STANDARD/ARCHITECTURAL tasks**: create the feature branch first:
+
+```bash
 git checkout -b <COMMIT_TYPE>/<COMMIT_SCOPE>-<short-description>
 ```
 
@@ -155,6 +208,7 @@ Derive the branch name from the plan's conventional commit: type and scope as-is
 Execute the approved plan step by step. Follow these rules:
 
 - Implement in this order: interfaces → implementation → tests
+- **Update every file listed in the plan's "Docs to Update" table** as part of this phase — docs updates go in the same commit as the code changes
 - After writing each new file, run a quick build sanity check:
   ```bash
   go build ./...
@@ -169,6 +223,10 @@ Execute the approved plan step by step. Follow these rules:
 ---
 
 ## Phase 5 — Code Review
+
+**Skip entirely for LIGHTWEIGHT tasks.**
+
+For STANDARD/ARCHITECTURAL tasks:
 
 Read the review sub-skill:
 
@@ -195,7 +253,7 @@ Read .claude/skills/nt-ship/SKILL.md
 ```
 
 Follow its instructions from top to bottom. It will:
-1. Run `make lint`, `make test`, `make vet` in parallel
+1. Run `make lint`, `make test`, `make vet`, `make test-int` in parallel
 2. Fix any failures
 3. Gate the commit on user approval (D-COMMIT)
 4. Close `<ISSUE_ID>` in beads
@@ -213,11 +271,12 @@ Print a clean summary:
 ```
 Session complete.
 
-  Issue:    <ISSUE_ID> — <ISSUE_TITLE> [CLOSED]
-  Commit:   <git log --oneline -1>
-  Branch:   merged into main, deleted
-  Gates:    lint ✓  test ✓  vet ✓
-  Review:   security ✓  DX ✓
+  Issue:      <ISSUE_ID> — <ISSUE_TITLE> [CLOSED]
+  Complexity: <COMPLEXITY_CLASS>
+  Commit:     <git log --oneline -1>
+  Branch:     merged into main, deleted  (or: committed on main for LIGHTWEIGHT)
+  Gates:      lint ✓  test ✓  vet ✓  test-int ✓
+  Review:     security ✓  DX ✓  (or: skipped — LIGHTWEIGHT)
 
 Run /next-task again to pick up the next issue.
 ```

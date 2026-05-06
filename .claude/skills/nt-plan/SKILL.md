@@ -1,6 +1,6 @@
 ---
 name: nt-plan
-version: 1.1.0
+version: 1.2.0
 description: |
   Deep codebase planning for sdk-proxy. Given a beads issue, systematically
   explores internal packages, finds existing patterns to reuse, and produces a
@@ -29,51 +29,50 @@ If invoked standalone (user typed `/nt-plan`), ask: "Which issue ID should I pla
 
 ## Exploration Sequence
 
-Read the following files in this order before designing anything:
+**Batch 1** — In a **single message**, run all three in parallel:
 
 ```bash
 cat CLAUDE.md
+```
+
+```bash
 cat Makefile
+```
+
+```bash
 cat cmd/proxy/main.go
 ```
 
-Then read all package doc files to understand the current state of each package:
+**Batch 2** — Scoped doc.go reads. Based on the packages the issue directly names or implies, issue a **single parallel message** reading only the relevant `doc.go` files. Do NOT read doc.go files for unrelated packages — the doc.go summaries are sufficient context for packages not being modified.
 
-```bash
-cat internal/cache/doc.go
-cat internal/config/doc.go
-cat internal/metrics/doc.go
-cat internal/proxy/doc.go
-cat internal/server/doc.go
-cat internal/snapshot/doc.go
-cat internal/sse/doc.go
-cat internal/telemetry/doc.go
-```
+For ARCHITECTURAL tasks (new abstractions, cross-cutting, 3+ packages): read all package doc.go files in one parallel message.
+For STANDARD tasks: read only the doc.go files for packages directly mentioned in the issue.
 
-Based on the issue scope, read the **full implementation files** only for the packages the issue directly touches. Do not read full files for unrelated packages — the doc.go summaries are sufficient for context.
-
-For every package you plan to modify, also read its test file to understand existing test patterns before designing new tests.
+**Batch 3** — For every package you plan to modify, read the full implementation file **and** its test file in a single parallel message. Do not read full files for unrelated packages.
 
 ---
 
 ## Grep for Reuse Before Designing
 
-Before proposing any new type, interface, or function, search the codebase for existing implementations:
+In a **single message**, run all grep commands in parallel before proposing any new type, interface, or function:
 
 ```bash
-# Find existing interfaces
 grep -rn "^type.*interface" internal/
+```
 
-# Find error wrapping patterns
+```bash
 grep -rn 'fmt.Errorf.*%w' internal/
+```
 
-# Find how metrics are emitted
+```bash
 grep -rn 'metrics\.' internal/
+```
 
-# Find logger usage patterns
+```bash
 grep -rn 'slog\.' internal/
+```
 
-# Find context propagation patterns
+```bash
 grep -rn 'ctx context.Context' internal/
 ```
 
@@ -106,12 +105,40 @@ Do not make large assumptions. A wrong assumption here is more expensive than th
 
 ---
 
+## Package → Docs Mapping
+
+When determining which docs files need updating, use this reference:
+
+```
+internal/cache     → docs/cache.md, docs/configuration.md
+internal/sse       → docs/sse.md, docs/monitoring.md
+internal/snapshot  → docs/snapshot.md
+internal/telemetry → docs/telemetry.md
+internal/metrics   → docs/telemetry.md
+internal/server    → docs/monitoring.md, docs/shutdown.md
+internal/config    → docs/configuration.md
+```
+
+---
+
 ## Output Format
 
-Produce the implementation plan as a structured markdown document:
+Produce the implementation plan as a structured markdown document in this exact order:
 
 ```
 ## Implementation Plan: <ISSUE_TITLE>
+
+### ⚠️ Early Risk Signals
+| Signal | Severity | Recommended action |
+|--------|----------|--------------------|
+| (none identified) | — | — |
+
+Populate with:
+- Invariant risks: any change touching token passthrough, cache key format, payload opacity, SSE fan-out, 503-on-miss
+- Scope surprises: "issue mentions one package but implementation requires N"
+- Non-blocking ambiguities worth flagging (not critical enough to block via AskUserQuestion)
+
+If no risks: leave the table with the (none identified) row.
 
 ### Files Changed
 | Path | Status | Reason |
@@ -137,6 +164,13 @@ Produce the implementation plan as a structured markdown document:
 | Metric name | Instrument | Where emitted |
 |-------------|------------|---------------|
 | sdk_proxy.foo.requests | Counter | internal/metrics/metrics.go |
+
+### Docs to Update
+| File | Section | What to verify or update |
+|------|---------|--------------------------|
+| docs/cache.md | TTL Revalidation | Update if TTL value changes |
+
+Populate using the Package → Docs Mapping above. If no docs are affected, leave a single row: (none).
 
 ### Key Design Invariants Checked
 - [ ] Token passthrough: no credentials stored; upstream requests use original SDK token

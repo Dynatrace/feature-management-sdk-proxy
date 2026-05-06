@@ -1,6 +1,6 @@
 ---
 name: nt-ship
-version: 1.1.0
+version: 1.2.0
 description: |
   Quality gates, commit, beads close, merge to main, and push for sdk-proxy.
   Runs lint/test/vet in parallel, gates on user approval before committing,
@@ -35,7 +35,7 @@ Store as `ISSUE_ID`.
 
 ## Phase 1 — Quality Gates (parallel)
 
-In a **single message**, issue all three commands simultaneously:
+In a **single message**, issue all four commands simultaneously:
 
 ```bash
 make lint 2>&1
@@ -49,16 +49,20 @@ make test 2>&1
 make vet 2>&1
 ```
 
-Wait for all three to complete. Display results.
+```bash
+make test-int 2>&1
+```
+
+Wait for all four to complete. Display results.
 
 If any fail:
 1. Print the failing output
 2. Diagnose the root cause (read the relevant source file if needed)
 3. Fix the issue
-4. Re-run **only the failing gate** — do not re-run all three
-5. Repeat until all three are green
+4. Re-run **only the failing gate** — do not re-run all four
+5. Repeat until all four are green
 
-Do not proceed to commit until all three pass.
+Do not proceed to commit until all four pass.
 
 ---
 
@@ -164,5 +168,5 @@ Ship complete.
 Issue:   <ISSUE_ID> [CLOSED]
 Commit:  <git log --oneline -1>
 Branch:  <FEATURE_BRANCH> merged into main, deleted
-Gates:   lint ✓  test ✓  vet ✓
+Gates:   lint ✓  test ✓  vet ✓  test-int ✓
 ```
