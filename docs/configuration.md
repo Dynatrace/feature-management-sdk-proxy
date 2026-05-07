@@ -105,6 +105,24 @@ LIFECYCLE_KEYS_CAP=10000
 
 ---
 
+---
+
+### `SSE_DISABLED`
+
+**Optional.** Default: `false`.
+
+When set to `true`, the proxy does not open any upstream SSE connections. All SDK keys poll for config updates at the disconnected interval (every 10 seconds). SSE connections from SDK clients to `GET /sse` are still accepted, but no upstream events are forwarded.
+
+Use this if your network or firewall policy blocks long-lived HTTP connections to the upstream SSE service.
+
+Accepted values: `true`, `false`, `1`, `0`.
+
+```bash
+SSE_DISABLED=false
+```
+
+---
+
 ## Snapshot Persistence Variables
 
 Snapshot persistence is **optional**. When disabled (the default), the proxy starts cold on every restart. When enabled, cache entries are written asynchronously to the configured backend and loaded back on startup to reduce cold-start latency.

@@ -17,12 +17,22 @@ Each entry holds:
 
 ## TTL and Revalidation
 
-Entries expire after **5 minutes** (`cache.TTL`). The background `Refresher` ticks at half the TTL (every 2.5 minutes) and revalidates stale entries using `If-None-Match`.
+The background `Refresher` revalidates stale entries using `If-None-Match`. The polling interval is per-key and depends on SSE connection state:
+
+| SSE state | Polling interval | Rationale |
+|---|---|---|
+| Connected (read loop active) | **10 minutes** | SSE delivers change notifications; polling is a safety net only |
+| Disconnected / reconnecting | **10 seconds** | May be missing notifications; poll aggressively |
+| SSE disabled (`SSE_DISABLED=true`) | **10 seconds** | Polling is the only update mechanism |
+
+The `Refresher` ticks at 10 seconds (the shortest interval) and evaluates per-key staleness against the interval returned by `Manager.RefreshInterval`. This means a connected key won't be fetched more than once per 10 minutes even though the ticker fires every 10 seconds.
+
+The background CDN request has a **5-second timeout** — intentionally less than the minimum poll interval to prevent request overlap.
 
 - A **304** response resets `FetchedAt` without changing the payload or writing a snapshot.
 - A **200** response replaces the entry and triggers both snapshot persistence (if configured) and SSE URL change detection.
 
-A background refresh error is logged and counted but never fails an SDK request. The stale entry stays in cache and continues to be served.
+A background refresh error is logged but never fails an SDK request. The stale entry stays in cache and continues to be served.
 
 ## Config Passthrough and Token Auth
 

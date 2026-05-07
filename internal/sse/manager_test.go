@@ -368,3 +368,70 @@ func TestManager_NoSSEInConfig_NoConnection(t *testing.T) {
 		t.Errorf("connections opened = %d, want 0 (no SSE in config)", n)
 	}
 }
+
+// TestManager_RefreshInterval_UnknownKey returns disconnected interval for a key
+// that has never been seen.
+func TestManager_RefreshInterval_UnknownKey(t *testing.T) {
+	m := newTestManager(t, nil)
+	d := m.RefreshInterval("unknownkey")
+	if d != cache.RefreshIntervalDisconnected {
+		t.Errorf("RefreshInterval for unknown key = %v, want %v", d, cache.RefreshIntervalDisconnected)
+	}
+}
+
+// TestManager_RefreshInterval_Connected returns connected interval while the
+// upstream SSE read loop is actively streaming.
+func TestManager_RefreshInterval_Connected(t *testing.T) {
+	started := make(chan struct{})
+	// SSE server that holds the connection open until the request context ends.
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	m := newTestManager(t, srv.Client())
+
+	keyHash := cache.Key("dt_server_us_abc123")
+	m.OnConfigCached(t.Context(), "dt_server_us_abc123", configWithSSEURL(srv.URL+"/sse"))
+
+	// Wait for the read loop to enter streaming state.
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("SSE server never received connection")
+	}
+	// Give setStreaming(true) time to execute after 200 is received.
+	time.Sleep(50 * time.Millisecond)
+
+	d := m.RefreshInterval(keyHash)
+	if d != cache.RefreshIntervalConnected {
+		t.Errorf("RefreshInterval while streaming = %v, want %v", d, cache.RefreshIntervalConnected)
+	}
+}
+
+// TestManager_RefreshInterval_AfterClose returns disconnected interval after
+// the connection is closed.
+func TestManager_RefreshInterval_AfterClose(t *testing.T) {
+	m := newTestManager(t, nil)
+	keyHash := cache.Key("dt_server_us_abc123")
+
+	// Manually register state without an active goroutine — simulates a key
+	// whose connection was closed or never became streaming.
+	m.mu.Lock()
+	m.conns[keyHash] = &keyState{}
+	m.mu.Unlock()
+
+	d := m.RefreshInterval(keyHash)
+	if d != cache.RefreshIntervalDisconnected {
+		t.Errorf("RefreshInterval for non-streaming state = %v, want %v", d, cache.RefreshIntervalDisconnected)
+	}
+}

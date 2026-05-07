@@ -114,8 +114,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		attribute.String("sdk_key_hash", keyHash),
 	))
 
-	ch, unsub := h.manager.Subscribe(keyHash)
-	defer unsub()
+	// When SSE is disabled (manager == nil), hold the connection open for
+	// heartbeats only — no upstream events will be forwarded. A nil channel
+	// in a select is permanently skipped, so the loop runs on heartbeat and
+	// context-cancel only.
+	var ch <-chan Event
+	if h.manager != nil {
+		var unsub func()
+		ch, unsub = h.manager.Subscribe(keyHash)
+		defer unsub()
+	} else {
+		h.logger.Debug("sse: SSE disabled — holding connection for heartbeats only", slog.String("key", keyHash))
+	}
 
 	h.logger.Debug("sse: client connected", slog.String("key", keyHash))
 

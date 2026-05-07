@@ -214,11 +214,23 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 	_, _ = w.Write(body)
 }
 
-// Fetch implements cache.Fetcher for use by the background Refresher.
-// It sends an If-None-Match revalidation request and interprets the result.
-// Network errors are sanitized before returning to prevent SDK key leakage
-// via *url.Error.Error() in log messages.
-func (h *Handler) Fetch(ctx context.Context, fetchURL, etag string) (cache.FetchResult, error) {
+// Fetcher performs background TTL revalidation requests against the upstream CDN.
+// It uses its own http.Client so the background refresh timeout is independent
+// of the request-path client (5s vs 30s).
+type Fetcher struct {
+	client *http.Client
+	logger *slog.Logger
+}
+
+// NewFetcher constructs a Fetcher for use with cache.NewRefresherWithObservers.
+func NewFetcher(client *http.Client, logger *slog.Logger) *Fetcher {
+	return &Fetcher{client: client, logger: logger}
+}
+
+// Fetch implements cache.Fetcher. It sends an If-None-Match revalidation
+// request and interprets the result. Network errors are sanitized before
+// returning to prevent SDK key leakage via *url.Error.Error() in log messages.
+func (f *Fetcher) Fetch(ctx context.Context, fetchURL, etag string) (cache.FetchResult, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fetchURL, nil)
 	if err != nil {
 		return cache.FetchResult{}, fmt.Errorf("proxy: build refresh request: %w", err)
@@ -227,7 +239,7 @@ func (h *Handler) Fetch(ctx context.Context, fetchURL, etag string) (cache.Fetch
 		req.Header.Set("If-None-Match", etag)
 	}
 
-	resp, err := h.client.Do(req)
+	resp, err := f.client.Do(req)
 	if err != nil {
 		return cache.FetchResult{}, sanitizeErr(err)
 	}

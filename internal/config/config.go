@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -35,6 +36,11 @@ type Config struct {
 	// are rejected as malformed before any SHA-256 work is performed (CPU-amplification DoS guard).
 	// Range 1–100000, default 10000. Env: LIFECYCLE_KEYS_CAP.
 	LifecycleKeysCap int
+
+	// SSEDisabled disables upstream SSE connections entirely. When true, the proxy
+	// relies solely on polling for flag updates. All keys poll at
+	// RefreshIntervalDisconnected (10s). Env: SSE_DISABLED, default false.
+	SSEDisabled bool
 
 	// Snapshot persistence (optional). When SnapshotBackend is "", persistence
 	// is disabled and all other Snapshot* fields are ignored.
@@ -136,6 +142,19 @@ func FromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("invalid LIFECYCLE_KEYS_CAP %q: must be an integer between 1 and 100000", v)
 		}
 		cfg.LifecycleKeysCap = n
+	}
+
+	// SSE_DISABLED defaults to false (SSE enabled). The negation name is
+	// intentional: most deployments want SSE on; this is an escape hatch.
+	if v := os.Getenv("SSE_DISABLED"); v != "" {
+		switch strings.ToLower(v) {
+		case "true", "1":
+			cfg.SSEDisabled = true
+		case "false", "0":
+			cfg.SSEDisabled = false
+		default:
+			return Config{}, fmt.Errorf("invalid SSE_DISABLED %q: must be true or false", v)
+		}
 	}
 
 	if v := os.Getenv("PROXY_INSTANCE_ID"); v != "" {

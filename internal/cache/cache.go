@@ -10,9 +10,21 @@ import (
 	"time"
 )
 
-// TTL is the cache entry lifetime. Entries are revalidated via If-None-Match
-// by the background Refresher before they expire.
-const TTL = 5 * time.Minute
+// RefreshIntervalConnected is the polling interval when an upstream SSE
+// connection is active. SSE delivers change notifications, so polling is
+// only a safety net.
+const RefreshIntervalConnected = 10 * time.Minute
+
+// RefreshIntervalDisconnected is the polling interval when SSE is unavailable
+// or disabled. Polling is the only update mechanism, so the interval is short.
+const RefreshIntervalDisconnected = 10 * time.Second
+
+// RefreshIntervalProvider returns the appropriate polling interval for a given
+// cache key. Implementations are expected to consult SSE connection state.
+// Defined here (consumer's package) to avoid a cache → sse import cycle.
+type RefreshIntervalProvider interface {
+	RefreshInterval(keyHash string) time.Duration
+}
 
 // Entry holds a cached flagd config payload and metadata for revalidation.
 // FetchURL stores the full upstream URL used to revalidate this entry; it
@@ -24,9 +36,9 @@ type Entry struct {
 	FetchURL  string // full upstream URL for background TTL revalidation
 }
 
-// IsStale reports whether the entry has exceeded the TTL.
-func (e Entry) IsStale(now time.Time) bool {
-	return now.Sub(e.FetchedAt) >= TTL
+// IsStale reports whether the entry has exceeded the given refresh interval.
+func (e Entry) IsStale(now time.Time, interval time.Duration) bool {
+	return now.Sub(e.FetchedAt) >= interval
 }
 
 // Cache is a thread-safe in-memory store keyed by SHA-256(sdk_key)[:16].
@@ -113,10 +125,11 @@ type RefreshObserver interface {
 
 // Refresher drives background TTL refresh using a Fetcher.
 type Refresher struct {
-	cache     *Cache
-	fetcher   Fetcher
-	observers []RefreshObserver
-	logger    *slog.Logger
+	cache            *Cache
+	fetcher          Fetcher
+	observers        []RefreshObserver
+	intervalProvider RefreshIntervalProvider // nil → always use RefreshIntervalDisconnected
+	logger           *slog.Logger
 }
 
 // NewRefresher constructs a Refresher. Call Run to start the background loop.
@@ -142,10 +155,19 @@ func NewRefresherWithObserver(c *Cache, f Fetcher, observer RefreshObserver, log
 	return NewRefresherWithObservers(c, f, logger, observer)
 }
 
-// Run ticks at half the TTL so stale entries are caught promptly.
+// SetIntervalProvider wires a RefreshIntervalProvider so the Refresher can
+// choose a per-key polling interval based on SSE connection state.
+// Must be called before Run.
+func (r *Refresher) SetIntervalProvider(p RefreshIntervalProvider) {
+	r.intervalProvider = p
+}
+
+// Run ticks at RefreshIntervalDisconnected (the shortest possible interval)
+// so no key is ever checked less often than needed. Per-key staleness is
+// evaluated against the interval returned by intervalProvider.
 // It blocks until ctx is cancelled.
 func (r *Refresher) Run(ctx context.Context) {
-	ticker := time.NewTicker(TTL / 2)
+	ticker := time.NewTicker(RefreshIntervalDisconnected)
 	defer ticker.Stop()
 	for {
 		select {
@@ -160,7 +182,11 @@ func (r *Refresher) Run(ctx context.Context) {
 func (r *Refresher) refresh(ctx context.Context) {
 	now := time.Now()
 	for key, entry := range r.cache.Snapshot() {
-		if !entry.IsStale(now) {
+		interval := RefreshIntervalDisconnected
+		if r.intervalProvider != nil {
+			interval = r.intervalProvider.RefreshInterval(key)
+		}
+		if !entry.IsStale(now, interval) {
 			continue
 		}
 		// FetchURL is empty for snapshot-restored entries until the first SDK

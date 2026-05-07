@@ -103,6 +103,7 @@ func TestCache_ResetTTL_NoopOnMissingKey(t *testing.T) {
 }
 
 func TestEntry_IsStale(t *testing.T) {
+	interval := RefreshIntervalConnected
 	now := time.Now()
 	cases := []struct {
 		name      string
@@ -110,13 +111,13 @@ func TestEntry_IsStale(t *testing.T) {
 		wantStale bool
 	}{
 		{"fresh", now.Add(-1 * time.Minute), false},
-		{"exactly at TTL", now.Add(-TTL), true},
-		{"past TTL", now.Add(-TTL - time.Second), true},
-		{"just under TTL", now.Add(-TTL + time.Second), false},
+		{"exactly at interval", now.Add(-interval), true},
+		{"past interval", now.Add(-interval - time.Second), true},
+		{"just under interval", now.Add(-interval + time.Second), false},
 	}
 	for _, tc := range cases {
 		e := Entry{FetchedAt: tc.fetchedAt}
-		if got := e.IsStale(now); got != tc.wantStale {
+		if got := e.IsStale(now, interval); got != tc.wantStale {
 			t.Errorf("%s: IsStale=%v, want %v", tc.name, got, tc.wantStale)
 		}
 	}
@@ -355,5 +356,77 @@ func TestRefresher_FetchError_PreservesExistingEntry(t *testing.T) {
 	}
 	if string(entry.Payload) != "original" {
 		t.Error("entry should be unchanged after refresh error")
+	}
+}
+
+// mockIntervalProvider returns a fixed interval per key for testing.
+type mockIntervalProvider struct {
+	intervals map[string]time.Duration
+}
+
+func (m *mockIntervalProvider) RefreshInterval(key string) time.Duration {
+	if d, ok := m.intervals[key]; ok {
+		return d
+	}
+	return RefreshIntervalDisconnected
+}
+
+func TestRefresher_ConnectedKey_UsesConnectedInterval(t *testing.T) {
+	c := New()
+	// Entry older than disconnected interval but younger than connected interval.
+	c.Set("k1", Entry{
+		Payload:   []byte("data"),
+		FetchedAt: time.Now().Add(-30 * time.Second),
+		FetchURL:  "https://example.com/k1.json",
+	})
+
+	fetcher := &mockFetcher{}
+	r := NewRefresher(c, fetcher, noopLogger())
+	r.SetIntervalProvider(&mockIntervalProvider{
+		intervals: map[string]time.Duration{"k1": RefreshIntervalConnected},
+	})
+	r.refresh(context.Background())
+
+	if len(fetcher.calls) != 0 {
+		t.Errorf("connected key should not be refreshed before connected interval; got %d calls", len(fetcher.calls))
+	}
+}
+
+func TestRefresher_DisconnectedKey_UsesDisconnectedInterval(t *testing.T) {
+	c := New()
+	// Entry older than disconnected interval.
+	c.Set("k1", Entry{
+		Payload:   []byte("data"),
+		FetchedAt: time.Now().Add(-15 * time.Second),
+		FetchURL:  "https://example.com/k1.json",
+	})
+
+	fetcher := &mockFetcher{}
+	r := NewRefresher(c, fetcher, noopLogger())
+	r.SetIntervalProvider(&mockIntervalProvider{
+		intervals: map[string]time.Duration{"k1": RefreshIntervalDisconnected},
+	})
+	r.refresh(context.Background())
+
+	if len(fetcher.calls) != 1 {
+		t.Errorf("disconnected key should be refreshed after RefreshIntervalDisconnected; got %d calls", len(fetcher.calls))
+	}
+}
+
+func TestRefresher_NilProvider_DefaultsToDisconnected(t *testing.T) {
+	c := New()
+	// Entry older than disconnected interval — no provider set.
+	c.Set("k1", Entry{
+		Payload:   []byte("data"),
+		FetchedAt: time.Now().Add(-15 * time.Second),
+		FetchURL:  "https://example.com/k1.json",
+	})
+
+	fetcher := &mockFetcher{}
+	r := NewRefresher(c, fetcher, noopLogger()) // no SetIntervalProvider
+	r.refresh(context.Background())
+
+	if len(fetcher.calls) != 1 {
+		t.Errorf("nil provider should default to disconnected interval; got %d calls", len(fetcher.calls))
 	}
 }
