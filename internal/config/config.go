@@ -53,8 +53,8 @@ type Config struct {
 	SnapshotS3Bucket    string // required when backend is "s3"
 	SnapshotS3Region    string // required when backend is "s3"
 	SnapshotS3Prefix    string // optional key prefix; defaults to ""
-	SnapshotS3AccessKey string // optional; uses default credential chain when empty
-	SnapshotS3SecretKey string // optional; uses default credential chain when empty
+	SnapshotS3AccessKey Secret // optional; uses default credential chain when empty
+	SnapshotS3SecretKey Secret // optional; uses default credential chain when empty
 
 	// Local filesystem settings. Used when SnapshotBackend == "local".
 	SnapshotLocalDir string // required when backend is "local"; must be an absolute path
@@ -187,8 +187,8 @@ func FromEnv() (Config, error) {
 		cfg.SnapshotS3Region = region
 		cfg.SnapshotS3Endpoint = os.Getenv("SNAPSHOT_S3_ENDPOINT")
 		cfg.SnapshotS3Prefix = os.Getenv("SNAPSHOT_S3_PREFIX")
-		cfg.SnapshotS3AccessKey = os.Getenv("SNAPSHOT_S3_ACCESS_KEY")
-		cfg.SnapshotS3SecretKey = os.Getenv("SNAPSHOT_S3_SECRET_KEY")
+		cfg.SnapshotS3AccessKey = Secret(os.Getenv("SNAPSHOT_S3_ACCESS_KEY"))
+		cfg.SnapshotS3SecretKey = Secret(os.Getenv("SNAPSHOT_S3_SECRET_KEY"))
 	}
 
 	if cfg.SnapshotBackend == "local" {
