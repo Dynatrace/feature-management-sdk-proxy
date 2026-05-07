@@ -164,6 +164,23 @@ SNAPSHOT_MAX_AGE=24h
 
 ---
 
+### `CACHE_INACTIVITY_EVICT_AFTER`
+
+**Optional.** Default: `48h`.
+
+How long an SDK key must be idle before the inactivity sweeper evicts it. A key is considered idle when it has had no HTTP config requests **and** no active SSE subscribers for longer than this window. Eviction removes the in-memory entry, closes the upstream SSE connection, and deletes the persisted snapshot — identical to a lifecycle invalidation event.
+
+Set to `0` to disable the sweeper entirely. The sweeper checks all cached keys every hour.
+
+```bash
+CACHE_INACTIVITY_EVICT_AFTER=48h  # default
+CACHE_INACTIVITY_EVICT_AFTER=0    # disable
+```
+
+Must be `0` (disabled) or a Go duration string of at least `1h` (e.g. `24h`, `72h`). Values shorter than `1h` are rejected at startup — the sweeper runs every hour, so shorter values would never fire.
+
+---
+
 ### S3 Backend Variables
 
 Used when `SNAPSHOT_BACKEND=s3`.

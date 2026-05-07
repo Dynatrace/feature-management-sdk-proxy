@@ -430,3 +430,103 @@ func TestRefresher_NilProvider_DefaultsToDisconnected(t *testing.T) {
 		t.Errorf("nil provider should default to disconnected interval; got %d calls", len(fetcher.calls))
 	}
 }
+
+func TestCache_LastAccess_InitializedOnSet(t *testing.T) {
+	before := time.Now()
+	c := New()
+	c.Set("k1", Entry{Payload: []byte("v")})
+	la := c.LastAccess("k1")
+	after := time.Now()
+
+	if la.IsZero() {
+		t.Fatal("LastAccess should not be zero after Set")
+	}
+	if la.Before(before) || la.After(after) {
+		t.Errorf("LastAccess %v not in expected range [%v, %v]", la, before, after)
+	}
+}
+
+func TestCache_LastAccess_UpdatedOnGet(t *testing.T) {
+	c := New()
+	c.Set("k1", Entry{Payload: []byte("v")})
+	laAfterSet := c.LastAccess("k1")
+
+	time.Sleep(2 * time.Millisecond)
+	c.Get("k1")
+	laAfterGet := c.LastAccess("k1")
+
+	if !laAfterGet.After(laAfterSet) {
+		t.Errorf("LastAccess should advance after Get: set=%v get=%v", laAfterSet, laAfterGet)
+	}
+}
+
+func TestCache_LastAccess_MissingKeyReturnsZero(t *testing.T) {
+	c := New()
+	la := c.LastAccess("nonexistent")
+	if !la.IsZero() {
+		t.Errorf("expected zero time for absent key, got %v", la)
+	}
+}
+
+func TestCache_LastAccess_ClearedOnDelete(t *testing.T) {
+	c := New()
+	c.Set("k1", Entry{Payload: []byte("v")})
+	c.Delete("k1")
+	la := c.LastAccess("k1")
+	if !la.IsZero() {
+		t.Errorf("expected zero time after Delete, got %v", la)
+	}
+}
+
+func TestCache_DeleteIfInactiveSince_DeletesStaleEntry(t *testing.T) {
+	c := New()
+	c.Set("k1", Entry{Payload: []byte("v")})
+
+	cutoff := time.Now().Add(time.Second) // future cutoff — entry is stale
+	deleted := c.DeleteIfInactiveSince("k1", cutoff)
+	if !deleted {
+		t.Fatal("expected entry to be deleted")
+	}
+	_, ok := c.Get("k1")
+	if ok {
+		t.Error("entry should be absent after DeleteIfInactiveSince")
+	}
+}
+
+func TestCache_DeleteIfInactiveSince_SkipsFreshEntry(t *testing.T) {
+	c := New()
+	c.Set("k1", Entry{Payload: []byte("v")})
+
+	cutoff := time.Now().Add(-time.Hour) // past cutoff — entry is fresh
+	deleted := c.DeleteIfInactiveSince("k1", cutoff)
+	if deleted {
+		t.Fatal("should not delete a fresh entry")
+	}
+	_, ok := c.Get("k1")
+	if !ok {
+		t.Error("entry should still be present")
+	}
+}
+
+func TestCache_DeleteIfInactiveSince_NoopForMissingKey(t *testing.T) {
+	c := New()
+	cutoff := time.Now().Add(time.Second)
+	deleted := c.DeleteIfInactiveSince("nonexistent", cutoff)
+	if deleted {
+		t.Fatal("should not delete absent key")
+	}
+}
+
+func TestCache_LastAccess_ConcurrentGet_Race(t *testing.T) {
+	c := New()
+	c.Set("k1", Entry{Payload: []byte("v")})
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Go(func() {
+			c.Get("k1")
+		})
+	}
+	wg.Wait()
+	// Test passes if the race detector doesn't fire.
+}

@@ -222,6 +222,31 @@ func run() error {
 	}
 	go refresher.Run(ctx)
 
+	// Inactivity sweeper: evict cache entries (cache + SSE + snapshot) that have
+	// had no HTTP access and no active SSE subscribers for longer than
+	// CacheInactivityEvictAfter. Disabled when CacheInactivityEvictAfter == 0.
+	var sweeperDone chan struct{}
+	if cfg.CacheInactivityEvictAfter > 0 {
+		var liveness cache.Liveness = cache.LivenessFunc(func(string) bool { return false })
+		if sseManager != nil {
+			liveness = sseManager
+		}
+		evict := func(keyHash string) {
+			if sseManager != nil {
+				sseManager.Close(keyHash)
+			}
+			if snapshotWriter != nil {
+				snapshotWriter.OnInvalidated(keyHash)
+			}
+		}
+		sweeper := cache.NewSweeper(flagCache, evict, liveness, cfg.CacheInactivityEvictAfter, inst, logger)
+		sweeperDone = make(chan struct{})
+		go func() {
+			defer close(sweeperDone)
+			sweeper.Run(ctx)
+		}()
+	}
+
 	// Start snapshot writer drain loop if persistence is enabled.
 	var snapshotWriterDone chan struct{}
 	if snapshotWriter != nil {
@@ -262,6 +287,10 @@ func run() error {
 			if err := sseManager.Shutdown(sseShutCtx); err != nil {
 				slog.Warn("sse: shutdown timed out", slog.String("error", err.Error()))
 			}
+		}
+
+		if sweeperDone != nil {
+			<-sweeperDone
 		}
 
 		// Drain the snapshot write queue before billing flush so any final

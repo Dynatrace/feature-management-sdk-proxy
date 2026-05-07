@@ -34,6 +34,34 @@ The background CDN request has a **5-second timeout** — intentionally less tha
 
 A background refresh error is logged but never fails an SDK request. The stale entry stays in cache and continues to be served.
 
+## Inactivity Eviction
+
+Long-running proxy instances can accumulate cache entries for SDK keys that are no longer in use — keys whose projects were deleted, tokens rotated, or clients disconnected without lifecycle events reaching the proxy. The background `Refresher` polls all cached keys unconditionally, so this builds up unnecessary CDN traffic over time.
+
+The inactivity sweeper is the fix. It runs on a 1-hour tick and evicts entries that have not been accessed for longer than `CACHE_INACTIVITY_EVICT_AFTER` (default 48h). Eviction is a full GC: the cache entry, the upstream SSE connection, and the persisted snapshot are all removed — the same operations as a lifecycle `tokenRotated` or `stageDeleted` event.
+
+### Liveness signal
+
+Before evicting, the sweeper checks whether any SDK client has an active SSE subscription for the key. If `sse.Manager.HasSubscribers` returns true, the key is skipped regardless of its last-access age. An active SSE connection is the authoritative signal that a provider still needs the config.
+
+This matters because an SDK may hold an SSE connection open and not issue HTTP config requests for hours. Without the liveness check, a long-running streaming provider would be incorrectly evicted.
+
+### Last-access tracking
+
+Every `Cache.Get` call atomically updates a per-key last-access timestamp (Unix nanoseconds stored in an `atomic.Int64`). Pointer lookup happens under the read lock; the value itself is updated without acquiring the write lock, so `Get` has no added contention on the hot path. `Cache.Set` initializes the timestamp, so snapshot-restored entries start with a fresh `time.Now()` and are not immediately swept on startup.
+
+### Transient race window
+
+There is a narrow window between the sweeper's liveness check and the atomic `DeleteIfInactiveSince` call where a client could subscribe. Worst case: the entry is evicted, the client's SSE channel closes, and the client falls back through the cold-miss path to re-fetch config. This is the same experience as a network interruption and recovers automatically.
+
+### Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `CACHE_INACTIVITY_EVICT_AFTER` | `48h` | Idle window before eviction. Set to `0` to disable the sweeper entirely. |
+
+Setting `CACHE_INACTIVITY_EVICT_AFTER=0` disables the sweeper — no goroutine is started.
+
 ## Config Passthrough and Token Auth
 
 The proxy applies **token passthrough** — every upstream request to the CDN uses the SDK token from the originating request. The proxy holds no separate CDN credential.
