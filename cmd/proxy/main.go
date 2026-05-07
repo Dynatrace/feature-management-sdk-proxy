@@ -89,8 +89,8 @@ func run() error {
 			Bucket:          cfg.SnapshotS3Bucket,
 			Region:          cfg.SnapshotS3Region,
 			Prefix:          cfg.SnapshotS3Prefix,
-			AccessKeyID:     cfg.SnapshotS3AccessKey,
-			SecretAccessKey: cfg.SnapshotS3SecretKey,
+			AccessKeyID:     cfg.SnapshotS3AccessKey.Unwrap(),
+			SecretAccessKey: cfg.SnapshotS3SecretKey.Unwrap(),
 		})
 		if err != nil {
 			return fmt.Errorf("snapshot: %w", err)

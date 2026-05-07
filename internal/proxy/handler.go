@@ -20,6 +20,8 @@ import (
 	"github.com/dynatrace/sdk-proxy/internal/telemetry"
 )
 
+const resultUpstreamError = "upstream_error"
+
 // hopByHopHeaders must not be forwarded between proxy hops (RFC 7230 §6.1).
 var hopByHopHeaders = map[string]bool{
 	"Connection":          true,
@@ -149,7 +151,7 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 	if err != nil {
 		h.logger.Error("proxy: build upstream request failed", slog.String("error", sanitizeErr(err).Error()))
 		http.Error(w, "internal error", http.StatusInternalServerError)
-		return "upstream_error"
+		return resultUpstreamError
 	}
 
 	resp, err := h.client.Do(req)
@@ -159,7 +161,7 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 			slog.String("error", sanitizeErr(err).Error()),
 		)
 		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
-		return "upstream_error"
+		return resultUpstreamError
 	}
 	defer resp.Body.Close()
 
@@ -167,7 +169,7 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 	if err != nil {
 		h.logger.Error("proxy: read upstream response failed", slog.String("error", err.Error()))
 		http.Error(w, "internal error", http.StatusInternalServerError)
-		return "upstream_error"
+		return resultUpstreamError
 	}
 
 	switch {
@@ -178,7 +180,7 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 			slog.String("key", key),
 		)
 		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
-		return "upstream_error"
+		return resultUpstreamError
 
 	case resp.StatusCode >= 500:
 		h.logger.Warn("proxy: upstream server error",
@@ -186,7 +188,7 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 			slog.Int("upstream_status", resp.StatusCode),
 		)
 		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
-		return "upstream_error"
+		return resultUpstreamError
 
 	case resp.StatusCode == http.StatusOK:
 		entry := cache.Entry{
