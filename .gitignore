@@ -4,6 +4,9 @@
 *.db
 .beads-credential-key
 
+# Local dev scripts (may contain credentials)
+start.sh
+
 # Go
 /sdk-proxy
 *.test
