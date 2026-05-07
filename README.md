@@ -16,7 +16,7 @@ SDK instances (N)         sdk-proxy (1)          Dynatrace CDN / SSE
 ─────────────────         ─────────────          ───────────────────
 GET /server/{key}.json ─▶ cache hit: serve
                            cache miss: ─────────▶ GET /server/{key}.json
-GET /sse                ─▶ fan-out  ◀──────────── 1 upstream SSE conn
+GET /sse ◀──────────────  fan-out  ◀──────────── 1 upstream SSE conn
 ```
 
 The proxy caches flagd config payloads and revalidates them every 5 minutes. SSE events (`refetchEvaluation`) are fanned out from a single upstream connection to all subscribed SDK clients.
