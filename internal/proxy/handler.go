@@ -96,11 +96,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if entry, ok := h.cache.Get(key); ok {
 		h.logger.Debug("proxy: cache hit", slog.String("key", key))
 		h.serveFromCache(w, r, entry, sdkKey)
+		h.recordResult(r.Context(), "hit")
 		return
 	}
 
 	h.logger.Debug("proxy: cache miss — fetching upstream", slog.String("key", key))
-	h.serveMiss(w, r, sdkKey, key, target)
+	h.recordResult(r.Context(), h.serveMiss(w, r, sdkKey, key, target))
 }
 
 // serveFromCache writes a response from a cached entry. If the client's
@@ -141,13 +142,14 @@ func (h *Handler) serveFromCache(w http.ResponseWriter, r *http.Request, entry c
 // populates the cache and is then served via serveFromCache for header
 // consistency with the cache-hit path. 4xx responses are passed through
 // unchanged. 5xx and network errors return 503 — an empty response must
-// never reach the SDK.
-func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key, target string) {
+// never reach the SDK. Returns a result label for RequestsTotal ("miss",
+// "upstream_error", or "client_error").
+func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key, target string) string {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
 	if err != nil {
 		h.logger.Error("proxy: build upstream request failed", slog.String("error", sanitizeErr(err).Error()))
 		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		return "upstream_error"
 	}
 
 	resp, err := h.client.Do(req)
@@ -157,7 +159,7 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 			slog.String("error", sanitizeErr(err).Error()),
 		)
 		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
-		return
+		return "upstream_error"
 	}
 	defer resp.Body.Close()
 
@@ -165,7 +167,7 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 	if err != nil {
 		h.logger.Error("proxy: read upstream response failed", slog.String("error", err.Error()))
 		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		return "upstream_error"
 	}
 
 	switch {
@@ -176,7 +178,7 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 			slog.String("key", key),
 		)
 		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
-		return
+		return "upstream_error"
 
 	case resp.StatusCode >= 500:
 		h.logger.Warn("proxy: upstream server error",
@@ -184,7 +186,7 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 			slog.Int("upstream_status", resp.StatusCode),
 		)
 		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
-		return
+		return "upstream_error"
 
 	case resp.StatusCode == http.StatusOK:
 		entry := cache.Entry{
@@ -205,13 +207,14 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 		}
 		// Serve from the cached entry so headers match the cache-hit path.
 		h.serveFromCache(w, r, entry, sdkKey)
-		return
+		return "miss"
 	}
 
 	// Pass through 4xx and non-200 2xx responses without caching.
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(body)
+	return "client_error"
 }
 
 // Fetcher performs background TTL revalidation requests against the upstream CDN.
@@ -369,6 +372,14 @@ func (h *Handler) proxySSEURL(r *http.Request, keyHash string) string {
 		host = "unknown"
 	}
 	return derivedScheme(r) + "://" + host + sse.HandlerPath + "?stream_id=" + keyHash
+}
+
+// recordResult increments RequestsTotal with the given result label.
+func (h *Handler) recordResult(ctx context.Context, result string) {
+	if h.inst == nil {
+		return
+	}
+	h.inst.RequestsTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
 }
 
 // recordRewriteResult increments the ConfigSSERewriteTotal counter and emits
