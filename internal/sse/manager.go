@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -38,6 +40,9 @@ type keyState struct {
 	subsMu             sync.Mutex
 	subs               []*subscriber
 	closed             bool // set by Close under subsMu; checked by Subscribe under subsMu
+	// streaming is accessed atomically (no mutex required); all other fields
+	// that need protection are covered by cancel/wg (main conn lifecycle) or subsMu.
+	streaming atomic.Bool // true only while the upstream read loop is actively reading
 }
 
 type subscriber struct {
@@ -222,6 +227,19 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	}
 }
 
+// RefreshInterval implements cache.RefreshIntervalProvider. It returns
+// cache.RefreshIntervalConnected when the upstream SSE read loop for keyHash is
+// actively streaming, and cache.RefreshIntervalDisconnected otherwise.
+func (m *Manager) RefreshInterval(keyHash string) time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state, ok := m.conns[keyHash]
+	if ok && state.streaming.Load() {
+		return cache.RefreshIntervalConnected
+	}
+	return cache.RefreshIntervalDisconnected
+}
+
 func (m *Manager) ensureConn(ctx context.Context, keyHash, sseURL string, inactivitySec int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -252,6 +270,7 @@ func (m *Manager) startLocked(ctx context.Context, keyHash, sseURL string, inact
 	state.sseURL = sseURL
 	state.inactivityDelaySec = inactivitySec
 	state.cancel = cancel
+	state.streaming.Store(false) // reset on (re)start
 
 	state.wg.Go(func() {
 		c := &conn{
@@ -264,7 +283,8 @@ func (m *Manager) startLocked(ctx context.Context, keyHash, sseURL string, inact
 			onEvent: func(evt Event) {
 				m.dispatch(keyHash, evt)
 			},
-			onLifecycle: m.lifecycle,
+			onLifecycle:  m.lifecycle,
+			setStreaming: func(v bool) { state.streaming.Store(v) },
 		}
 		c.run(connCtx)
 	})

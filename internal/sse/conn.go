@@ -40,6 +40,10 @@ type conn struct {
 	// returns true the event is a lifecycle event and must not be forwarded
 	// to SDK subscribers via onEvent. May be nil.
 	onLifecycle func(Event) bool
+	// setStreaming is called with true when the read loop begins and false when
+	// it ends (including on error or backoff). Used by Manager.RefreshInterval
+	// to signal that SSE is actively delivering events. May be nil.
+	setStreaming func(bool)
 }
 
 // run is the reconnect loop. It blocks until ctx is cancelled.
@@ -121,6 +125,10 @@ func (c *conn) connect(ctx context.Context, lastEventID string, onEvent func(Eve
 		return fmt.Errorf("sse: upstream status %d", resp.StatusCode)
 	}
 
+	if c.setStreaming != nil {
+		c.setStreaming(true)
+		defer c.setStreaming(false)
+	}
 	return c.readLoop(ctx, resp.Body, onEvent)
 }
 

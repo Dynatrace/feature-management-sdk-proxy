@@ -130,8 +130,8 @@ func TestCache_TTLRefresh_ResetsOnRevalidation(t *testing.T) {
 	}
 	originalFetchedAt := entry.FetchedAt
 
-	// Manually age the entry to make it stale.
-	h.Cache.ResetTTL(keyHash, time.Now().Add(-(cache.TTL + time.Second)))
+	// Manually age the entry to make it stale (older than the disconnected interval).
+	h.Cache.ResetTTL(keyHash, time.Now().Add(-(cache.RefreshIntervalDisconnected+time.Second)))
 
 	// CDN returns 304 on revalidation (default ETag matches).
 	// The refresher only ticks at TTL/2 so we trigger a second fetch manually

@@ -111,6 +111,7 @@ These are load-bearing constraints — do not break them without an explicit des
 - **SSE fan-out**: N SDK client instances for the same SDK key → exactly 1 upstream SSE connection. Never N.
 - **SSE after config**: upstream SSE connections are only opened after the config for that SDK key is cached. Never open an upstream SSE connection for a key whose config has never been fetched.
 - **Proxy SSE endpoint**: `GET /sse`, SDK key in the Authorization header. SDKs with `proxyUrl` configured use this endpoint — the SSE URL embedded in the flagd config JSON is ignored.
+- **Dynamic cache poll interval**: while an upstream SSE connection is actively streaming for a key, the background refresher polls at 10 min (`RefreshIntervalConnected`); when disconnected, reconnecting, or SSE is disabled, it polls at 10 s (`RefreshIntervalDisconnected`). The per-key interval comes from `sse.Manager.RefreshInterval` wired via `RefreshIntervalProvider`. See [`docs/cache.md`](docs/cache.md).
 - **503 on uncached miss during outage**: do not return an empty config. An empty response is indistinguishable from a legitimately empty flag set.
 
 ### Observability

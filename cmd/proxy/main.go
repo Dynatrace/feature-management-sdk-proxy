@@ -135,28 +135,31 @@ func run() error {
 
 	// SSE manager uses a dedicated client with no overall timeout — SSE connections
 	// are long-lived. ResponseHeaderTimeout guards the initial handshake.
-	sseClient := &http.Client{
-		Transport: &http.Transport{
-			DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-		},
-	}
-	sseManager := sse.New(sseClient, inst, logger)
+	var sseManager *sse.Manager
+	if !cfg.SSEDisabled {
+		sseClient := &http.Client{
+			Transport: &http.Transport{
+				DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ResponseHeaderTimeout: 30 * time.Second,
+			},
+		}
+		sseManager = sse.New(sseClient, inst, logger)
 
-	// Wire lifecycle invalidation: on tokenRotated/stageDeleted/projectDeleted events,
-	// drop the cache entry, close SSE fan-out, and (if persistence is configured)
-	// delete the persisted snapshot.
-	var snapshotInvalidator sse.Invalidator
-	if snapshotWriter != nil {
-		snapshotInvalidator = sse.InvalidatorFunc(snapshotWriter.OnInvalidated)
+		// Wire lifecycle invalidation: on tokenRotated/stageDeleted/projectDeleted events,
+		// drop the cache entry, close SSE fan-out, and (if persistence is configured)
+		// delete the persisted snapshot.
+		var snapshotInvalidator sse.Invalidator
+		if snapshotWriter != nil {
+			snapshotInvalidator = sse.InvalidatorFunc(snapshotWriter.OnInvalidated)
+		}
+		lifecycleHandler := sse.NewLifecycleHandler(inst, logger, cfg.LifecycleKeysCap,
+			sse.InvalidatorFunc(flagCache.Delete),
+			sse.InvalidatorFunc(sseManager.Close),
+			snapshotInvalidator,
+		)
+		sseManager.SetLifecycleHandler(lifecycleHandler.HandleEvent)
 	}
-	lifecycleHandler := sse.NewLifecycleHandler(inst, logger, cfg.LifecycleKeysCap,
-		sse.InvalidatorFunc(flagCache.Delete),
-		sse.InvalidatorFunc(sseManager.Close),
-		snapshotInvalidator,
-	)
-	sseManager.SetLifecycleHandler(lifecycleHandler.HandleEvent)
 
 	counter := telemetry.NewCounter()
 	logReporter := telemetry.NewLogReporter(logger, cfg.ProxyInstanceID)
@@ -169,7 +172,18 @@ func run() error {
 		return fmt.Errorf("proxy: %w", err)
 	}
 
-	sseHandler := sse.NewHandler(flagCache, sseManager, inst, counter, logger, 15*time.Second, configHandlerPath)
+	// Background refresher uses a separate 5s client — intentionally shorter than
+	// the minimum poll interval (10s) to prevent overlapping requests.
+	refreshClient := &http.Client{Timeout: 5 * time.Second}
+	refreshFetcher := proxy.NewFetcher(refreshClient, logger)
+
+	// Use a true nil interface (not a typed-nil *sse.Manager) so the handler can
+	// safely check manager == nil when SSE is disabled.
+	var sseSubscriber sse.Subscriber
+	if sseManager != nil {
+		sseSubscriber = sseManager
+	}
+	sseHandler := sse.NewHandler(flagCache, sseSubscriber, inst, counter, logger, 15*time.Second, configHandlerPath)
 
 	// ReadyFunc gates /ready on snapshot load completion.
 	probeHandlers := health.New(func() bool { return snapshotReady }, logger)
@@ -192,10 +206,20 @@ func run() error {
 		return fmt.Errorf("server: %w", err)
 	}
 
-	// Wire the refresher with both SSE manager and snapshot writer as observers.
-	// NewRefresherWithObservers filters out nil values, so passing snapshotWriter
-	// when nil (persistence disabled) is safe.
-	refresher := cache.NewRefresherWithObservers(flagCache, proxyHandler, logger, sseManager, snapshotWriter)
+	// Build the observer slice explicitly to avoid typed-nil interfaces: a
+	// (*sse.Manager)(nil) passed as RefreshObserver would satisfy != nil but panic
+	// when OnRefreshed is called.
+	var refreshObservers []cache.RefreshObserver
+	if sseManager != nil {
+		refreshObservers = append(refreshObservers, sseManager)
+	}
+	if snapshotWriter != nil {
+		refreshObservers = append(refreshObservers, snapshotWriter)
+	}
+	refresher := cache.NewRefresherWithObservers(flagCache, refreshFetcher, logger, refreshObservers...)
+	if sseManager != nil {
+		refresher.SetIntervalProvider(sseManager)
+	}
 	go refresher.Run(ctx)
 
 	// Start snapshot writer drain loop if persistence is enabled.
@@ -232,10 +256,12 @@ func run() error {
 			slog.Warn("server: listen error", slog.String("error", startErr.Error()))
 		}
 
-		sseShutCtx, sseCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer sseCancel()
-		if err := sseManager.Shutdown(sseShutCtx); err != nil {
-			slog.Warn("sse: shutdown timed out", slog.String("error", err.Error()))
+		if sseManager != nil {
+			sseShutCtx, sseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer sseCancel()
+			if err := sseManager.Shutdown(sseShutCtx); err != nil {
+				slog.Warn("sse: shutdown timed out", slog.String("error", err.Error()))
+			}
 		}
 
 		// Drain the snapshot write queue before billing flush so any final

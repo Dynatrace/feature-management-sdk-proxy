@@ -354,3 +354,61 @@ func TestFromEnv_SnapshotMaxAge_WithoutBackend(t *testing.T) {
 		t.Fatal("expected error when SNAPSHOT_MAX_AGE set without SNAPSHOT_BACKEND")
 	}
 }
+
+func TestFromEnv_SSEDisabled_Default(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SSEDisabled {
+		t.Error("SSEDisabled should default to false")
+	}
+}
+
+func TestFromEnv_SSEDisabled_True(t *testing.T) {
+	cases := []string{"true", "1"}
+	for _, v := range cases {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+			t.Setenv("SSE_DISABLED", v)
+
+			cfg, err := FromEnv()
+			if err != nil {
+				t.Fatalf("SSE_DISABLED=%q: unexpected error: %v", v, err)
+			}
+			if !cfg.SSEDisabled {
+				t.Errorf("SSE_DISABLED=%q: expected SSEDisabled=true", v)
+			}
+		})
+	}
+}
+
+func TestFromEnv_SSEDisabled_False(t *testing.T) {
+	cases := []string{"false", "0"}
+	for _, v := range cases {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+			t.Setenv("SSE_DISABLED", v)
+
+			cfg, err := FromEnv()
+			if err != nil {
+				t.Fatalf("SSE_DISABLED=%q: unexpected error: %v", v, err)
+			}
+			if cfg.SSEDisabled {
+				t.Errorf("SSE_DISABLED=%q: expected SSEDisabled=false", v)
+			}
+		})
+	}
+}
+
+func TestFromEnv_SSEDisabled_Invalid(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("SSE_DISABLED", "yes")
+
+	_, err := FromEnv()
+	if err == nil {
+		t.Fatal("expected error for invalid SSE_DISABLED value")
+	}
+}

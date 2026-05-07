@@ -61,6 +61,15 @@ On any disconnect (EOF, IO error, inactivity), the client reconnects with **expo
 | `inactivity` | No bytes received within the inactivity window |
 | `url_change` | The SSE URL in the flagd config changed on background refresh |
 
+### Streaming State and Cache Polling
+
+While the upstream read loop is actively receiving events (after the initial 200 response, before any disconnect), the connection is considered **streaming**. The cache refresher consults this state per key to choose its polling interval:
+
+- **Streaming** → poll every 10 minutes (SSE covers change notifications)
+- **Not streaming** (backoff, reconnecting, never connected) → poll every 10 seconds
+
+This means a healthy SSE connection reduces background CDN load by 60x. During reconnect backoff or after `SSE_DISABLED=true`, the proxy falls back to aggressive polling so flag changes are still delivered promptly.
+
 ### SSE URL Changes
 
 When the background cache refresher fetches a new 200 payload, it calls `OnRefreshed`. If the SSE URL in the new payload differs from the current one, the old upstream connection is cancelled and a new one is started. The brief overlap while the old goroutine exits is acceptable.

@@ -186,12 +186,15 @@ func New(t *testing.T, opts Options) (*Harness, error) {
 		}()
 	}
 
-	// Same nil-interface fix: only pass snapshotWriter to the refresher when non-nil.
-	var refreshObserver cache.RefreshObserver
+	// Use a dedicated 5s fetcher for background refresh (same reasoning as main.go).
+	refreshFetcher := proxy.NewFetcher(&http.Client{Timeout: 5 * time.Second}, logger)
+	var refreshObservers []cache.RefreshObserver
+	refreshObservers = append(refreshObservers, sseManager)
 	if snapshotWriter != nil {
-		refreshObserver = snapshotWriter
+		refreshObservers = append(refreshObservers, snapshotWriter)
 	}
-	refresher := cache.NewRefresherWithObservers(flagCache, proxyHandler, logger, sseManager, refreshObserver)
+	refresher := cache.NewRefresherWithObservers(flagCache, refreshFetcher, logger, refreshObservers...)
+	refresher.SetIntervalProvider(sseManager)
 	go refresher.Run(ctx)
 
 	probeHandlers := health.New(func() bool { return true }, logger)
