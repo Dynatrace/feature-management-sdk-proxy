@@ -13,6 +13,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
 	"github.com/dynatrace/sdk-proxy/internal/metrics"
@@ -20,7 +21,12 @@ import (
 	"github.com/dynatrace/sdk-proxy/internal/telemetry"
 )
 
-const resultUpstreamError = "upstream_error"
+const (
+	resultMiss          = "miss"
+	resultClientError   = "client_error"
+	resultUpstreamError = "upstream_error"
+	resultInternalError = "internal_error"
+)
 
 // hopByHopHeaders must not be forwarded between proxy hops (RFC 7230 §6.1).
 var hopByHopHeaders = map[string]bool{
@@ -41,6 +47,16 @@ type SnapshotNotifier interface {
 	OnConfigCached(keyHash, etag string, payload []byte)
 }
 
+// coldFetchResult carries the shared outcome of a singleflight cold-miss fetch.
+// All waiters for the same cache key receive the same value.
+type coldFetchResult struct {
+	entry       *cache.Entry // non-nil on 200
+	resultLabel string       // "miss", "client_error", resultUpstreamError, resultInternalError
+	statusCode  int          // set for 4xx pass-through
+	headers     http.Header  // set for 4xx pass-through
+	body        []byte       // set for 4xx pass-through
+}
+
 // Handler serves flagd config requests from an in-memory cache, falling back
 // to the upstream CDN on a miss. The SDK key is never logged or stored; only
 // its SHA-256 hash is used as a stable identifier.
@@ -53,6 +69,7 @@ type Handler struct {
 	inst             *metrics.Instruments
 	counter          *telemetry.Counter
 	logger           *slog.Logger
+	sfGroup          singleflight.Group
 }
 
 // New constructs a Handler. cdnBaseDomain must be a bare hostname
@@ -140,18 +157,48 @@ func (h *Handler) serveFromCache(w http.ResponseWriter, r *http.Request, entry c
 	_, _ = w.Write(payload)
 }
 
-// serveMiss fetches from the upstream CDN on a cache miss. A successful 200
-// populates the cache and is then served via serveFromCache for header
-// consistency with the cache-hit path. 4xx responses are passed through
-// unchanged. 5xx and network errors return 503 — an empty response must
-// never reach the SDK. Returns a result label for RequestsTotal ("miss",
-// "upstream_error", or "client_error").
+// serveMiss deduplicates concurrent cold-miss fetches for the same SDK key via
+// singleflight. Only one upstream call is made; all waiters share the result.
+// Returns a result label for RequestsTotal ("miss", "upstream_error", or "client_error").
 func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key, target string) string {
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
-	if err != nil {
-		h.logger.Error("proxy: build upstream request failed", slog.String("error", sanitizeErr(err).Error()))
+	v, _, _ := h.sfGroup.Do(key, func() (any, error) {
+		return h.coldFetch(sdkKey, key, target), nil
+	})
+	result := v.(coldFetchResult)
+	switch result.resultLabel {
+	case resultMiss:
+		h.serveFromCache(w, r, *result.entry, sdkKey)
+		return resultMiss
+	case resultClientError:
+		copyHeader(w.Header(), result.headers)
+		w.WriteHeader(result.statusCode)
+		_, _ = w.Write(result.body)
+		return resultClientError
+	case resultInternalError:
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return resultUpstreamError
+	default: // resultUpstreamError
+		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+		return resultUpstreamError
+	}
+}
+
+// coldFetch performs the upstream CDN fetch for a cache miss. It is executed
+// inside a singleflight group, so at most one call runs per cache key at a time.
+// context.Background() is used so the fetch survives originating client disconnects,
+// allowing all waiters to receive a valid result and populate the cache.
+// All side effects (cache write, SSE notification, snapshot) fire exactly once per fetch.
+func (h *Handler) coldFetch(sdkKey, key, target string) coldFetchResult {
+	// Defensive read: a prior singleflight group for this key may have just
+	// completed and populated the cache before we started.
+	if entry, ok := h.cache.Get(key); ok {
+		return coldFetchResult{entry: &entry, resultLabel: resultMiss}
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target, nil)
+	if err != nil {
+		h.logger.Error("proxy: build upstream request failed", slog.String("error", sanitizeErr(err).Error()))
+		return coldFetchResult{resultLabel: resultInternalError}
 	}
 
 	resp, err := h.client.Do(req)
@@ -160,16 +207,14 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 			slog.String("key", key),
 			slog.String("error", sanitizeErr(err).Error()),
 		)
-		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
-		return resultUpstreamError
+		return coldFetchResult{resultLabel: resultUpstreamError}
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		h.logger.Error("proxy: read upstream response failed", slog.String("error", err.Error()))
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return resultUpstreamError
+		return coldFetchResult{resultLabel: resultInternalError}
 	}
 
 	switch {
@@ -179,16 +224,14 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 		h.logger.Error("proxy: upstream returned 304 on cold fetch",
 			slog.String("key", key),
 		)
-		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
-		return resultUpstreamError
+		return coldFetchResult{resultLabel: resultUpstreamError}
 
 	case resp.StatusCode >= 500:
 		h.logger.Warn("proxy: upstream server error",
 			slog.String("key", key),
 			slog.Int("upstream_status", resp.StatusCode),
 		)
-		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
-		return resultUpstreamError
+		return coldFetchResult{resultLabel: resultUpstreamError}
 
 	case resp.StatusCode == http.StatusOK:
 		entry := cache.Entry{
@@ -207,16 +250,18 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 		if h.snapshotNotifier != nil {
 			h.snapshotNotifier.OnConfigCached(key, entry.ETag, body)
 		}
-		// Serve from the cached entry so headers match the cache-hit path.
-		h.serveFromCache(w, r, entry, sdkKey)
-		return "miss"
+		return coldFetchResult{entry: &entry, resultLabel: resultMiss}
 	}
 
 	// Pass through 4xx and non-200 2xx responses without caching.
-	copyHeader(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(body)
-	return "client_error"
+	headers := make(http.Header)
+	copyHeader(headers, resp.Header)
+	return coldFetchResult{
+		resultLabel: resultClientError,
+		statusCode:  resp.StatusCode,
+		headers:     headers,
+		body:        body,
+	}
 }
 
 // Fetcher performs background TTL revalidation requests against the upstream CDN.

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1052,5 +1053,165 @@ func TestHandler_SnapshotRestoredEntry_HydratesFetchURL(t *testing.T) {
 	got, _ := c.Get(key)
 	if got.FetchURL == "" {
 		t.Error("expected FetchURL to be hydrated on first SDK hit, got empty string")
+	}
+}
+
+// --- Singleflight deduplication tests ---
+
+// TestHandler_ColdMiss_Singleflight_OneUpstreamCall verifies that N concurrent
+// cold-miss requests for the same SDK key result in exactly one upstream call,
+// and that every waiter receives an identical 200 response.
+func TestHandler_ColdMiss_Singleflight_OneUpstreamCall(t *testing.T) {
+	const n = 8
+	var upstreamCalls atomic.Int64
+
+	called := make(chan struct{}, 1) // signals when the leader reaches upstream
+	unblock := make(chan struct{})   // closed to release the upstream handler
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls.Add(1)
+		select {
+		case called <- struct{}{}: // notify test that the leader is in-flight
+		default:
+		}
+		<-unblock
+		w.Header().Set("ETag", `"v1"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"flags":{}}`)
+	}))
+	defer upstream.Close()
+
+	h := newTestHandler(t, upstream)
+
+	responses := make([]*httptest.ResponseRecorder, n)
+	for i := range n {
+		responses[i] = httptest.NewRecorder()
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := range n {
+		rec := responses[i]
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+			h.ServeHTTP(rec, req)
+		}()
+	}
+
+	// Wait for the leader to be in-flight at the upstream, then give followers
+	// time to queue behind the singleflight group before releasing.
+	<-called
+	time.Sleep(50 * time.Millisecond)
+	close(unblock)
+	wg.Wait()
+
+	if got := upstreamCalls.Load(); got != 1 {
+		t.Errorf("expected exactly 1 upstream call, got %d", got)
+	}
+	for i, rec := range responses {
+		if rec.Code != http.StatusOK {
+			t.Errorf("response[%d]: expected 200, got %d", i, rec.Code)
+		}
+		if rec.Body.String() != `{"flags":{}}` {
+			t.Errorf("response[%d]: unexpected body %q", i, rec.Body.String())
+		}
+	}
+}
+
+// TestHandler_ColdMiss_Singleflight_ErrorShared verifies that when the upstream
+// returns 5xx, all concurrent waiters for the same key each receive a 503.
+func TestHandler_ColdMiss_Singleflight_ErrorShared(t *testing.T) {
+	const n = 4
+
+	called := make(chan struct{}, 1)
+	unblock := make(chan struct{})
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case called <- struct{}{}:
+		default:
+		}
+		<-unblock
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+
+	h := newTestHandler(t, upstream)
+
+	responses := make([]*httptest.ResponseRecorder, n)
+	for i := range n {
+		responses[i] = httptest.NewRecorder()
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := range n {
+		rec := responses[i]
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+			h.ServeHTTP(rec, req)
+		}()
+	}
+
+	<-called
+	time.Sleep(50 * time.Millisecond)
+	close(unblock)
+	wg.Wait()
+
+	for i, rec := range responses {
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("response[%d]: expected 503, got %d", i, rec.Code)
+		}
+	}
+}
+
+// TestHandler_ColdMiss_Singleflight_SideEffectsOnce verifies that side effects
+// (snapshotNotifier.OnConfigCached) fire exactly once even when N concurrent
+// goroutines share a single cold-miss upstream fetch via singleflight.
+func TestHandler_ColdMiss_Singleflight_SideEffectsOnce(t *testing.T) {
+	const n = 6
+
+	called := make(chan struct{}, 1)
+	unblock := make(chan struct{})
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case called <- struct{}{}:
+		default:
+		}
+		<-unblock
+		w.Header().Set("ETag", `"v1"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"flags":{}}`)
+	}))
+	defer upstream.Close()
+
+	notifier := &mockSnapshotNotifier{}
+	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, notifier, nil, nil, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for range n {
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+			h.ServeHTTP(httptest.NewRecorder(), req)
+		}()
+	}
+
+	<-called
+	time.Sleep(50 * time.Millisecond)
+	close(unblock)
+	wg.Wait()
+
+	notifier.mu.Lock()
+	defer notifier.mu.Unlock()
+	if len(notifier.calls) != 1 {
+		t.Errorf("expected snapshotNotifier called exactly once, got %d calls", len(notifier.calls))
 	}
 }
