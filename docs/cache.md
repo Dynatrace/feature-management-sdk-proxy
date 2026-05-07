@@ -94,6 +94,12 @@ The rewritten URL is derived from the incoming HTTP request — no static `PROXY
 
 The scheme is resolved from `X-Forwarded-Proto`, then `r.TLS`, then defaults to `http`. A malformed `Host` header is replaced with `unknown` and a warning is logged.
 
+## Cold-Miss Deduplication
+
+When multiple SDK instances cold-start simultaneously, concurrent requests for the same uncached SDK key are deduplicated via `singleflight`. Only one upstream CDN call is made; all waiting goroutines share the result. Side effects (`cache.Set`, SSE notification, snapshot write) fire exactly once per dedup batch.
+
+This eliminates the cold-start stampede: N×M upstream requests become 1×M, where M is the number of distinct SDK keys.
+
 ## 503 on Uncached Miss During Outage
 
 When a request arrives for an SDK key with no cache entry and the upstream CDN is unreachable, the proxy returns **503**. It never returns an empty payload — an empty response is indistinguishable from a legitimately empty flag set and would disable all flags for connected SDKs.
