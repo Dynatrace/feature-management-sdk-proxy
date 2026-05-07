@@ -28,7 +28,7 @@ type Manager struct {
 	logger    *slog.Logger
 	lifecycle func(Event) bool // optional; set via SetLifecycleHandler
 
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	conns map[string]*keyState
 }
 
@@ -225,6 +225,22 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// HasSubscribers implements cache.Liveness. It returns true when at least one
+// SDK client has an active SSE subscription for keyHash. An active subscriber
+// is treated as a liveness signal — the entry must not be evicted while clients
+// are connected.
+func (m *Manager) HasSubscribers(keyHash string) bool {
+	m.mu.RLock()
+	state, ok := m.conns[keyHash]
+	m.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	state.subsMu.Lock()
+	defer state.subsMu.Unlock()
+	return len(state.subs) > 0
 }
 
 // RefreshInterval implements cache.RefreshIntervalProvider. It returns

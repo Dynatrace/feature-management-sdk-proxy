@@ -8,25 +8,26 @@ import (
 
 // Instrument name constants — all proxy metrics are defined here.
 const (
-	RequestsTotal             = "proxy.requests.total"
-	SSEConnections            = "proxy.sse.connections"
-	SSEClientConnections      = "proxy.sse.client.connections"
-	SSEEventsDelivered        = "proxy.sse.events_delivered_total"
-	SSEUpstreamReconnects     = "proxy.sse.upstream.reconnects"
-	SSEUpstreamEvents         = "proxy.sse.upstream.events"
-	CacheSize                 = "proxy.cache.size"
-	SnapshotAgeSeconds        = "proxy.snapshot.age_seconds"
-	BillingFlushTotal         = "proxy.billing.flush.total"
-	BillingBufferSize         = "proxy.billing.buffer.size"
-	BillingFlushLag           = "proxy.billing.flush.lag_seconds"
-	BillingRetryBufferDropped = "proxy.billing.retry_buffer.dropped_total"
-	StartupPath               = "proxy.startup.path"
-	SnapshotWritesTotal       = "proxy.snapshot.writes.total"
-	ConfigSSERewriteTotal     = "proxy.config.sse_rewrite_total"
-	SnapshotLoadTotal         = "proxy.snapshot.load.total"
-	SnapshotWriteQueueDropped = "proxy.snapshot.write_queue.dropped_total"
-	LifecycleEventsTotal      = "proxy.lifecycle.events_total"
-	LifecycleInvalidatedKeys  = "proxy.lifecycle.invalidated_keys_total"
+	RequestsTotal                 = "proxy.requests.total"
+	SSEConnections                = "proxy.sse.connections"
+	SSEClientConnections          = "proxy.sse.client.connections"
+	SSEEventsDelivered            = "proxy.sse.events_delivered_total"
+	SSEUpstreamReconnects         = "proxy.sse.upstream.reconnects"
+	SSEUpstreamEvents             = "proxy.sse.upstream.events"
+	CacheSize                     = "proxy.cache.size"
+	SnapshotAgeSeconds            = "proxy.snapshot.age_seconds"
+	BillingFlushTotal             = "proxy.billing.flush.total"
+	BillingBufferSize             = "proxy.billing.buffer.size"
+	BillingFlushLag               = "proxy.billing.flush.lag_seconds"
+	BillingRetryBufferDropped     = "proxy.billing.retry_buffer.dropped_total"
+	StartupPath                   = "proxy.startup.path"
+	SnapshotWritesTotal           = "proxy.snapshot.writes.total"
+	ConfigSSERewriteTotal         = "proxy.config.sse_rewrite_total"
+	SnapshotLoadTotal             = "proxy.snapshot.load.total"
+	SnapshotWriteQueueDropped     = "proxy.snapshot.write_queue.dropped_total"
+	LifecycleEventsTotal          = "proxy.lifecycle.events_total"
+	LifecycleInvalidatedKeys      = "proxy.lifecycle.invalidated_keys_total"
+	CacheInactivityEvictionsTotal = "proxy.cache.inactivity_evictions.total"
 )
 
 // Instruments holds every OTel instrument the proxy emits. Obtain one via Register.
@@ -104,6 +105,9 @@ type Instruments struct {
 
 	// LifecycleInvalidatedKeys counts keys invalidated by lifecycle events, labeled by event_type.
 	LifecycleInvalidatedKeys metric.Int64Counter
+
+	// CacheInactivityEvictionsTotal counts cache entries evicted by the inactivity sweeper.
+	CacheInactivityEvictionsTotal metric.Int64Counter
 }
 
 // Register creates all metric instruments against meter. Call once at startup and
@@ -262,25 +266,34 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("metrics: register %s: %w", LifecycleInvalidatedKeys, err)
 	}
 
+	cacheInactivityEvictions, err := meter.Int64Counter(CacheInactivityEvictionsTotal,
+		metric.WithDescription("Cache entries evicted by the inactivity sweeper (idle for longer than CACHE_INACTIVITY_EVICT_AFTER)"),
+		metric.WithUnit("{entry}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", CacheInactivityEvictionsTotal, err)
+	}
+
 	return &Instruments{
-		RequestsTotal:             reqTotal,
-		SSEConnections:            sseConns,
-		SSEClientConnections:      sseClientConns,
-		SSEEventsDelivered:        sseEventsDelivered,
-		SSEUpstreamReconnects:     sseReconnects,
-		SSEUpstreamEvents:         sseEvents,
-		CacheSize:                 cacheSize,
-		SnapshotAgeSeconds:        snapshotAge,
-		BillingFlushTotal:         billingFlush,
-		BillingBufferSize:         billingBuf,
-		BillingFlushLag:           billingLag,
-		StartupPath:               startupPath,
-		SnapshotWritesTotal:       snapshotWrites,
-		ConfigSSERewriteTotal:     sseRewrite,
-		BillingRetryBufferDropped: retryBufDropped,
-		SnapshotLoadTotal:         snapshotLoadTotal,
-		SnapshotWriteQueueDropped: snapshotWriteQueueDropped,
-		LifecycleEventsTotal:      lifecycleEventsTotal,
-		LifecycleInvalidatedKeys:  lifecycleInvalidatedKeys,
+		RequestsTotal:                 reqTotal,
+		SSEConnections:                sseConns,
+		SSEClientConnections:          sseClientConns,
+		SSEEventsDelivered:            sseEventsDelivered,
+		SSEUpstreamReconnects:         sseReconnects,
+		SSEUpstreamEvents:             sseEvents,
+		CacheSize:                     cacheSize,
+		SnapshotAgeSeconds:            snapshotAge,
+		BillingFlushTotal:             billingFlush,
+		BillingBufferSize:             billingBuf,
+		BillingFlushLag:               billingLag,
+		StartupPath:                   startupPath,
+		SnapshotWritesTotal:           snapshotWrites,
+		ConfigSSERewriteTotal:         sseRewrite,
+		BillingRetryBufferDropped:     retryBufDropped,
+		SnapshotLoadTotal:             snapshotLoadTotal,
+		SnapshotWriteQueueDropped:     snapshotWriteQueueDropped,
+		LifecycleEventsTotal:          lifecycleEventsTotal,
+		LifecycleInvalidatedKeys:      lifecycleInvalidatedKeys,
+		CacheInactivityEvictionsTotal: cacheInactivityEvictions,
 	}, nil
 }

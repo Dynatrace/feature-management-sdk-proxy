@@ -435,3 +435,56 @@ func TestManager_RefreshInterval_AfterClose(t *testing.T) {
 		t.Errorf("RefreshInterval for non-streaming state = %v, want %v", d, cache.RefreshIntervalDisconnected)
 	}
 }
+
+func TestManager_HasSubscribers_NoSubscribers(t *testing.T) {
+	m := newTestManager(t, nil)
+	keyHash := cache.Key("dt_server_us_abc123")
+
+	if m.HasSubscribers(keyHash) {
+		t.Error("expected false for key with no subscribers")
+	}
+}
+
+func TestManager_HasSubscribers_UnknownKey(t *testing.T) {
+	m := newTestManager(t, nil)
+	if m.HasSubscribers("completely-unknown") {
+		t.Error("expected false for unknown key")
+	}
+}
+
+func TestManager_HasSubscribers_WithSubscriber(t *testing.T) {
+	m := newTestManager(t, nil)
+	keyHash := cache.Key("dt_server_us_abc123")
+
+	_, unsubscribe := m.Subscribe(keyHash)
+	defer unsubscribe()
+
+	if !m.HasSubscribers(keyHash) {
+		t.Error("expected true when subscriber is active")
+	}
+}
+
+func TestManager_HasSubscribers_AfterUnsubscribe(t *testing.T) {
+	m := newTestManager(t, nil)
+	keyHash := cache.Key("dt_server_us_abc123")
+
+	_, unsubscribe := m.Subscribe(keyHash)
+	unsubscribe()
+
+	if m.HasSubscribers(keyHash) {
+		t.Error("expected false after unsubscribe")
+	}
+}
+
+func TestManager_HasSubscribers_AfterClose(t *testing.T) {
+	m := newTestManager(t, nil)
+	keyHash := cache.Key("dt_server_us_abc123")
+
+	_, unsubscribe := m.Subscribe(keyHash)
+	defer unsubscribe()
+	m.Close(keyHash)
+
+	if m.HasSubscribers(keyHash) {
+		t.Error("expected false after Close (state removed from conns)")
+	}
+}

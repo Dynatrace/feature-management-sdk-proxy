@@ -31,5 +31,6 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable metric export. The exporter pushes e
 | `proxy.startup.path` | Counter | `{startup}` | `path` | Startup count by path. `path`: `cold`, `snapshot`, `snapshot_stale`, `empty_persistence_cold`, `backend_unreachable` (see [snapshot.md](snapshot.md)) |
 | `proxy.lifecycle.events_total` | Counter | `{event}` | `event_type`, `result` | Lifecycle SSE events received. `result`: `handled`, `malformed` |
 | `proxy.lifecycle.invalidated_keys_total` | Counter | `{key}` | `event_type` | Keys invalidated by lifecycle events |
+| `proxy.cache.inactivity_evictions.total` | Counter | `{entry}` | — | Cache entries evicted by the inactivity sweeper (idle for longer than `CACHE_INACTIVITY_EVICT_AFTER`) |
 
 See [monitoring.md](monitoring.md) for guidance on interpreting these metrics by operator concern.

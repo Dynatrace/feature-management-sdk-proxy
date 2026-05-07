@@ -412,3 +412,66 @@ func TestFromEnv_SSEDisabled_Invalid(t *testing.T) {
 		t.Fatal("expected error for invalid SSE_DISABLED value")
 	}
 }
+
+func TestFromEnv_CacheInactivityEvictAfter_Default(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.CacheInactivityEvictAfter != 48*time.Hour {
+		t.Errorf("CacheInactivityEvictAfter default = %v, want 48h", cfg.CacheInactivityEvictAfter)
+	}
+}
+
+func TestFromEnv_CacheInactivityEvictAfter_CustomValue(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("CACHE_INACTIVITY_EVICT_AFTER", "72h")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.CacheInactivityEvictAfter != 72*time.Hour {
+		t.Errorf("CacheInactivityEvictAfter = %v, want 72h", cfg.CacheInactivityEvictAfter)
+	}
+}
+
+func TestFromEnv_CacheInactivityEvictAfter_ZeroDisables(t *testing.T) {
+	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+	t.Setenv("CACHE_INACTIVITY_EVICT_AFTER", "0")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.CacheInactivityEvictAfter != 0 {
+		t.Errorf("CacheInactivityEvictAfter with 0 = %v, want 0", cfg.CacheInactivityEvictAfter)
+	}
+}
+
+func TestFromEnv_CacheInactivityEvictAfter_Invalid(t *testing.T) {
+	cases := []string{"abc", "-1h", "-5m"}
+	for _, v := range cases {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+			t.Setenv("CACHE_INACTIVITY_EVICT_AFTER", v)
+			_, err := FromEnv()
+			if err == nil {
+				t.Errorf("expected error for CACHE_INACTIVITY_EVICT_AFTER=%q", v)
+			}
+		})
+	}
+}
+
+func TestFromEnv_CacheInactivityEvictAfter_TooShort(t *testing.T) {
+	cases := []string{"30m", "59m", "1s"}
+	for _, v := range cases {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
+			t.Setenv("CACHE_INACTIVITY_EVICT_AFTER", v)
+			_, err := FromEnv()
+			if err == nil {
+				t.Errorf("expected error for CACHE_INACTIVITY_EVICT_AFTER=%q (shorter than sweep interval)", v)
+			}
+		})
+	}
+}

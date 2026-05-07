@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -42,14 +43,24 @@ func (e Entry) IsStale(now time.Time, interval time.Duration) bool {
 }
 
 // Cache is a thread-safe in-memory store keyed by SHA-256(sdk_key)[:16].
+//
+// Last-access tracking: each entry carries a last-access timestamp stored as an
+// atomic.Int64 (Unix nanoseconds). The pointer into lastAccess is read under
+// mu.RLock (safe map lookup), but the int64 value itself is updated atomically
+// so that Get can touch the timestamp on every cache hit without upgrading to a
+// write lock. This keeps Get lock-free after the initial pointer lookup.
 type Cache struct {
-	mu      sync.RWMutex
-	entries map[string]Entry
+	mu         sync.RWMutex
+	entries    map[string]Entry
+	lastAccess map[string]*atomic.Int64
 }
 
 // New returns an empty Cache.
 func New() *Cache {
-	return &Cache{entries: make(map[string]Entry)}
+	return &Cache{
+		entries:    make(map[string]Entry),
+		lastAccess: make(map[string]*atomic.Int64),
+	}
 }
 
 // Key returns the safe opaque cache key for the given SDK key.
@@ -59,19 +70,31 @@ func Key(sdkKey string) string {
 	return fmt.Sprintf("%x", h[:8])
 }
 
-// Get retrieves an entry. Returns false when the key is absent.
+// Get retrieves an entry and refreshes its last-access timestamp. Returns false when the key is absent.
 func (c *Cache) Get(key string) (Entry, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	e, ok := c.entries[key]
+	if ok {
+		if la, exists := c.lastAccess[key]; exists {
+			la.Store(time.Now().UnixNano())
+		}
+	}
 	return e, ok
 }
 
-// Set stores or replaces an entry.
+// Set stores or replaces an entry and initializes its last-access timestamp.
 func (c *Cache) Set(key string, e Entry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[key] = e
+	if la, exists := c.lastAccess[key]; exists {
+		la.Store(time.Now().UnixNano())
+	} else {
+		la := &atomic.Int64{}
+		la.Store(time.Now().UnixNano())
+		c.lastAccess[key] = la
+	}
 }
 
 // Delete removes the entry for key. It is a no-op when the key is absent.
@@ -79,6 +102,39 @@ func (c *Cache) Delete(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.entries, key)
+	delete(c.lastAccess, key)
+}
+
+// LastAccess returns the last time the entry for key was accessed via Get or Set.
+// Returns the zero time when key is not present.
+func (c *Cache) LastAccess(key string) time.Time {
+	c.mu.RLock()
+	la, exists := c.lastAccess[key]
+	c.mu.RUnlock()
+	if !exists {
+		return time.Time{}
+	}
+	return time.Unix(0, la.Load())
+}
+
+// DeleteIfInactiveSince atomically deletes the entry for key only if its
+// last-access time is strictly before cutoff. Returns true if the entry was
+// deleted. Returns false when the key is absent, was recently accessed, or
+// has an active subscriber that bumped its timestamp between the caller's
+// check and this call.
+func (c *Cache) DeleteIfInactiveSince(key string, cutoff time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	la, exists := c.lastAccess[key]
+	if !exists {
+		return false
+	}
+	if !time.Unix(0, la.Load()).Before(cutoff) {
+		return false
+	}
+	delete(c.entries, key)
+	delete(c.lastAccess, key)
+	return true
 }
 
 // ResetTTL updates the FetchedAt timestamp for an existing entry without

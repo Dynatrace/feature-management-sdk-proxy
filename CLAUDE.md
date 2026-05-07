@@ -128,6 +128,10 @@ Four paths: `cold` (no backend), `snapshot` (fresh), `snapshot_stale` (age > `SN
 
 `tokenRotated`, `stageDeleted`, and `projectDeleted` → evict cache entry + close upstream SSE connection for the affected key. See [`docs/monitoring.md`](docs/monitoring.md).
 
+### Inactivity Eviction
+
+The inactivity sweeper is a GC path that mirrors lifecycle invalidation: **cache entry + upstream SSE connection + persisted snapshot** are all removed for keys that have been idle for longer than `CACHE_INACTIVITY_EVICT_AFTER` (default 48h). A key is idle when `Cache.LastAccess` is past the threshold AND `sse.Manager.HasSubscribers` returns false. Never evict a key with active downstream SSE subscribers — that connection is the liveness signal. See [`docs/cache.md`](docs/cache.md).
+
 ### Health Probes
 
 `/live` always 200. `/ready` and `/health` return 200 after snapshot load completes (or immediately if no persistence), 503 otherwise. Never route traffic before `/ready` returns 200. See [`docs/monitoring.md`](docs/monitoring.md).

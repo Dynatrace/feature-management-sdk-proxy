@@ -56,6 +56,15 @@ SNAPSHOT_S3_PREFIX=prod/
 SNAPSHOT_MAX_AGE=24h   # snapshots older than this are considered stale at startup
 ```
 
+## Deletion Behavior
+
+Snapshots are deleted in two cases:
+
+- **Lifecycle invalidation** — a `tokenRotated`, `stageDeleted`, or `projectDeleted` event arrives via the upstream SSE lifecycle stream for a key.
+- **Inactivity eviction** — the inactivity sweeper determines that a key has had no HTTP access and no active SSE subscribers for longer than `CACHE_INACTIVITY_EVICT_AFTER` (default 48h). See [cache.md](cache.md) for details.
+
+Both paths use the same delete operation: the in-memory cache entry is removed, the upstream SSE connection is closed, and the persisted snapshot is deleted. A subsequent request for the evicted key is treated as a cold miss — the proxy fetches fresh config from CDN and writes a new snapshot.
+
 ## Write Behavior
 
 Snapshots are written asynchronously after each cache update. A snapshot write failure is logged and counted (`proxy.snapshot.writes.total{result="failure"}`) but never fails an SDK request or delays the response.

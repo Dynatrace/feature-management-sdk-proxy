@@ -69,20 +69,29 @@ type Config struct {
 	// is empty; setting SNAPSHOT_MAX_AGE without SNAPSHOT_BACKEND is an error.
 	// Env: SNAPSHOT_MAX_AGE, default 24h, must be > 0.
 	SnapshotMaxAge time.Duration
+
+	// CacheInactivityEvictAfter is how long an SDK key must be idle (no HTTP
+	// requests and no active SSE subscribers) before the inactivity sweeper
+	// evicts it. Eviction removes the in-memory cache entry, closes the upstream
+	// SSE connection, and deletes the persisted snapshot (same path as lifecycle
+	// invalidation). Set to 0 to disable the sweeper entirely.
+	// Env: CACHE_INACTIVITY_EVICT_AFTER, default 48h.
+	CacheInactivityEvictAfter time.Duration
 }
 
 // FromEnv loads configuration from environment variables.
 // CDN_BASE_DOMAIN is required; all others have defaults.
 func FromEnv() (Config, error) {
 	cfg := Config{
-		Port:                   8080,
-		LogLevel:               slog.LevelInfo,
-		ShutdownTimeout:        30 * time.Second,
-		BillingFlushInterval:   60 * time.Second,
-		BillingRetryBufferSize: 1000,
-		LifecycleKeysCap:       10000,
-		SnapshotWriteQueueSize: 256,
-		SnapshotMaxAge:         24 * time.Hour,
+		Port:                      8080,
+		LogLevel:                  slog.LevelInfo,
+		ShutdownTimeout:           30 * time.Second,
+		BillingFlushInterval:      60 * time.Second,
+		BillingRetryBufferSize:    1000,
+		LifecycleKeysCap:          10000,
+		SnapshotWriteQueueSize:    256,
+		SnapshotMaxAge:            24 * time.Hour,
+		CacheInactivityEvictAfter: 48 * time.Hour,
 	}
 
 	if v := os.Getenv("PORT"); v != "" {
@@ -219,6 +228,18 @@ func FromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("invalid SNAPSHOT_MAX_AGE %q: must be a positive duration (e.g. 24h)", v)
 		}
 		cfg.SnapshotMaxAge = d
+	}
+
+	if v := os.Getenv("CACHE_INACTIVITY_EVICT_AFTER"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 {
+			return Config{}, fmt.Errorf("invalid CACHE_INACTIVITY_EVICT_AFTER %q: must be a non-negative duration (e.g. 48h); use 0 to disable", v)
+		}
+		// The sweeper runs every 1h; values shorter than 1h would never fire.
+		if d > 0 && d < time.Hour {
+			return Config{}, fmt.Errorf("invalid CACHE_INACTIVITY_EVICT_AFTER %q: minimum non-zero value is 1h (sweeper runs hourly); use 0 to disable", v)
+		}
+		cfg.CacheInactivityEvictAfter = d
 	}
 
 	return cfg, nil
