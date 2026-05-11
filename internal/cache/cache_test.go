@@ -161,7 +161,7 @@ type mockFetcher struct {
 	err     error
 }
 
-func (m *mockFetcher) Fetch(_ context.Context, fetchURL, _ string) (FetchResult, error) {
+func (m *mockFetcher) Fetch(_ context.Context, _, fetchURL, _ string) (FetchResult, error) {
 	m.calls = append(m.calls, fetchURL)
 	if m.err != nil {
 		return FetchResult{}, m.err

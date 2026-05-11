@@ -12,9 +12,12 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
+	"go.opentelemetry.io/otel/propagation"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
 	"github.com/dynatrace/sdk-proxy/internal/config"
@@ -25,6 +28,7 @@ import (
 	"github.com/dynatrace/sdk-proxy/internal/snapshot"
 	"github.com/dynatrace/sdk-proxy/internal/sse"
 	"github.com/dynatrace/sdk-proxy/internal/telemetry"
+	"github.com/dynatrace/sdk-proxy/internal/tracing"
 )
 
 func main() {
@@ -48,9 +52,16 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	// Set up OTel metrics. Gate on OTEL_EXPORTER_OTLP_ENDPOINT; fall back to no-op
-	// so components can record metrics unconditionally without nil checks.
+	// Install W3C TraceContext propagator globally so incoming traceparent headers
+	// are honoured when extracting context in ServeHTTP handlers.
+	// Baggage propagation is intentionally omitted: SDK clients are untrusted and
+	// arbitrary baggage headers would bloat every span.
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+	// Set up OTel metrics and traces. Gate both on OTEL_EXPORTER_OTLP_ENDPOINT; fall
+	// back to no-op so components can record telemetry unconditionally without nil checks.
 	var meter = noop.NewMeterProvider().Meter("github.com/dynatrace/sdk-proxy")
+	var tracer = tracenoop.NewTracerProvider().Tracer("github.com/dynatrace/sdk-proxy")
 	if cfg.OTLPEnabled {
 		mp, err := metrics.NewProvider(ctx)
 		if err != nil {
@@ -64,6 +75,20 @@ func run() error {
 			}
 		}()
 		meter = mp.Meter("github.com/dynatrace/sdk-proxy")
+
+		tp, err := tracing.NewProvider(ctx)
+		if err != nil {
+			return fmt.Errorf("tracing: %w", err)
+		}
+		defer func() {
+			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := tp.Shutdown(shutCtx); err != nil {
+				slog.Error("tracing: shutdown failed", slog.String("error", err.Error()))
+			}
+		}()
+		tracer = tp.Tracer("github.com/dynatrace/sdk-proxy")
+		logger.Info("tracing: enabled, exporting via OTLP/HTTP")
 	}
 
 	inst, err := metrics.Register(meter)
@@ -145,6 +170,7 @@ func run() error {
 			},
 		}
 		sseManager = sse.New(sseClient, inst, logger)
+		sseManager.SetTracer(tracer)
 
 		// Wire lifecycle invalidation: on tokenRotated/stageDeleted/projectDeleted events,
 		// drop the cache entry, close SSE fan-out, and (if persistence is configured)
@@ -166,15 +192,23 @@ func run() error {
 	flusher := telemetry.NewFlusher(counter, logReporter, telemetry.NewBoundedRetryBuffer(cfg.BillingRetryBufferSize, inst, logger), inst, cfg.BillingFlushInterval, logger)
 
 	// snapshotWriter is nil when persistence is disabled; proxy.New accepts nil.
-	proxyClient := &http.Client{Timeout: 30 * time.Second}
-	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, snapshotWriter, inst, counter, logger)
+	// Both clients wrap the transport with tracing.NewTransport so CDN HTTP calls
+	// appear as child spans of proxy.cold_fetch and proxy.refresh_fetch respectively.
+	proxyClient := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: tracing.NewTransport(nil, tracer),
+	}
+	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, snapshotWriter, inst, counter, logger, tracer)
 	if err != nil {
 		return fmt.Errorf("proxy: %w", err)
 	}
 
 	// Background refresher uses a separate 5s client — intentionally shorter than
 	// the minimum poll interval (10s) to prevent overlapping requests.
-	refreshClient := &http.Client{Timeout: 5 * time.Second}
+	refreshClient := &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: tracing.NewTransport(nil, tracer),
+	}
 	refreshFetcher := proxy.NewFetcher(refreshClient, logger)
 
 	// Use a true nil interface (not a typed-nil *sse.Manager) so the handler can
@@ -184,6 +218,7 @@ func run() error {
 		sseSubscriber = sseManager
 	}
 	sseHandler := sse.NewHandler(flagCache, sseSubscriber, inst, counter, logger, 15*time.Second, configHandlerPath)
+	sseHandler.SetTracer(tracer)
 
 	// ReadyFunc gates /ready on snapshot load completion.
 	probeHandlers := health.New(func() bool { return snapshotReady }, logger)
@@ -220,6 +255,7 @@ func run() error {
 	if sseManager != nil {
 		refresher.SetIntervalProvider(sseManager)
 	}
+	refresher.SetTracer(tracer)
 	go refresher.Run(ctx)
 
 	// Inactivity sweeper: evict cache entries (cache + SSE + snapshot) that have

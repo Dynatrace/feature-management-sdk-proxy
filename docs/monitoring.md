@@ -2,7 +2,7 @@
 
 This guide is organized by operator concern. Each section describes what normal behavior looks like, what to watch for, and which metrics to track. For the full metric reference, see [telemetry.md](telemetry.md).
 
-Configure your OTel exporter to collect metrics — see [telemetry.md](telemetry.md) for setup.
+Configure your OTel exporter to collect metrics and traces — see [telemetry.md](telemetry.md) for setup.
 
 ---
 

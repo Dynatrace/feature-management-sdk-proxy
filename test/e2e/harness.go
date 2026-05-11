@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/metric/noop"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
 	"github.com/dynatrace/sdk-proxy/internal/health"
@@ -157,6 +158,7 @@ func New(t *testing.T, opts Options) (*Harness, error) {
 		inst,
 		counter,
 		logger,
+		tracenoop.NewTracerProvider().Tracer("test"),
 	)
 	if err != nil {
 		cancel()

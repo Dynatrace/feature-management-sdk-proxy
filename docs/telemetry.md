@@ -1,16 +1,17 @@
 # Telemetry
 
-The proxy emits [OpenTelemetry](https://opentelemetry.io/) metrics via OTLP/gRPC. When no exporter is configured, metrics are sent to a no-op provider and discarded — the proxy runs without an OTel collector.
+The proxy emits [OpenTelemetry](https://opentelemetry.io/) metrics and distributed traces via OTLP/HTTP. When no exporter is configured, both are sent to a no-op provider and discarded — the proxy runs without an OTel collector.
 
 ## Configuring the Exporter
 
-Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable metric export. The exporter pushes every **30 seconds** over gRPC without TLS (in-cluster collector assumed).
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable export. Metrics push every **30 seconds**; traces are batched and flushed continuously. Both use HTTP/protobuf transport (required by Dynatrace).
 
 | Variable | Effect |
 |---|---|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector endpoint (e.g. `http://otel-collector:4317`). Required to enable export. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector endpoint (e.g. `http://otel-collector:4318`). Required to enable export. |
 | `OTEL_SERVICE_NAME` | Override the service name. Defaults to `sdk-proxy`. |
-| `OTEL_RESOURCE_ATTRIBUTES` | Comma-separated key=value pairs added to all metrics (e.g. `env=prod,region=us-east-1`). |
+| `OTEL_RESOURCE_ATTRIBUTES` | Comma-separated key=value pairs added to all metrics and traces (e.g. `env=prod,region=us-east-1`). |
+| `OTEL_TRACES_SAMPLER` | Sampling strategy for traces (default: `parentbased_always_on`). See [OTel SDK docs](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/#general-sdk-configuration). |
 
 ## Metrics Reference
 
@@ -34,3 +35,27 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable metric export. The exporter pushes e
 | `proxy.cache.inactivity_evictions.total` | Counter | `{entry}` | — | Cache entries evicted by the inactivity sweeper (idle for longer than `CACHE_INACTIVITY_EVICT_AFTER`) |
 
 See [monitoring.md](monitoring.md) for guidance on interpreting these metrics by operator concern.
+
+## Tracing
+
+The proxy emits distributed traces via OTLP/HTTP (same `OTEL_EXPORTER_OTLP_ENDPOINT` as metrics). Traces are structured to match the cache relationship correctly: when a request is served from cache, the serving span uses a **Span Link** (not a parent-child relationship) to reference the original upstream fetch span.
+
+### Span Catalogue
+
+| Span name | Where | Key attributes |
+|-----------|-------|----------------|
+| `GET /server/{sdk_key}.json` | Proxy handler — every SDK config request (name follows OTel HTTP server semconv: `{method} {route}`) | `http.request.method`, `http.route`, `sdk_key_hash`, `result` (`hit`, `miss`, `upstream_error`, `client_error`) |
+| `proxy.serve_cache_hit` | Serving a cached entry — child of `GET /server/` with a **Span Link** to the originating fetch when available | `sdk_key_hash`, `result` |
+| `proxy.cold_fetch` | Upstream CDN fetch on a cache miss — child of `GET /server/` | `sdk_key_hash`, `upstream.status_code`, `result` |
+| `GET` | CDN HTTP call — child of `proxy.cold_fetch` or `proxy.refresh_fetch`; `url.full` is intentionally omitted (URL contains raw SDK key) | `http.request.method`, `server.address`, `http.response.status_code` |
+| `proxy.refresh_fetch` | Background TTL revalidation fetch — standalone (not tied to any client request) | `sdk_key_hash`, `if_none_match`, `result` |
+| `sse.upstream.connect` | One span per upstream SSE connect attempt — reconnects emit separate spans | `sdk_key_hash`, `reconnect.reason`, `streaming` |
+| `sse.client.subscribe` | SSE client connection setup phase (auth + cache gate + headers sent) | `sdk_key_hash`, `outcome` (`200_connected`, `412_no_config`, `500_no_flusher`) |
+
+### Span Link: cache hit → originating fetch
+
+The `proxy.serve_cache_hit` span includes a Span Link pointing to the `proxy.cold_fetch` (or `proxy.refresh_fetch`) span that originally populated the cache entry. This correctly models the cache relationship: the serving request did not cause the upstream fetch, but is correlated with it. The link is present only when the entry was fetched while tracing was active. In Dynatrace, span links appear under **Related spans** on the span detail view.
+
+### W3C Trace Context propagation
+
+The proxy extracts W3C `traceparent` / `tracestate` headers from incoming SDK requests. If the SDK has its own tracer configured, the proxy spans will appear as children of the SDK's trace in Dynatrace.

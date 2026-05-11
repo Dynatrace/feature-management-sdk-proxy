@@ -11,14 +11,18 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
 	"github.com/dynatrace/sdk-proxy/internal/metrics"
 	"github.com/dynatrace/sdk-proxy/internal/sse"
 	"github.com/dynatrace/sdk-proxy/internal/telemetry"
+	"github.com/dynatrace/sdk-proxy/internal/tracing"
 )
 
 const (
@@ -69,6 +73,7 @@ type Handler struct {
 	inst             *metrics.Instruments
 	counter          *telemetry.Counter
 	logger           *slog.Logger
+	tracer           trace.Tracer
 	sfGroup          singleflight.Group
 }
 
@@ -77,11 +82,11 @@ type Handler struct {
 // sseManager and snapshotNotifier may be nil; when non-nil, they are notified
 // after each successful cold fetch. inst and counter may be nil; metrics and
 // counting are silently skipped.
-func New(cdnBaseDomain string, client *http.Client, c *cache.Cache, sseManager *sse.Manager, snapshotNotifier SnapshotNotifier, inst *metrics.Instruments, counter *telemetry.Counter, logger *slog.Logger) (*Handler, error) {
+func New(cdnBaseDomain string, client *http.Client, c *cache.Cache, sseManager *sse.Manager, snapshotNotifier SnapshotNotifier, inst *metrics.Instruments, counter *telemetry.Counter, logger *slog.Logger, t trace.Tracer) (*Handler, error) {
 	if cdnBaseDomain == "" || strings.Contains(cdnBaseDomain, "://") || strings.Contains(cdnBaseDomain, "/") {
 		return nil, fmt.Errorf("proxy: invalid CDN base domain %q: must be a bare hostname (e.g. fm.dynatracelabs.com)", cdnBaseDomain)
 	}
-	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, sseManager: sseManager, snapshotNotifier: snapshotNotifier, inst: inst, counter: counter, logger: logger}, nil
+	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, sseManager: sseManager, snapshotNotifier: snapshotNotifier, inst: inst, counter: counter, logger: logger, tracer: t}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +110,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	key := cache.Key(sdkKey)
 
+	// Extract W3C trace context from the incoming request so upstream tracestate
+	// is honoured when the SDK has its own tracer configured.
+	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+	ctx, span := h.tracer.Start(ctx, r.Method+" /server/{sdk_key}.json",
+		trace.WithSpanKind(trace.SpanKindServer),
+		trace.WithAttributes(
+			attribute.String("http.request.method", r.Method),
+			attribute.String("http.route", "/server/{sdk_key}.json"),
+			tracing.SDKKeyHash(key),
+		))
+	defer span.End()
+
 	// Count every request with a recognized SDK key, regardless of whether it
 	// hits the cache or reaches upstream. Cache hits, cache misses, upstream
 	// errors (503), and HEAD requests all reflect real SDK usage.
@@ -114,13 +131,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if entry, ok := h.cache.Get(key); ok {
 		h.logger.Debug("proxy: cache hit", slog.String("key", key))
-		h.serveFromCache(w, r, entry, sdkKey)
-		h.recordResult(r.Context(), "hit")
+		h.serveCacheHit(ctx, w, r, entry, sdkKey, key)
+		h.recordResult(ctx, "hit")
+		span.SetAttributes(attribute.String("result", "hit"))
 		return
 	}
 
 	h.logger.Debug("proxy: cache miss — fetching upstream", slog.String("key", key))
-	h.recordResult(r.Context(), h.serveMiss(w, r, sdkKey, key, target))
+	result := h.serveMiss(ctx, w, r, sdkKey, key, target)
+	h.recordResult(ctx, result)
+	span.SetAttributes(attribute.String("result", result))
+}
+
+// serveCacheHit starts a proxy.serve_cache_hit child span (with a Span Link to
+// the originating fetch when available) and delegates to serveFromCache.
+func (h *Handler) serveCacheHit(ctx context.Context, w http.ResponseWriter, r *http.Request, entry cache.Entry, sdkKey, key string) {
+	opts := []trace.SpanStartOption{
+		trace.WithAttributes(tracing.SDKKeyHash(key)),
+	}
+	if sc, ok := entry.OriginatingFetch.(trace.SpanContext); ok && sc.IsValid() {
+		opts = append(opts, trace.WithLinks(trace.Link{SpanContext: sc}))
+	}
+	_, cacheSpan := h.tracer.Start(ctx, "proxy.serve_cache_hit", opts...)
+	defer cacheSpan.End()
+	h.serveFromCache(w, r, entry, sdkKey)
 }
 
 // serveFromCache writes a response from a cached entry. If the client's
@@ -159,10 +193,15 @@ func (h *Handler) serveFromCache(w http.ResponseWriter, r *http.Request, entry c
 
 // serveMiss deduplicates concurrent cold-miss fetches for the same SDK key via
 // singleflight. Only one upstream call is made; all waiters share the result.
+// The first caller's trace context is used for the cold fetch span; singleflight
+// waiters receive the same result and serve from cache without a cold_fetch span.
 // Returns a result label for RequestsTotal ("miss", "upstream_error", or "client_error").
-func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key, target string) string {
+func (h *Handler) serveMiss(ctx context.Context, w http.ResponseWriter, r *http.Request, sdkKey, key, target string) string {
+	// Detach cancellation so the fetch survives the originating client disconnecting,
+	// while preserving the trace lineage so the cold_fetch span links back correctly.
+	detachedCtx := trace.ContextWithSpanContext(context.Background(), trace.SpanContextFromContext(ctx))
 	v, _, _ := h.sfGroup.Do(key, func() (any, error) {
-		return h.coldFetch(sdkKey, key, target), nil
+		return h.coldFetch(detachedCtx, sdkKey, key, target), nil
 	})
 	result := v.(coldFetchResult)
 	switch result.resultLabel {
@@ -185,19 +224,27 @@ func (h *Handler) serveMiss(w http.ResponseWriter, r *http.Request, sdkKey, key,
 
 // coldFetch performs the upstream CDN fetch for a cache miss. It is executed
 // inside a singleflight group, so at most one call runs per cache key at a time.
-// context.Background() is used so the fetch survives originating client disconnects,
-// allowing all waiters to receive a valid result and populate the cache.
+// ctx must be a detached context (no cancellation) with the originating request's
+// trace context attached so the cold_fetch span links back to the serving span.
 // All side effects (cache write, SSE notification, snapshot) fire exactly once per fetch.
-func (h *Handler) coldFetch(sdkKey, key, target string) coldFetchResult {
+func (h *Handler) coldFetch(ctx context.Context, sdkKey, key, target string) coldFetchResult {
+	ctx, span := h.tracer.Start(ctx, "proxy.cold_fetch",
+		trace.WithAttributes(tracing.SDKKeyHash(key)))
+	defer span.End()
+
 	// Defensive read: a prior singleflight group for this key may have just
 	// completed and populated the cache before we started.
 	if entry, ok := h.cache.Get(key); ok {
+		// entry.OriginatingFetch was set by the prior fetch leader — preserve it.
+		span.SetAttributes(attribute.String("result", "dedup_hit"))
 		return coldFetchResult{entry: &entry, resultLabel: resultMiss}
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		h.logger.Error("proxy: build upstream request failed", slog.String("error", sanitizeErr(err).Error()))
+		span.RecordError(err)
+		span.SetAttributes(attribute.String("result", "internal_error"))
 		return coldFetchResult{resultLabel: resultInternalError}
 	}
 
@@ -207,13 +254,19 @@ func (h *Handler) coldFetch(sdkKey, key, target string) coldFetchResult {
 			slog.String("key", key),
 			slog.String("error", sanitizeErr(err).Error()),
 		)
+		span.RecordError(sanitizeErr(err))
+		span.SetAttributes(attribute.String("result", "upstream_error"))
 		return coldFetchResult{resultLabel: resultUpstreamError}
 	}
 	defer resp.Body.Close()
 
+	span.SetAttributes(attribute.Int("upstream.status_code", resp.StatusCode))
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		h.logger.Error("proxy: read upstream response failed", slog.String("error", err.Error()))
+		span.RecordError(err)
+		span.SetAttributes(attribute.String("result", "internal_error"))
 		return coldFetchResult{resultLabel: resultInternalError}
 	}
 
@@ -224,6 +277,7 @@ func (h *Handler) coldFetch(sdkKey, key, target string) coldFetchResult {
 		h.logger.Error("proxy: upstream returned 304 on cold fetch",
 			slog.String("key", key),
 		)
+		span.SetAttributes(attribute.String("result", "unexpected_304"))
 		return coldFetchResult{resultLabel: resultUpstreamError}
 
 	case resp.StatusCode >= 500:
@@ -231,6 +285,7 @@ func (h *Handler) coldFetch(sdkKey, key, target string) coldFetchResult {
 			slog.String("key", key),
 			slog.Int("upstream_status", resp.StatusCode),
 		)
+		span.SetAttributes(attribute.String("result", "upstream_error"))
 		return coldFetchResult{resultLabel: resultUpstreamError}
 
 	case resp.StatusCode == http.StatusOK:
@@ -240,12 +295,16 @@ func (h *Handler) coldFetch(sdkKey, key, target string) coldFetchResult {
 			FetchedAt: time.Now(),
 			// FetchURL contains the raw SDK key — in-memory use is permitted by design
 			// (CLAUDE.md invariant). Snapshot code MUST NOT persist this field as-is.
-			FetchURL: target,
+			FetchURL:         target,
+			OriginatingFetch: span.SpanContext(),
 		}
+		span.SetAttributes(attribute.String("result", "ok"))
 		h.cache.Set(key, entry)
 		if h.sseManager != nil {
-			// Use context.Background() — SSE connections must outlive the HTTP request.
-			h.sseManager.OnConfigCached(context.Background(), sdkKey, body)
+			// Preserve trace lineage for the SSE goroutine that starts after this fetch,
+			// but detach cancellation so SSE connections outlive the HTTP request.
+			sseCtx := trace.ContextWithSpanContext(context.Background(), span.SpanContext())
+			h.sseManager.OnConfigCached(sseCtx, sdkKey, body)
 		}
 		if h.snapshotNotifier != nil {
 			h.snapshotNotifier.OnConfigCached(key, entry.ETag, body)
@@ -256,6 +315,7 @@ func (h *Handler) coldFetch(sdkKey, key, target string) coldFetchResult {
 	// Pass through 4xx and non-200 2xx responses without caching.
 	headers := make(http.Header)
 	copyHeader(headers, resp.Header)
+	span.SetAttributes(attribute.String("result", "client_error"))
 	return coldFetchResult{
 		resultLabel: resultClientError,
 		statusCode:  resp.StatusCode,
@@ -280,7 +340,8 @@ func NewFetcher(client *http.Client, logger *slog.Logger) *Fetcher {
 // Fetch implements cache.Fetcher. It sends an If-None-Match revalidation
 // request and interprets the result. Network errors are sanitized before
 // returning to prevent SDK key leakage via *url.Error.Error() in log messages.
-func (f *Fetcher) Fetch(ctx context.Context, fetchURL, etag string) (cache.FetchResult, error) {
+// The span for this fetch is emitted by cache.Refresher.refresh which owns keyHash.
+func (f *Fetcher) Fetch(ctx context.Context, _ string, fetchURL, etag string) (cache.FetchResult, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fetchURL, nil)
 	if err != nil {
 		return cache.FetchResult{}, fmt.Errorf("proxy: build refresh request: %w", err)
@@ -313,6 +374,7 @@ func (f *Fetcher) Fetch(ctx context.Context, fetchURL, etag string) (cache.Fetch
 			ETag:      resp.Header.Get("ETag"),
 			FetchedAt: time.Now(),
 			// FetchURL is set by the Refresher to preserve the original URL.
+			// OriginatingFetch is set by the Refresher.refresh after Fetch returns.
 		},
 	}, nil
 }

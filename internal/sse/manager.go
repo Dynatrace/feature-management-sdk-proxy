@@ -10,6 +10,8 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
 	"github.com/dynatrace/sdk-proxy/internal/metrics"
@@ -26,6 +28,7 @@ type Manager struct {
 	client    *http.Client
 	inst      *metrics.Instruments
 	logger    *slog.Logger
+	tracer    trace.Tracer
 	lifecycle func(Event) bool // optional; set via SetLifecycleHandler
 
 	mu    sync.RWMutex
@@ -56,8 +59,15 @@ func New(httpClient *http.Client, inst *metrics.Instruments, logger *slog.Logger
 		client: httpClient,
 		inst:   inst,
 		logger: logger,
+		tracer: tracenoop.NewTracerProvider().Tracer("sse"),
 		conns:  make(map[string]*keyState),
 	}
+}
+
+// SetTracer wires a TracerProvider's tracer into the Manager so upstream connect
+// attempts emit sse.upstream.connect spans. Must be called before OnConfigCached.
+func (m *Manager) SetTracer(t trace.Tracer) {
+	m.tracer = t
 }
 
 // OnConfigCached is called by the proxy handler after a successful cold fetch
@@ -296,6 +306,7 @@ func (m *Manager) startLocked(ctx context.Context, keyHash, sseURL string, inact
 			client:             m.client,
 			logger:             m.logger,
 			inst:               m.inst,
+			tracer:             m.tracer,
 			onEvent: func(evt Event) {
 				m.dispatch(keyHash, evt)
 			},
