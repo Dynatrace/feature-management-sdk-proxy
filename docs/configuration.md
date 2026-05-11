@@ -293,16 +293,16 @@ SNAPSHOT_WRITE_QUEUE_SIZE=256
 
 ## OTel Variables
 
-Metrics export is disabled by default. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable it; all other OTel variables are optional. See [telemetry.md](telemetry.md) for the full metrics reference.
+Metrics and traces export is disabled by default. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable both; all other OTel variables are optional. See [telemetry.md](telemetry.md) for the full reference.
 
 ### `OTEL_EXPORTER_OTLP_ENDPOINT`
 
-**Optional.** Default: unset (metrics exported to a no-op provider).
+**Optional.** Default: unset (metrics and traces sent to a no-op provider).
 
-The gRPC endpoint for an OpenTelemetry collector. When set, the proxy pushes metrics every 30 seconds over gRPC without TLS (suitable for in-cluster collector traffic).
+The OTLP/HTTP endpoint for an OpenTelemetry collector. When set, the proxy pushes metrics every 30 seconds and traces continuously using HTTP/protobuf transport (required by Dynatrace; use port 4318 for OTLP/HTTP).
 
 ```bash
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
 ```
 
 ---
@@ -311,7 +311,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 
 **Optional.** Default: `sdk-proxy`.
 
-Overrides the service name attached to all exported metrics.
+Overrides the service name attached to all exported metrics and traces.
 
 ```bash
 OTEL_SERVICE_NAME=sdk-proxy
@@ -323,11 +323,19 @@ OTEL_SERVICE_NAME=sdk-proxy
 
 **Optional.**
 
-Comma-separated `key=value` pairs added as resource attributes to all exported metrics. Useful for adding environment, region, or cluster labels.
+Comma-separated `key=value` pairs added as resource attributes to all exported metrics and traces. Useful for adding environment, region, or cluster labels.
 
 ```bash
 OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production,k8s.cluster.name=us-east-1
 ```
+
+---
+
+### `OTEL_TRACES_SAMPLER`
+
+**Optional.** Default: `parentbased_always_on`.
+
+Sampling strategy for distributed traces. Honors the standard OTel SDK environment variable. Set to `traceidratio` with `OTEL_TRACES_SAMPLER_ARG=0.1` to sample 10% of traces in high-traffic deployments.
 
 ---
 
@@ -341,7 +349,7 @@ PORT=8080
 LOG_LEVEL=INFO
 SHUTDOWN_TIMEOUT=30s
 PROXY_INSTANCE_ID=pod-abc-123
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
 OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production
 ```
 
@@ -366,7 +374,7 @@ data:
   PORT: "8080"
   LOG_LEVEL: INFO
   SHUTDOWN_TIMEOUT: 30s
-  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.monitoring:4317
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.monitoring:4318
   OTEL_RESOURCE_ATTRIBUTES: deployment.environment=production
 ---
 apiVersion: apps/v1

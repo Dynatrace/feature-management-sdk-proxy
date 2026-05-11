@@ -14,8 +14,10 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/dynatrace/sdk-proxy/internal/metrics"
+	"github.com/dynatrace/sdk-proxy/internal/tracing"
 )
 
 const (
@@ -35,6 +37,7 @@ type conn struct {
 	client             *http.Client
 	logger             *slog.Logger
 	inst               *metrics.Instruments
+	tracer             trace.Tracer
 	onEvent            func(Event)
 	// onLifecycle is called for each received event before onEvent. When it
 	// returns true the event is a lifecycle event and must not be forwarded
@@ -60,7 +63,11 @@ func (c *conn) run(ctx context.Context) {
 	connectedAt := time.Now()
 
 	for {
-		err := c.connect(ctx, lastEventID, func(evt Event) {
+		// One span per connect attempt — bounded by the attempt lifetime, not the key lifetime.
+		attemptCtx, attemptSpan := c.tracer.Start(ctx, "sse.upstream.connect",
+			trace.WithAttributes(tracing.SDKKeyHash(c.keyHash)))
+
+		err := c.connect(attemptCtx, lastEventID, func(evt Event) {
 			if evt.ID != "" {
 				lastEventID = evt.ID
 			}
@@ -71,6 +78,8 @@ func (c *conn) run(ctx context.Context) {
 		})
 
 		if ctx.Err() != nil {
+			attemptSpan.SetAttributes(attribute.String("reconnect.reason", "cancelled"))
+			attemptSpan.End()
 			return
 		}
 
@@ -81,6 +90,15 @@ func (c *conn) run(ctx context.Context) {
 		connectedAt = time.Now()
 
 		reason := reconnectReason(err)
+		attemptSpan.SetAttributes(
+			attribute.String("reconnect.reason", reason),
+			attribute.Bool("streaming", c.setStreaming != nil), // true when streaming was active
+		)
+		if err != nil && !errors.Is(err, io.EOF) {
+			attemptSpan.RecordError(err)
+		}
+		attemptSpan.End()
+
 		c.inst.SSEUpstreamReconnects.Add(ctx, 1, metric.WithAttributes(
 			attribute.String("sdk_key_hash", c.keyHash),
 			attribute.String("reason", reason),

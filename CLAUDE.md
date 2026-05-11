@@ -116,9 +116,9 @@ These are load-bearing constraints — do not break them without an explicit des
 
 ### Observability
 
-- Emit OTel metrics (not Prometheus-native). All metric names are defined in `internal/metrics` — add new metrics there, not inline.
+- Emit OTel metrics and distributed traces (not Prometheus-native). All metric names are defined in `internal/metrics` — add new metrics there, not inline. Tracing is wired via `internal/tracing`, which mirrors `internal/metrics` (OTLP/HTTP provider, noop fallback).
 - Every dropped record (billing buffer overflow, cache miss during outage, malformed request) must produce a structured log entry with enough context to diagnose the cause.
-- Full metrics reference (names, labels, instrument types): [`docs/telemetry.md`](docs/telemetry.md).
+- Full metrics and tracing reference (names, labels, span catalogue): [`docs/telemetry.md`](docs/telemetry.md).
 
 ### Startup Sequence
 

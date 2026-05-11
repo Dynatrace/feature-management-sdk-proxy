@@ -8,12 +8,17 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
 	"github.com/dynatrace/sdk-proxy/internal/metrics"
 	"github.com/dynatrace/sdk-proxy/internal/telemetry"
+	"github.com/dynatrace/sdk-proxy/internal/tracing"
 )
 
 // HandlerPath is the proxy's SSE endpoint path.
@@ -36,6 +41,7 @@ type Handler struct {
 	inst              *metrics.Instruments
 	counter           *telemetry.Counter
 	logger            *slog.Logger
+	tracer            trace.Tracer
 	heartbeatInterval time.Duration
 	configPath        string
 }
@@ -52,9 +58,17 @@ func NewHandler(c *cache.Cache, m Subscriber, inst *metrics.Instruments, counter
 		inst:              inst,
 		counter:           counter,
 		logger:            logger,
+		tracer:            tracenoop.NewTracerProvider().Tracer("sse"),
 		heartbeatInterval: heartbeatInterval,
 		configPath:        configPath,
 	}
+}
+
+// SetTracer wires a TracerProvider's tracer into the Handler so client
+// subscription setup emits sse.client.subscribe spans. Must be called before
+// the first request is served.
+func (h *Handler) SetTracer(t trace.Tracer) {
+	h.tracer = t
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -79,10 +93,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	keyHash := streamID
 
+	// Extract W3C trace context and span the setup phase only — SSE connections
+	// can last hours and Dynatrace bins spans by completion time. Active connection
+	// duration is covered by the SSEClientConnections gauge metric.
+	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+	_, setupSpan := h.tracer.Start(ctx, "sse.client.subscribe",
+		trace.WithAttributes(tracing.SDKKeyHash(keyHash)))
+
 	if _, ok := h.cache.Get(keyHash); !ok {
 		h.logger.Warn("sse: client connected before config cached; returning 412",
 			slog.String("key", keyHash),
 		)
+		setupSpan.SetAttributes(attribute.String("outcome", "412_no_config"))
+		setupSpan.End()
 		http.Error(w, "config not cached; fetch "+h.configPath+"{sdk_key}.json first", http.StatusPreconditionFailed)
 		return
 	}
@@ -96,6 +119,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		setupSpan.SetAttributes(attribute.String("outcome", "500_no_flusher"))
+		setupSpan.End()
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
@@ -106,6 +131,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
+
+	// Setup complete — end the span here so it doesn't span the full connection.
+	setupSpan.SetAttributes(attribute.String("outcome", "200_connected"))
+	setupSpan.End()
 
 	h.inst.SSEClientConnections.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("sdk_key_hash", keyHash),

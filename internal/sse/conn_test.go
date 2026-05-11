@@ -10,7 +10,11 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
+
+var testConnTracer = tracenoop.NewTracerProvider().Tracer("test")
 
 // sseServer streams the given frames to each connected client and then closes
 // the connection. Each frame is a complete SSE message (already formatted).
@@ -153,6 +157,7 @@ func TestConn_ReconnectsOnEOF(t *testing.T) {
 		client:             srv.Client(),
 		logger:             slog.Default(),
 		inst:               newTestInstruments(t),
+		tracer:             testConnTracer,
 		onEvent: func(evt Event) {
 			got.Add(1)
 			if got.Load() >= 2 {
@@ -198,6 +203,7 @@ func TestConn_LastEventIDSentOnReconnect(t *testing.T) {
 		client:             srv.Client(),
 		logger:             slog.Default(),
 		inst:               newTestInstruments(t),
+		tracer:             testConnTracer,
 		onEvent: func(evt Event) {
 			if count.Add(1) >= 2 {
 				cancel()
@@ -247,6 +253,7 @@ func TestConn_StopsOnContextCancel(t *testing.T) {
 		client:             srv.Client(),
 		logger:             slog.Default(),
 		inst:               newTestInstruments(t),
+		tracer:             testConnTracer,
 		onEvent:            func(Event) {},
 	}
 	c.run(ctx)
@@ -306,6 +313,7 @@ func TestConn_InactivityTimeout(t *testing.T) {
 		client:             srv.Client(),
 		logger:             slog.Default(),
 		inst:               newTestInstruments(t),
+		tracer:             testConnTracer,
 		onEvent:            func(Event) {},
 	}
 
@@ -345,6 +353,7 @@ func collectEvents(t *testing.T, url string, want int, timeout time.Duration) []
 		client:             http.DefaultClient,
 		logger:             slog.Default(),
 		inst:               newTestInstruments(t),
+		tracer:             testConnTracer,
 		onEvent: func(evt Event) {
 			mu.Lock()
 			events = append(events, evt)

@@ -9,6 +9,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 // RefreshIntervalConnected is the polling interval when an upstream SSE
@@ -31,10 +35,11 @@ type RefreshIntervalProvider interface {
 // FetchURL stores the full upstream URL used to revalidate this entry; it
 // may contain the raw SDK key in the path, which is acceptable for in-memory use.
 type Entry struct {
-	Payload   []byte
-	ETag      string
-	FetchedAt time.Time
-	FetchURL  string // full upstream URL for background TTL revalidation
+	Payload          []byte
+	ETag             string
+	FetchedAt        time.Time
+	FetchURL         string // full upstream URL for background TTL revalidation
+	OriginatingFetch any    // opaque span context set by the proxy layer; interpreted only by tracing code
 }
 
 // IsStale reports whether the entry has exceeded the given refresh interval.
@@ -166,10 +171,11 @@ type FetchResult struct {
 }
 
 // Fetcher is satisfied by anything that can revalidate a cache entry upstream.
+// keyHash is cache.Key(sdkKey) — used for telemetry only, never the raw key.
 // fetchURL is the full upstream URL (including path and query); etag is the
 // previously cached ETag value, which should be sent as If-None-Match.
 type Fetcher interface {
-	Fetch(ctx context.Context, fetchURL, etag string) (FetchResult, error)
+	Fetch(ctx context.Context, keyHash, fetchURL, etag string) (FetchResult, error)
 }
 
 // RefreshObserver is notified when the background refresher fetches a new
@@ -186,11 +192,12 @@ type Refresher struct {
 	observers        []RefreshObserver
 	intervalProvider RefreshIntervalProvider // nil → always use RefreshIntervalDisconnected
 	logger           *slog.Logger
+	tracer           trace.Tracer
 }
 
 // NewRefresher constructs a Refresher. Call Run to start the background loop.
 func NewRefresher(c *Cache, f Fetcher, logger *slog.Logger) *Refresher {
-	return &Refresher{cache: c, fetcher: f, logger: logger}
+	return &Refresher{cache: c, fetcher: f, logger: logger, tracer: tracenoop.NewTracerProvider().Tracer("cache")}
 }
 
 // NewRefresherWithObservers constructs a Refresher that notifies all provided
@@ -202,7 +209,13 @@ func NewRefresherWithObservers(c *Cache, f Fetcher, logger *slog.Logger, observe
 			filtered = append(filtered, o)
 		}
 	}
-	return &Refresher{cache: c, fetcher: f, observers: filtered, logger: logger}
+	return &Refresher{cache: c, fetcher: f, observers: filtered, logger: logger, tracer: tracenoop.NewTracerProvider().Tracer("cache")}
+}
+
+// SetTracer wires a TracerProvider's tracer into the Refresher so background
+// fetches emit proxy.refresh_fetch spans. Must be called before Run.
+func (r *Refresher) SetTracer(t trace.Tracer) {
+	r.tracer = t
 }
 
 // NewRefresherWithObserver constructs a Refresher that notifies a single observer
@@ -251,8 +264,16 @@ func (r *Refresher) refresh(ctx context.Context) {
 			r.logger.Debug("cache: skipping stale snapshot-restored entry (no FetchURL yet)", slog.String("key", key))
 			continue
 		}
-		result, err := r.fetcher.Fetch(ctx, entry.FetchURL, entry.ETag)
+		fetchCtx, span := r.tracer.Start(ctx, "proxy.refresh_fetch",
+			trace.WithAttributes(
+				attribute.String("sdk_key_hash", key),
+				attribute.Bool("if_none_match", entry.ETag != ""),
+			))
+		result, err := r.fetcher.Fetch(fetchCtx, key, entry.FetchURL, entry.ETag)
 		if err != nil {
+			span.RecordError(err)
+			span.SetAttributes(attribute.String("result", "error"))
+			span.End()
 			r.logger.Warn("cache: background refresh failed",
 				slog.String("key", key),
 				slog.String("error", err.Error()),
@@ -260,12 +281,17 @@ func (r *Refresher) refresh(ctx context.Context) {
 			continue
 		}
 		if result.NotModified {
+			span.SetAttributes(attribute.String("result", "not_modified"))
+			span.End()
 			r.cache.ResetTTL(key, time.Now())
 			r.logger.Debug("cache: background refresh — upstream unchanged (304), TTL extended", slog.String("key", key))
 			continue
 		}
 		if result.Entry != nil {
 			result.Entry.FetchURL = entry.FetchURL // preserve the fetch URL
+			result.Entry.OriginatingFetch = span.SpanContext()
+			span.SetAttributes(attribute.String("result", "ok"))
+			span.End()
 			r.cache.Set(key, *result.Entry)
 			r.logger.Debug("cache: background refresh — new content received (200), cache updated", slog.String("key", key))
 			for _, obs := range r.observers {

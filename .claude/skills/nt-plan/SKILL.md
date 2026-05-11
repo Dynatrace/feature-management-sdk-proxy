@@ -115,6 +115,7 @@ internal/sse       → docs/sse.md, docs/monitoring.md
 internal/snapshot  → docs/snapshot.md
 internal/telemetry → docs/telemetry.md
 internal/metrics   → docs/telemetry.md
+internal/tracing   → docs/telemetry.md, docs/configuration.md
 internal/server    → docs/monitoring.md, docs/shutdown.md
 internal/config    → docs/configuration.md
 ```
