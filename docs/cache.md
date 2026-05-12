@@ -34,6 +34,23 @@ The background CDN request has a **5-second timeout** — intentionally less tha
 
 A background refresh error is logged but never fails an SDK request. The stale entry stays in cache and continues to be served.
 
+## 4xx Eviction Policy
+
+When the background refresher receives a 4xx response from the upstream CDN, the proxy takes one of two actions depending on the status code:
+
+| Status code | Meaning | Proxy behavior |
+|---|---|---|
+| `401 Unauthorized` | Credentials revoked | Evict entry, close upstream SSE connection, delete snapshot |
+| `403 Forbidden` | Credentials revoked | Evict entry, close upstream SSE connection, delete snapshot |
+| `404 Not Found` | Flag set deleted | Evict entry, close upstream SSE connection, delete snapshot |
+| `410 Gone` | Flag set permanently deleted | Evict entry, close upstream SSE connection, delete snapshot |
+| `429 Too Many Requests` | Rate-limited | Preserve stale entry — evicting on rate-limit would amplify outages via cold-miss stampedes |
+| All other 4xx | Unexpected client error | Preserve stale entry |
+
+Eviction is immediate and unconditional once the status code matches. The eviction is identical in effect to a lifecycle `tokenRotated` or `stageDeleted` event: the cache entry, upstream SSE connection, and persisted snapshot are all removed. The next SDK request for that key triggers a fresh CDN cold-miss fetch.
+
+Metric: `proxy.cache.refresh_evictions_total{status_code="404"}` (see [telemetry.md](telemetry.md)).
+
 ## Inactivity Eviction
 
 Long-running proxy instances can accumulate cache entries for SDK keys that are no longer in use — keys whose projects were deleted, tokens rotated, or clients disconnected without lifecycle events reaching the proxy. The background `Refresher` polls all cached keys unconditionally, so this builds up unnecessary CDN traffic over time.

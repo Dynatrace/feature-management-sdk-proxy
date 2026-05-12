@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"testing"
@@ -335,6 +336,136 @@ func TestCache_Delete_Idempotent(t *testing.T) {
 	c.Set("k1", Entry{Payload: []byte("v1")})
 	c.Delete("k1")
 	c.Delete("k1") // second delete must not panic
+}
+
+func TestRefresher_4xx_Evictable_EvictsEntry(t *testing.T) {
+	evictableCodes := []int{401, 403, 404, 410}
+	for _, code := range evictableCodes {
+		t.Run(fmt.Sprintf("status_%d", code), func(t *testing.T) {
+			c := New()
+			c.Set("k1", Entry{
+				Payload:   []byte("original"),
+				FetchedAt: time.Now().Add(-10 * time.Minute),
+				FetchURL:  "https://example.com/k1.json",
+			})
+
+			var evictedKeys []string
+			fetcher := &mockFetcher{
+				results: map[string]FetchResult{
+					"https://example.com/k1.json": {StatusCode: code},
+				},
+			}
+			r := NewRefresher(c, fetcher, noopLogger())
+			r.SetEvictor(func(keyHash string) { evictedKeys = append(evictedKeys, keyHash) })
+			r.refresh(context.Background())
+
+			if _, ok := c.Get("k1"); ok {
+				t.Errorf("status %d: entry should be evicted from cache", code)
+			}
+			if len(evictedKeys) != 1 || evictedKeys[0] != "k1" {
+				t.Errorf("status %d: expected evictor called once with k1, got %v", code, evictedKeys)
+			}
+		})
+	}
+}
+
+func TestRefresher_4xx_Evictable_ObserversNotNotified(t *testing.T) {
+	c := New()
+	c.Set("k1", Entry{
+		Payload:   []byte("original"),
+		FetchedAt: time.Now().Add(-10 * time.Minute),
+		FetchURL:  "https://example.com/k1.json",
+	})
+
+	obs := &mockObserver{}
+	fetcher := &mockFetcher{
+		results: map[string]FetchResult{
+			"https://example.com/k1.json": {StatusCode: 404},
+		},
+	}
+	r := NewRefresherWithObservers(c, fetcher, noopLogger(), obs)
+	r.SetEvictor(func(string) {})
+	r.refresh(context.Background())
+
+	obs.mu.Lock()
+	defer obs.mu.Unlock()
+	if len(obs.calls) != 0 {
+		t.Errorf("observers must not be called on 4xx eviction, got %d calls", len(obs.calls))
+	}
+}
+
+func TestRefresher_429_PreservesEntry(t *testing.T) {
+	c := New()
+	c.Set("k1", Entry{
+		Payload:   []byte("original"),
+		FetchedAt: time.Now().Add(-10 * time.Minute),
+		FetchURL:  "https://example.com/k1.json",
+	})
+
+	var evictorCalled bool
+	fetcher := &mockFetcher{
+		results: map[string]FetchResult{
+			"https://example.com/k1.json": {StatusCode: 429},
+		},
+	}
+	r := NewRefresher(c, fetcher, noopLogger())
+	r.SetEvictor(func(string) { evictorCalled = true })
+	r.refresh(context.Background())
+
+	if _, ok := c.Get("k1"); !ok {
+		t.Error("429: entry should be preserved (rate-limit must not evict)")
+	}
+	if evictorCalled {
+		t.Error("429: evictor must not be called for rate-limit response")
+	}
+}
+
+func TestRefresher_5xx_PreservesEntry(t *testing.T) {
+	c := New()
+	c.Set("k1", Entry{
+		Payload:   []byte("original"),
+		FetchedAt: time.Now().Add(-10 * time.Minute),
+		FetchURL:  "https://example.com/k1.json",
+	})
+
+	var evictorCalled bool
+	fetcher := &mockFetcher{
+		results: map[string]FetchResult{
+			"https://example.com/k1.json": {StatusCode: 500},
+		},
+	}
+	r := NewRefresher(c, fetcher, noopLogger())
+	r.SetEvictor(func(string) { evictorCalled = true })
+	r.refresh(context.Background())
+
+	if _, ok := c.Get("k1"); !ok {
+		t.Error("5xx: entry should be preserved (server error must not evict)")
+	}
+	if evictorCalled {
+		t.Error("5xx: evictor must not be called for server error response")
+	}
+}
+
+func TestRefresher_NilEvictor_DoesNotPanic(t *testing.T) {
+	c := New()
+	c.Set("k1", Entry{
+		Payload:   []byte("original"),
+		FetchedAt: time.Now().Add(-10 * time.Minute),
+		FetchURL:  "https://example.com/k1.json",
+	})
+
+	fetcher := &mockFetcher{
+		results: map[string]FetchResult{
+			"https://example.com/k1.json": {StatusCode: 404},
+		},
+	}
+	r := NewRefresher(c, fetcher, noopLogger())
+	// No SetEvictor — evictor is nil. Must not panic.
+	r.refresh(context.Background())
+
+	if _, ok := c.Get("k1"); ok {
+		t.Error("entry should be evicted from cache even without an evictor callback")
+	}
 }
 
 func TestRefresher_FetchError_PreservesExistingEntry(t *testing.T) {

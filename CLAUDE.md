@@ -128,6 +128,10 @@ Four paths: `cold` (no backend), `snapshot` (fresh), `snapshot_stale` (age > `SN
 
 `tokenRotated`, `stageDeleted`, and `projectDeleted` → evict cache entry + close upstream SSE connection for the affected key. See [`docs/monitoring.md`](docs/monitoring.md).
 
+### 4xx Eviction on Background Refresh
+
+HTTP `401`, `403`, `404`, `410` from the upstream CDN during background TTL revalidation → evict cache entry + close upstream SSE connection + delete persisted snapshot for the affected key. Identical effect to lifecycle invalidation. `429` and `5xx` preserve the stale entry to avoid amplifying outages. See [`docs/cache.md`](docs/cache.md).
+
 ### Inactivity Eviction
 
 The inactivity sweeper is a GC path that mirrors lifecycle invalidation: **cache entry + upstream SSE connection + persisted snapshot** are all removed for keys that have been idle for longer than `CACHE_INACTIVITY_EVICT_AFTER` (default 48h). A key is idle when `Cache.LastAccess` is past the threshold AND `sse.Manager.HasSubscribers` returns false. Never evict a key with active downstream SSE subscribers — that connection is the liveness signal. See [`docs/cache.md`](docs/cache.md).

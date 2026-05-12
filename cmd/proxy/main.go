@@ -257,6 +257,17 @@ func run() error {
 		refresher.SetIntervalProvider(sseManager)
 	}
 	refresher.SetTracer(tracer)
+	refresher.SetInstruments(inst)
+	// sseManager and snapshotWriter are fully initialized before this point;
+	// the closure captures are stable for the lifetime of the refresher.
+	refresher.SetEvictor(func(keyHash string) {
+		if sseManager != nil {
+			sseManager.Close(keyHash)
+		}
+		if snapshotWriter != nil {
+			snapshotWriter.OnInvalidated(keyHash)
+		}
+	})
 	go refresher.Run(ctx)
 
 	// Inactivity sweeper: evict cache entries (cache + SSE + snapshot) that have

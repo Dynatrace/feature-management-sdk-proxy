@@ -8,26 +8,28 @@ import (
 
 // Instrument name constants — all proxy metrics are defined here.
 const (
-	RequestsTotal                 = "proxy.requests.total"
-	SSEConnections                = "proxy.sse.connections"
-	SSEClientConnections          = "proxy.sse.client.connections"
-	SSEEventsDelivered            = "proxy.sse.events_delivered_total"
-	SSEUpstreamReconnects         = "proxy.sse.upstream.reconnects"
-	SSEUpstreamEvents             = "proxy.sse.upstream.events"
-	CacheSize                     = "proxy.cache.size"
-	SnapshotAgeSeconds            = "proxy.snapshot.age_seconds"
-	BillingFlushTotal             = "proxy.billing.flush.total"
-	BillingBufferSize             = "proxy.billing.buffer.size"
-	BillingFlushLag               = "proxy.billing.flush.lag_seconds"
-	BillingRetryBufferDropped     = "proxy.billing.retry_buffer.dropped_total"
-	StartupPath                   = "proxy.startup.path"
-	SnapshotWritesTotal           = "proxy.snapshot.writes.total"
-	ConfigSSERewriteTotal         = "proxy.config.sse_rewrite_total"
-	SnapshotLoadTotal             = "proxy.snapshot.load.total"
-	SnapshotWriteQueueDropped     = "proxy.snapshot.write_queue.dropped_total"
-	LifecycleEventsTotal          = "proxy.lifecycle.events_total"
-	LifecycleInvalidatedKeys      = "proxy.lifecycle.invalidated_keys_total"
-	CacheInactivityEvictionsTotal = "proxy.cache.inactivity_evictions.total"
+	RequestsTotal                   = "proxy.requests.total"
+	SSEConnections                  = "proxy.sse.connections"
+	SSEClientConnections            = "proxy.sse.client.connections"
+	SSEEventsDelivered              = "proxy.sse.events_delivered_total"
+	SSEUpstreamReconnects           = "proxy.sse.upstream.reconnects"
+	SSEUpstreamEvents               = "proxy.sse.upstream.events"
+	CacheSize                       = "proxy.cache.size"
+	SnapshotAgeSeconds              = "proxy.snapshot.age_seconds"
+	BillingFlushTotal               = "proxy.billing.flush.total"
+	BillingBufferSize               = "proxy.billing.buffer.size"
+	BillingFlushLag                 = "proxy.billing.flush.lag_seconds"
+	BillingRetryBufferDropped       = "proxy.billing.retry_buffer.dropped_total"
+	StartupPath                     = "proxy.startup.path"
+	SnapshotWritesTotal             = "proxy.snapshot.writes.total"
+	ConfigSSERewriteTotal           = "proxy.config.sse_rewrite_total"
+	SnapshotLoadTotal               = "proxy.snapshot.load.total"
+	SnapshotWriteQueueDropped       = "proxy.snapshot.write_queue.dropped_total"
+	LifecycleEventsTotal            = "proxy.lifecycle.events_total"
+	LifecycleInvalidatedKeys        = "proxy.lifecycle.invalidated_keys_total"
+	CacheInactivityEvictionsTotal   = "proxy.cache.inactivity_evictions.total"
+	CacheRefreshEvictionsTotal      = "proxy.cache.refresh_evictions.total"
+	CacheRefreshPreservedStaleTotal = "proxy.cache.refresh_preserved_stale.total"
 )
 
 // Instruments holds every OTel instrument the proxy emits. Obtain one via Register.
@@ -108,6 +110,15 @@ type Instruments struct {
 
 	// CacheInactivityEvictionsTotal counts cache entries evicted by the inactivity sweeper.
 	CacheInactivityEvictionsTotal metric.Int64Counter
+
+	// CacheRefreshEvictionsTotal counts cache entries evicted during background refresh
+	// due to a 4xx response from upstream, labeled by status_code (401/403/404/410).
+	CacheRefreshEvictionsTotal metric.Int64Counter
+
+	// CacheRefreshPreservedStaleTotal counts background refresh responses that were
+	// non-200/non-304 but did NOT trigger eviction (e.g. 429, 5xx), labeled by
+	// status_code. Enables alerting on sustained upstream errors without eviction.
+	CacheRefreshPreservedStaleTotal metric.Int64Counter
 }
 
 // Register creates all metric instruments against meter. Call once at startup and
@@ -274,26 +285,44 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("metrics: register %s: %w", CacheInactivityEvictionsTotal, err)
 	}
 
+	cacheRefreshEvictions, err := meter.Int64Counter(CacheRefreshEvictionsTotal,
+		metric.WithDescription("Cache entries evicted during background refresh due to a 4xx response from upstream, labeled by status_code"),
+		metric.WithUnit("{entry}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", CacheRefreshEvictionsTotal, err)
+	}
+
+	cacheRefreshPreservedStale, err := meter.Int64Counter(CacheRefreshPreservedStaleTotal,
+		metric.WithDescription("Background refresh responses that were non-200/non-304 but did not trigger eviction (e.g. 429, 5xx), labeled by status_code"),
+		metric.WithUnit("{response}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", CacheRefreshPreservedStaleTotal, err)
+	}
+
 	return &Instruments{
-		RequestsTotal:                 reqTotal,
-		SSEConnections:                sseConns,
-		SSEClientConnections:          sseClientConns,
-		SSEEventsDelivered:            sseEventsDelivered,
-		SSEUpstreamReconnects:         sseReconnects,
-		SSEUpstreamEvents:             sseEvents,
-		CacheSize:                     cacheSize,
-		SnapshotAgeSeconds:            snapshotAge,
-		BillingFlushTotal:             billingFlush,
-		BillingBufferSize:             billingBuf,
-		BillingFlushLag:               billingLag,
-		StartupPath:                   startupPath,
-		SnapshotWritesTotal:           snapshotWrites,
-		ConfigSSERewriteTotal:         sseRewrite,
-		BillingRetryBufferDropped:     retryBufDropped,
-		SnapshotLoadTotal:             snapshotLoadTotal,
-		SnapshotWriteQueueDropped:     snapshotWriteQueueDropped,
-		LifecycleEventsTotal:          lifecycleEventsTotal,
-		LifecycleInvalidatedKeys:      lifecycleInvalidatedKeys,
-		CacheInactivityEvictionsTotal: cacheInactivityEvictions,
+		RequestsTotal:                   reqTotal,
+		SSEConnections:                  sseConns,
+		SSEClientConnections:            sseClientConns,
+		SSEEventsDelivered:              sseEventsDelivered,
+		SSEUpstreamReconnects:           sseReconnects,
+		SSEUpstreamEvents:               sseEvents,
+		CacheSize:                       cacheSize,
+		SnapshotAgeSeconds:              snapshotAge,
+		BillingFlushTotal:               billingFlush,
+		BillingBufferSize:               billingBuf,
+		BillingFlushLag:                 billingLag,
+		StartupPath:                     startupPath,
+		SnapshotWritesTotal:             snapshotWrites,
+		ConfigSSERewriteTotal:           sseRewrite,
+		BillingRetryBufferDropped:       retryBufDropped,
+		SnapshotLoadTotal:               snapshotLoadTotal,
+		SnapshotWriteQueueDropped:       snapshotWriteQueueDropped,
+		LifecycleEventsTotal:            lifecycleEventsTotal,
+		LifecycleInvalidatedKeys:        lifecycleInvalidatedKeys,
+		CacheInactivityEvictionsTotal:   cacheInactivityEvictions,
+		CacheRefreshEvictionsTotal:      cacheRefreshEvictions,
+		CacheRefreshPreservedStaleTotal: cacheRefreshPreservedStale,
 	}, nil
 }
