@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 )
@@ -436,5 +438,16 @@ func TestFromEnv_CacheInactivityEvictAfter_TooShort(t *testing.T) {
 				t.Errorf("expected error for CACHE_INACTIVITY_EVICT_AFTER=%q (shorter than sweep interval)", v)
 			}
 		})
+	}
+}
+
+func TestConfig_LogValue_ZeroValue(t *testing.T) {
+	cfg := Config{}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	logger.Info("test", slog.Any("config", cfg))
+	out := buf.String()
+	if !strings.Contains(out, `"port"`) {
+		t.Errorf("expected port key in log output: %s", out)
 	}
 }

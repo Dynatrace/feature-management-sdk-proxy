@@ -48,6 +48,7 @@ func run() error {
 		Level: cfg.LogLevel,
 	}))
 	slog.SetDefault(logger)
+	slog.Info("starting sdk-proxy", slog.Any("config", cfg))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()

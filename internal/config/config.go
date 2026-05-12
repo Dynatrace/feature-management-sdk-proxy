@@ -79,7 +79,53 @@ type Config struct {
 	CacheInactivityEvictAfter time.Duration
 }
 
-const defaultCDNBaseDomain = "fm.dynatrace.com"
+// LogValue implements slog.LogValuer. Secrets emit [REDACTED] automatically
+// via Secret's own LogValue — do not format credential fields with fmt or json.
+// Backend-specific fields (snapshot_s3_*, snapshot_local_dir) are only included
+// when the corresponding backend is active, to avoid [REDACTED] noise for operators
+// who have not configured snapshot persistence.
+func (c Config) LogValue() slog.Value {
+	snapshotBackend := c.SnapshotBackend
+	if snapshotBackend == "" {
+		snapshotBackend = "disabled"
+	}
+	attrs := []slog.Attr{
+		slog.Int("port", c.Port),
+		slog.String("cdn_base_domain", c.CDNBaseDomain),
+		slog.Any("log_level", c.LogLevel),
+		slog.Duration("shutdown_timeout", c.ShutdownTimeout),
+		slog.Bool("otlp_enabled", c.OTLPEnabled),
+		slog.Duration("billing_flush_interval", c.BillingFlushInterval),
+		slog.Int("billing_retry_buffer_size", c.BillingRetryBufferSize),
+		slog.String("proxy_instance_id", c.ProxyInstanceID),
+		slog.Int("lifecycle_keys_cap", c.LifecycleKeysCap),
+		slog.Bool("sse_disabled", c.SSEDisabled),
+		slog.String("snapshot_backend", snapshotBackend),
+		slog.Int("snapshot_write_queue_size", c.SnapshotWriteQueueSize),
+		slog.Duration("snapshot_max_age", c.SnapshotMaxAge),
+		slog.Duration("cache_inactivity_evict_after", c.CacheInactivityEvictAfter),
+	}
+	if c.SnapshotBackend == snapshotBackendS3 {
+		attrs = append(attrs,
+			slog.String("snapshot_s3_bucket", c.SnapshotS3Bucket),
+			slog.String("snapshot_s3_region", c.SnapshotS3Region),
+			slog.String("snapshot_s3_endpoint", c.SnapshotS3Endpoint),
+			slog.String("snapshot_s3_prefix", c.SnapshotS3Prefix),
+			slog.Any("snapshot_s3_access_key", c.SnapshotS3AccessKey),
+			slog.Any("snapshot_s3_secret_key", c.SnapshotS3SecretKey),
+		)
+	}
+	if c.SnapshotBackend == snapshotBackendLocal {
+		attrs = append(attrs, slog.String("snapshot_local_dir", c.SnapshotLocalDir))
+	}
+	return slog.GroupValue(attrs...)
+}
+
+const (
+	defaultCDNBaseDomain = "fm.dynatrace.com"
+	snapshotBackendS3    = "s3"
+	snapshotBackendLocal = "local"
+)
 
 // FromEnv loads configuration from environment variables.
 // All variables have safe defaults.
@@ -180,13 +226,13 @@ func FromEnv() (Config, error) {
 	}
 
 	if v := os.Getenv("SNAPSHOT_BACKEND"); v != "" {
-		if v != "s3" && v != "local" {
+		if v != snapshotBackendS3 && v != snapshotBackendLocal {
 			return Config{}, fmt.Errorf("invalid SNAPSHOT_BACKEND %q: must be \"s3\" or \"local\"", v)
 		}
 		cfg.SnapshotBackend = v
 	}
 
-	if cfg.SnapshotBackend == "s3" {
+	if cfg.SnapshotBackend == snapshotBackendS3 {
 		bucket := os.Getenv("SNAPSHOT_S3_BUCKET")
 		if bucket == "" {
 			return Config{}, errors.New("SNAPSHOT_S3_BUCKET is required when SNAPSHOT_BACKEND=s3")
@@ -203,7 +249,7 @@ func FromEnv() (Config, error) {
 		cfg.SnapshotS3SecretKey = Secret(os.Getenv("SNAPSHOT_S3_SECRET_KEY"))
 	}
 
-	if cfg.SnapshotBackend == "local" {
+	if cfg.SnapshotBackend == snapshotBackendLocal {
 		dir := os.Getenv("SNAPSHOT_LOCAL_DIR")
 		if dir == "" {
 			return Config{}, errors.New("SNAPSHOT_LOCAL_DIR is required when SNAPSHOT_BACKEND=local")
