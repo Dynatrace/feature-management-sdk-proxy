@@ -58,6 +58,22 @@ The proxy classifies each startup into one of five paths based on persistence co
 
 ---
 
+## Cache Eviction Triggers
+
+Cache entries (cache entry + upstream SSE connection + persisted snapshot) are removed by three distinct triggers:
+
+| Trigger | Source | Metric |
+|---------|--------|--------|
+| **Lifecycle events** (`tokenRotated`, `stageDeleted`, `projectDeleted`) | Upstream SSE lifecycle channel | `proxy.lifecycle.invalidated_keys_total` |
+| **Inactivity sweeper** | Background goroutine; 1-hour tick | `proxy.cache.inactivity_evictions.total` |
+| **4xx on background refresh** | Upstream CDN returns 401/403/404/410 during TTL revalidation | `proxy.cache.refresh_evictions.total` |
+
+All three triggers have identical effect: the cache entry, the upstream SSE connection, and the persisted snapshot are all removed synchronously. The next SDK request for the key triggers a fresh cold-miss CDN fetch.
+
+See [cache.md](cache.md) for the full 4xx eviction policy and which status codes evict vs. preserve the entry.
+
+---
+
 ## Lifecycle Events
 
 The upstream SSE service emits lifecycle events when SDK keys are rotated or their associated stage or project is deleted. The proxy reacts by invalidating the affected cache entry and closing the corresponding upstream SSE connection.

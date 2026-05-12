@@ -360,7 +360,7 @@ func (f *Fetcher) Fetch(ctx context.Context, _ string, fetchURL, etag string) (c
 		return cache.FetchResult{NotModified: true}, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return cache.FetchResult{}, fmt.Errorf("proxy: refresh got status %d", resp.StatusCode)
+		return cache.FetchResult{StatusCode: resp.StatusCode}, nil
 	}
 
 	body, err := io.ReadAll(resp.Body)

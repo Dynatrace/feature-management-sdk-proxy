@@ -6,13 +6,18 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
+
+	"github.com/dynatrace/sdk-proxy/internal/metrics"
 )
 
 // RefreshIntervalConnected is the polling interval when an upstream SSE
@@ -163,11 +168,20 @@ func (c *Cache) Snapshot() map[string]Entry {
 }
 
 // FetchResult is the outcome of a single upstream revalidation attempt.
+// Exactly one field is set per call:
+//   - NotModified=true → upstream returned 304 (no payload change)
+//   - Entry!=nil       → upstream returned 200 with a fresh payload
+//   - StatusCode!=0    → upstream returned any other status; Entry and NotModified are both zero
 type FetchResult struct {
 	// NotModified is true when the upstream returned 304.
 	NotModified bool
 	// Entry is populated when the upstream returned a fresh 200 payload.
 	Entry *Entry
+	// StatusCode is set to the HTTP status code when upstream returned a
+	// non-200/non-304 response. Zero otherwise. Callers must handle this
+	// explicitly — it is not surfaced as an error so policy decisions (evict
+	// vs. preserve) can be applied without errors.As plumbing.
+	StatusCode int
 }
 
 // Fetcher is satisfied by anything that can revalidate a cache entry upstream.
@@ -191,6 +205,8 @@ type Refresher struct {
 	fetcher          Fetcher
 	observers        []RefreshObserver
 	intervalProvider RefreshIntervalProvider // nil → always use RefreshIntervalDisconnected
+	evictor          func(keyHash string)    // nil → no side-effect eviction
+	inst             *metrics.Instruments    // nil → metrics skipped
 	logger           *slog.Logger
 	tracer           trace.Tracer
 }
@@ -216,6 +232,20 @@ func NewRefresherWithObservers(c *Cache, f Fetcher, logger *slog.Logger, observe
 // fetches emit proxy.refresh_fetch spans. Must be called before Run.
 func (r *Refresher) SetTracer(t trace.Tracer) {
 	r.tracer = t
+}
+
+// SetEvictor wires a callback invoked after a cache entry is deleted due to a
+// 4xx eviction. The callback should close the upstream SSE connection and delete
+// the persisted snapshot for keyHash (same contract as Sweeper.evict). Must be
+// called before Run.
+func (r *Refresher) SetEvictor(evict func(keyHash string)) {
+	r.evictor = evict
+}
+
+// SetInstruments wires OTel instruments into the Refresher so eviction events
+// are counted. Must be called before Run.
+func (r *Refresher) SetInstruments(inst *metrics.Instruments) {
+	r.inst = inst
 }
 
 // NewRefresherWithObserver constructs a Refresher that notifies a single observer
@@ -250,10 +280,10 @@ func (r *Refresher) Run(ctx context.Context) {
 
 func (r *Refresher) refresh(ctx context.Context) {
 	now := time.Now()
-	for key, entry := range r.cache.Snapshot() {
+	for keyHash, entry := range r.cache.Snapshot() {
 		interval := RefreshIntervalDisconnected
 		if r.intervalProvider != nil {
-			interval = r.intervalProvider.RefreshInterval(key)
+			interval = r.intervalProvider.RefreshInterval(keyHash)
 		}
 		if !entry.IsStale(now, interval) {
 			continue
@@ -261,21 +291,21 @@ func (r *Refresher) refresh(ctx context.Context) {
 		// FetchURL is empty for snapshot-restored entries until the first SDK
 		// request repairs it. Skip quietly; the handler will hydrate it on hit.
 		if entry.FetchURL == "" {
-			r.logger.Debug("cache: skipping stale snapshot-restored entry (no FetchURL yet)", slog.String("key", key))
+			r.logger.Debug("cache: skipping stale snapshot-restored entry (no FetchURL yet)", slog.String("key", keyHash))
 			continue
 		}
 		fetchCtx, span := r.tracer.Start(ctx, "proxy.refresh_fetch",
 			trace.WithAttributes(
-				attribute.String("sdk_key_hash", key),
+				attribute.String("sdk_key_hash", keyHash),
 				attribute.Bool("if_none_match", entry.ETag != ""),
 			))
-		result, err := r.fetcher.Fetch(fetchCtx, key, entry.FetchURL, entry.ETag)
+		result, err := r.fetcher.Fetch(fetchCtx, keyHash, entry.FetchURL, entry.ETag)
 		if err != nil {
 			span.RecordError(err)
 			span.SetAttributes(attribute.String("result", "error"))
 			span.End()
 			r.logger.Warn("cache: background refresh failed",
-				slog.String("key", key),
+				slog.String("key", keyHash),
 				slog.String("error", err.Error()),
 			)
 			continue
@@ -283,8 +313,8 @@ func (r *Refresher) refresh(ctx context.Context) {
 		if result.NotModified {
 			span.SetAttributes(attribute.String("result", "not_modified"))
 			span.End()
-			r.cache.ResetTTL(key, time.Now())
-			r.logger.Debug("cache: background refresh — upstream unchanged (304), TTL extended", slog.String("key", key))
+			r.cache.ResetTTL(keyHash, time.Now())
+			r.logger.Debug("cache: background refresh — upstream unchanged (304), TTL extended", slog.String("key", keyHash))
 			continue
 		}
 		if result.Entry != nil {
@@ -292,11 +322,77 @@ func (r *Refresher) refresh(ctx context.Context) {
 			result.Entry.OriginatingFetch = span.SpanContext()
 			span.SetAttributes(attribute.String("result", "ok"))
 			span.End()
-			r.cache.Set(key, *result.Entry)
-			r.logger.Debug("cache: background refresh — new content received (200), cache updated", slog.String("key", key))
+			r.cache.Set(keyHash, *result.Entry)
+			r.logger.Debug("cache: background refresh — new content received (200), cache updated", slog.String("key", keyHash))
 			for _, obs := range r.observers {
-				obs.OnRefreshed(key, result.Entry.Payload)
+				obs.OnRefreshed(keyHash, result.Entry.Payload)
 			}
+			continue
 		}
+		// Non-200/non-304: upstream returned an error status code.
+		if result.StatusCode != 0 {
+			statusStr := strconv.Itoa(result.StatusCode)
+			span.SetAttributes(
+				attribute.String("result", "upstream_error"),
+				attribute.Int("upstream.status_code", result.StatusCode),
+			)
+			span.End()
+			if shouldEvict(result.StatusCode) {
+				r.cache.Delete(keyHash)
+				r.logger.Warn("cache: background refresh got evictable status, evicting entry",
+					slog.String("key", keyHash),
+					slog.Int("upstream_status", result.StatusCode),
+					slog.String("reason", evictionReason(result.StatusCode)),
+				)
+				if r.inst != nil {
+					r.inst.CacheRefreshEvictionsTotal.Add(ctx, 1,
+						metric.WithAttributes(attribute.String("status_code", statusStr)))
+				}
+				if r.evictor == nil {
+					r.logger.Warn("cache: evictor not set — SSE close and snapshot delete skipped on eviction",
+						slog.String("key", keyHash),
+					)
+				} else {
+					r.evictor(keyHash)
+				}
+			} else {
+				r.logger.Warn("cache: background refresh got upstream error, preserving stale entry",
+					slog.String("key", keyHash),
+					slog.Int("upstream_status", result.StatusCode),
+				)
+				if r.inst != nil {
+					r.inst.CacheRefreshPreservedStaleTotal.Add(ctx, 1,
+						metric.WithAttributes(attribute.String("status_code", statusStr)))
+				}
+			}
+			continue
+		}
+		// Defensive: Fetcher returned a zero FetchResult — not a valid state.
+		// End the span to prevent a leak from a buggy Fetcher implementation.
+		span.SetAttributes(attribute.String("result", "unexpected_empty"))
+		span.End()
 	}
+}
+
+// evictionReason returns a human-readable label for a status code that warrants
+// eviction, for use in structured log fields.
+func evictionReason(statusCode int) string {
+	switch statusCode {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "revoked_credentials"
+	case http.StatusNotFound, http.StatusGone:
+		return "resource_deleted"
+	}
+	return "unknown"
+}
+
+// shouldEvict reports whether an HTTP status code from the upstream CDN warrants
+// immediate cache eviction. 401/403 indicate revoked credentials; 404/410 indicate
+// the resource no longer exists. 429 (rate-limit) and 5xx are explicitly excluded
+// to avoid amplifying outages with thundering-herd cold fetches.
+func shouldEvict(statusCode int) bool {
+	return statusCode == http.StatusUnauthorized ||
+		statusCode == http.StatusForbidden ||
+		statusCode == http.StatusNotFound ||
+		statusCode == http.StatusGone
 }

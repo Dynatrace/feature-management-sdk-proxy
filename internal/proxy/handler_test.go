@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"crypto/tls"
 	"io"
 	"log/slog"
@@ -1217,5 +1218,92 @@ func TestHandler_ColdMiss_Singleflight_SideEffectsOnce(t *testing.T) {
 	defer notifier.mu.Unlock()
 	if len(notifier.calls) != 1 {
 		t.Errorf("expected snapshotNotifier called exactly once, got %d calls", len(notifier.calls))
+	}
+}
+
+// --- Fetcher unit tests ---
+
+func TestFetcher_200_ReturnsEntry(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"v1"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"flags":{}}`)
+	}))
+	defer upstream.Close()
+
+	f := NewFetcher(&http.Client{}, slog.Default())
+	result, err := f.Fetch(context.Background(), "keyhash", upstream.URL+"/config.json", "")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.Entry == nil {
+		t.Fatal("expected Entry to be set on 200")
+	}
+	if string(result.Entry.Payload) != `{"flags":{}}` {
+		t.Errorf("unexpected payload: %q", string(result.Entry.Payload))
+	}
+	if result.StatusCode != 0 {
+		t.Errorf("StatusCode should be zero on 200, got %d", result.StatusCode)
+	}
+}
+
+func TestFetcher_304_ReturnsNotModified(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer upstream.Close()
+
+	f := NewFetcher(&http.Client{}, slog.Default())
+	result, err := f.Fetch(context.Background(), "keyhash", upstream.URL+"/config.json", `"v1"`)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !result.NotModified {
+		t.Error("expected NotModified=true on 304")
+	}
+	if result.StatusCode != 0 {
+		t.Errorf("StatusCode should be zero on 304, got %d", result.StatusCode)
+	}
+}
+
+func TestFetcher_4xx_ReturnsStatusCode(t *testing.T) {
+	for _, code := range []int{401, 403, 404, 410, 429} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(code)
+			}))
+			defer upstream.Close()
+
+			f := NewFetcher(&http.Client{}, slog.Default())
+			result, err := f.Fetch(context.Background(), "keyhash", upstream.URL+"/config.json", "")
+			if err != nil {
+				t.Fatalf("status %d: expected no error, got %v", code, err)
+			}
+			if result.StatusCode != code {
+				t.Errorf("status %d: expected StatusCode=%d, got %d", code, code, result.StatusCode)
+			}
+			if result.Entry != nil {
+				t.Errorf("status %d: Entry must be nil on non-200", code)
+			}
+			if result.NotModified {
+				t.Errorf("status %d: NotModified must be false on non-304", code)
+			}
+		})
+	}
+}
+
+func TestFetcher_5xx_ReturnsStatusCode(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+
+	f := NewFetcher(&http.Client{}, slog.Default())
+	result, err := f.Fetch(context.Background(), "keyhash", upstream.URL+"/config.json", "")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.StatusCode != http.StatusInternalServerError {
+		t.Errorf("expected StatusCode=500, got %d", result.StatusCode)
 	}
 }

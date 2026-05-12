@@ -33,6 +33,8 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable export. Metrics push every **30 seco
 | `proxy.lifecycle.events_total` | Counter | `{event}` | `event_type`, `result` | Lifecycle SSE events received. `result`: `handled`, `malformed` |
 | `proxy.lifecycle.invalidated_keys_total` | Counter | `{key}` | `event_type` | Keys invalidated by lifecycle events |
 | `proxy.cache.inactivity_evictions.total` | Counter | `{entry}` | — | Cache entries evicted by the inactivity sweeper (idle for longer than `CACHE_INACTIVITY_EVICT_AFTER`) |
+| `proxy.cache.refresh_evictions.total` | Counter | `{entry}` | `status_code` | Cache entries evicted during background refresh due to a 4xx response from upstream. `status_code`: `401`, `403`, `404`, `410` |
+| `proxy.cache.refresh_preserved_stale.total` | Counter | `{response}` | `status_code` | Background refresh non-200/non-304 responses that preserved the stale entry (429 or 5xx). Enables alerting on sustained upstream errors without eviction. |
 
 See [monitoring.md](monitoring.md) for guidance on interpreting these metrics by operator concern.
 
