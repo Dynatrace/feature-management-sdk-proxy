@@ -120,7 +120,31 @@ func TestConfig_NoCredentialLeak(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 	logger.Info("config", slog.Any("cfg", cfg))
-	if strings.Contains(buf.String(), rawSecret) {
-		t.Errorf("slog output leaked credential: %s", buf.String())
+	out := buf.String()
+	if strings.Contains(out, rawSecret) {
+		t.Errorf("slog output leaked credential: %s", out)
+	}
+	if !strings.Contains(out, "[REDACTED]") {
+		t.Errorf("slog output missing [REDACTED]: %s", out)
+	}
+	if !strings.Contains(out, `"port"`) {
+		t.Errorf("slog output missing port key: %s", out)
+	}
+	if !strings.Contains(out, `"snapshot_s3_access_key"`) {
+		t.Errorf("slog output missing snapshot_s3_access_key key: %s", out)
+	}
+}
+
+func TestConfig_LogValue_SnapshotBackendDisabled(t *testing.T) {
+	cfg := Config{}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	logger.Info("test", slog.Any("config", cfg))
+	out := buf.String()
+	if !strings.Contains(out, `"disabled"`) {
+		t.Errorf("expected snapshot_backend=disabled in log output: %s", out)
+	}
+	if strings.Contains(out, `"snapshot_backend":""`) {
+		t.Errorf("snapshot_backend must not log as empty string: %s", out)
 	}
 }
