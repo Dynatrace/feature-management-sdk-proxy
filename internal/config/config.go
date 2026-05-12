@@ -79,11 +79,14 @@ type Config struct {
 	CacheInactivityEvictAfter time.Duration
 }
 
+const defaultCDNBaseDomain = "fm.dynatrace.com"
+
 // FromEnv loads configuration from environment variables.
-// CDN_BASE_DOMAIN is required; all others have defaults.
+// All variables have safe defaults.
 func FromEnv() (Config, error) {
 	cfg := Config{
 		Port:                      8080,
+		CDNBaseDomain:             defaultCDNBaseDomain,
 		LogLevel:                  slog.LevelInfo,
 		ShutdownTimeout:           30 * time.Second,
 		BillingFlushInterval:      60 * time.Second,
@@ -104,7 +107,7 @@ func FromEnv() (Config, error) {
 
 	domain := os.Getenv("CDN_BASE_DOMAIN")
 	if domain == "" {
-		return Config{}, errors.New("CDN_BASE_DOMAIN is required")
+		domain = defaultCDNBaseDomain
 	}
 	for _, c := range domain {
 		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-') {

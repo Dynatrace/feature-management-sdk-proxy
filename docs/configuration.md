@@ -1,6 +1,6 @@
 # Configuration Reference
 
-All configuration is loaded from environment variables at startup. `CDN_BASE_DOMAIN` is the only required variable; everything else has a safe default.
+All configuration is loaded from environment variables at startup and have safe defaults.
 
 The proxy validates all values at startup and exits 1 with a descriptive error if any variable is invalid.
 
@@ -8,7 +8,7 @@ The proxy validates all values at startup and exits 1 with a descriptive error i
 
 ### `CDN_BASE_DOMAIN`
 
-**Required.**
+**Optional.** Default: `fm.dynatrace.com`.
 
 The bare hostname for the upstream Dynatrace Feature Management CDN. The proxy derives the full upstream URL from the SDK key's region segment:
 
@@ -18,8 +18,10 @@ https://cdn.{region}.{CDN_BASE_DOMAIN}/server/{sdk_key}.json
 
 Valid value: letters, digits, dots, and hyphens only — no scheme (`https://`), no path, no port.
 
+Override this to target a custom CDN environment.
+
 ```bash
-CDN_BASE_DOMAIN=fm.dynatracelabs.com
+CDN_BASE_DOMAIN=cdn.example.com
 ```
 
 ---
@@ -344,7 +346,6 @@ Sampling strategy for distributed traces. Honors the standard OTel SDK environme
 Minimal production configuration:
 
 ```bash
-CDN_BASE_DOMAIN=fm.dynatracelabs.com
 PORT=8080
 LOG_LEVEL=INFO
 SHUTDOWN_TIMEOUT=30s
@@ -370,7 +371,6 @@ kind: ConfigMap
 metadata:
   name: sdk-proxy-config
 data:
-  CDN_BASE_DOMAIN: fm.dynatracelabs.com
   PORT: "8080"
   LOG_LEVEL: INFO
   SHUTDOWN_TIMEOUT: 30s
