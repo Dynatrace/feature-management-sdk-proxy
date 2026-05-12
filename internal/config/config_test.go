@@ -7,8 +7,6 @@ import (
 )
 
 func TestFromEnv_Defaults(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
-
 	cfg, err := FromEnv()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -25,7 +23,6 @@ func TestFromEnv_Defaults(t *testing.T) {
 }
 
 func TestFromEnv_AllVars(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("PORT", "9090")
 	t.Setenv("LOG_LEVEL", "DEBUG")
 	t.Setenv("SHUTDOWN_TIMEOUT", "10s")
@@ -45,16 +42,18 @@ func TestFromEnv_AllVars(t *testing.T) {
 	}
 }
 
-func TestFromEnv_MissingCDNBaseDomain(t *testing.T) {
+func TestFromEnv_CDNBaseDomain_DefaultUsedWhenUnset(t *testing.T) {
 	t.Setenv("CDN_BASE_DOMAIN", "")
-	_, err := FromEnv()
-	if err == nil {
-		t.Fatal("expected error for missing CDN_BASE_DOMAIN")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.CDNBaseDomain != "fm.dynatrace.com" {
+		t.Errorf("CDNBaseDomain = %q, want \"fm.dynatrace.com\"", cfg.CDNBaseDomain)
 	}
 }
 
 func TestFromEnv_InvalidPort(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("PORT", "99999")
 
 	_, err := FromEnv()
@@ -64,7 +63,6 @@ func TestFromEnv_InvalidPort(t *testing.T) {
 }
 
 func TestFromEnv_InvalidLogLevel(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("LOG_LEVEL", "VERBOSE")
 
 	_, err := FromEnv()
@@ -74,7 +72,6 @@ func TestFromEnv_InvalidLogLevel(t *testing.T) {
 }
 
 func TestFromEnv_InvalidShutdownTimeout(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("SHUTDOWN_TIMEOUT", "notaduration")
 
 	_, err := FromEnv()
@@ -84,8 +81,6 @@ func TestFromEnv_InvalidShutdownTimeout(t *testing.T) {
 }
 
 func TestFromEnv_BillingFlushInterval_Default(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
-
 	cfg, err := FromEnv()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -96,7 +91,6 @@ func TestFromEnv_BillingFlushInterval_Default(t *testing.T) {
 }
 
 func TestFromEnv_BillingFlushInterval_ValidOverride(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("BILLING_FLUSH_INTERVAL", "30s")
 
 	cfg, err := FromEnv()
@@ -109,7 +103,6 @@ func TestFromEnv_BillingFlushInterval_ValidOverride(t *testing.T) {
 }
 
 func TestFromEnv_BillingFlushInterval_TooShort(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("BILLING_FLUSH_INTERVAL", "5s")
 
 	_, err := FromEnv()
@@ -119,7 +112,6 @@ func TestFromEnv_BillingFlushInterval_TooShort(t *testing.T) {
 }
 
 func TestFromEnv_BillingFlushInterval_Malformed(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("BILLING_FLUSH_INTERVAL", "notaduration")
 
 	_, err := FromEnv()
@@ -129,7 +121,6 @@ func TestFromEnv_BillingFlushInterval_Malformed(t *testing.T) {
 }
 
 func TestFromEnv_ProxyInstanceID_Override(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("PROXY_INSTANCE_ID", "pod-abc-123")
 
 	cfg, err := FromEnv()
@@ -142,7 +133,6 @@ func TestFromEnv_ProxyInstanceID_Override(t *testing.T) {
 }
 
 func TestFromEnv_ProxyInstanceID_DefaultNonEmpty(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("PROXY_INSTANCE_ID", "")
 
 	cfg, err := FromEnv()
@@ -156,8 +146,6 @@ func TestFromEnv_ProxyInstanceID_DefaultNonEmpty(t *testing.T) {
 }
 
 func TestFromEnv_BillingRetryBufferSize_Default(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
-
 	cfg, err := FromEnv()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -168,7 +156,6 @@ func TestFromEnv_BillingRetryBufferSize_Default(t *testing.T) {
 }
 
 func TestFromEnv_BillingRetryBufferSize_ValidOverride(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("BILLING_RETRY_BUFFER_SIZE", "5000")
 
 	cfg, err := FromEnv()
@@ -181,7 +168,6 @@ func TestFromEnv_BillingRetryBufferSize_ValidOverride(t *testing.T) {
 }
 
 func TestFromEnv_BillingRetryBufferSize_Zero(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("BILLING_RETRY_BUFFER_SIZE", "0")
 
 	_, err := FromEnv()
@@ -191,7 +177,6 @@ func TestFromEnv_BillingRetryBufferSize_Zero(t *testing.T) {
 }
 
 func TestFromEnv_BillingRetryBufferSize_Negative(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("BILLING_RETRY_BUFFER_SIZE", "-1")
 
 	_, err := FromEnv()
@@ -201,7 +186,6 @@ func TestFromEnv_BillingRetryBufferSize_Negative(t *testing.T) {
 }
 
 func TestFromEnv_BillingRetryBufferSize_Malformed(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("BILLING_RETRY_BUFFER_SIZE", "notanint")
 
 	_, err := FromEnv()
@@ -211,7 +195,6 @@ func TestFromEnv_BillingRetryBufferSize_Malformed(t *testing.T) {
 }
 
 func TestFromEnv_BillingRetryBufferSize_TooLarge(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("BILLING_RETRY_BUFFER_SIZE", "100001")
 
 	_, err := FromEnv()
@@ -221,7 +204,6 @@ func TestFromEnv_BillingRetryBufferSize_TooLarge(t *testing.T) {
 }
 
 func TestFromEnv_SnapshotBackend_S3(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("SNAPSHOT_BACKEND", "s3")
 	t.Setenv("SNAPSHOT_S3_BUCKET", "my-bucket")
 	t.Setenv("SNAPSHOT_S3_REGION", "us-east-1")
@@ -236,7 +218,6 @@ func TestFromEnv_SnapshotBackend_S3(t *testing.T) {
 }
 
 func TestFromEnv_SnapshotBackend_Local(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("SNAPSHOT_BACKEND", "local")
 	t.Setenv("SNAPSHOT_LOCAL_DIR", "/tmp/snapshots")
 
@@ -253,7 +234,6 @@ func TestFromEnv_SnapshotBackend_Local(t *testing.T) {
 }
 
 func TestFromEnv_SnapshotBackend_Local_MissingDir(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("SNAPSHOT_BACKEND", "local")
 	t.Setenv("SNAPSHOT_LOCAL_DIR", "")
 
@@ -264,7 +244,6 @@ func TestFromEnv_SnapshotBackend_Local_MissingDir(t *testing.T) {
 }
 
 func TestFromEnv_SnapshotBackend_Local_RelativePath(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("SNAPSHOT_BACKEND", "local")
 	t.Setenv("SNAPSHOT_LOCAL_DIR", "relative/path")
 
@@ -275,7 +254,6 @@ func TestFromEnv_SnapshotBackend_Local_RelativePath(t *testing.T) {
 }
 
 func TestFromEnv_SnapshotBackend_Invalid(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("SNAPSHOT_BACKEND", "gcs")
 
 	_, err := FromEnv()
@@ -303,8 +281,6 @@ func TestFromEnv_InvalidCDNBaseDomain(t *testing.T) {
 }
 
 func TestFromEnv_SnapshotMaxAge_Default(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
-
 	cfg, err := FromEnv()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -315,7 +291,6 @@ func TestFromEnv_SnapshotMaxAge_Default(t *testing.T) {
 }
 
 func TestFromEnv_SnapshotMaxAge_ValidOverride(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("SNAPSHOT_BACKEND", "local")
 	t.Setenv("SNAPSHOT_LOCAL_DIR", "/tmp/snapshots")
 	t.Setenv("SNAPSHOT_MAX_AGE", "6h")
@@ -333,7 +308,6 @@ func TestFromEnv_SnapshotMaxAge_Invalid(t *testing.T) {
 	cases := []string{"abc", "-1h", "0s"}
 	for _, v := range cases {
 		t.Run(v, func(t *testing.T) {
-			t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 			t.Setenv("SNAPSHOT_BACKEND", "local")
 			t.Setenv("SNAPSHOT_LOCAL_DIR", "/tmp/snapshots")
 			t.Setenv("SNAPSHOT_MAX_AGE", v)
@@ -346,7 +320,6 @@ func TestFromEnv_SnapshotMaxAge_Invalid(t *testing.T) {
 }
 
 func TestFromEnv_SnapshotMaxAge_WithoutBackend(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("SNAPSHOT_MAX_AGE", "6h")
 
 	_, err := FromEnv()
@@ -356,8 +329,6 @@ func TestFromEnv_SnapshotMaxAge_WithoutBackend(t *testing.T) {
 }
 
 func TestFromEnv_SSEDisabled_Default(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
-
 	cfg, err := FromEnv()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -371,7 +342,6 @@ func TestFromEnv_SSEDisabled_True(t *testing.T) {
 	cases := []string{"true", "1"}
 	for _, v := range cases {
 		t.Run(v, func(t *testing.T) {
-			t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 			t.Setenv("SSE_DISABLED", v)
 
 			cfg, err := FromEnv()
@@ -389,7 +359,6 @@ func TestFromEnv_SSEDisabled_False(t *testing.T) {
 	cases := []string{"false", "0"}
 	for _, v := range cases {
 		t.Run(v, func(t *testing.T) {
-			t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 			t.Setenv("SSE_DISABLED", v)
 
 			cfg, err := FromEnv()
@@ -404,7 +373,6 @@ func TestFromEnv_SSEDisabled_False(t *testing.T) {
 }
 
 func TestFromEnv_SSEDisabled_Invalid(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("SSE_DISABLED", "yes")
 
 	_, err := FromEnv()
@@ -414,7 +382,6 @@ func TestFromEnv_SSEDisabled_Invalid(t *testing.T) {
 }
 
 func TestFromEnv_CacheInactivityEvictAfter_Default(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	cfg, err := FromEnv()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -425,7 +392,6 @@ func TestFromEnv_CacheInactivityEvictAfter_Default(t *testing.T) {
 }
 
 func TestFromEnv_CacheInactivityEvictAfter_CustomValue(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("CACHE_INACTIVITY_EVICT_AFTER", "72h")
 	cfg, err := FromEnv()
 	if err != nil {
@@ -437,7 +403,6 @@ func TestFromEnv_CacheInactivityEvictAfter_CustomValue(t *testing.T) {
 }
 
 func TestFromEnv_CacheInactivityEvictAfter_ZeroDisables(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 	t.Setenv("CACHE_INACTIVITY_EVICT_AFTER", "0")
 	cfg, err := FromEnv()
 	if err != nil {
@@ -452,7 +417,6 @@ func TestFromEnv_CacheInactivityEvictAfter_Invalid(t *testing.T) {
 	cases := []string{"abc", "-1h", "-5m"}
 	for _, v := range cases {
 		t.Run(v, func(t *testing.T) {
-			t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 			t.Setenv("CACHE_INACTIVITY_EVICT_AFTER", v)
 			_, err := FromEnv()
 			if err == nil {
@@ -466,7 +430,6 @@ func TestFromEnv_CacheInactivityEvictAfter_TooShort(t *testing.T) {
 	cases := []string{"30m", "59m", "1s"}
 	for _, v := range cases {
 		t.Run(v, func(t *testing.T) {
-			t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
 			t.Setenv("CACHE_INACTIVITY_EVICT_AFTER", v)
 			_, err := FromEnv()
 			if err == nil {

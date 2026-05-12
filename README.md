@@ -30,7 +30,7 @@ The proxy caches flagd config payloads and revalidates them every 5 minutes. SSE
 make build
 
 # Run
-CDN_BASE_DOMAIN=fm.dynatracelabs.com ./sdk-proxy
+./sdk-proxy
 ```
 
 The proxy listens on `:8080` by default.
@@ -41,7 +41,6 @@ The proxy listens on `:8080` by default.
 docker build -t sdk-proxy .
 
 docker run --rm \
-  -e CDN_BASE_DOMAIN=fm.dynatracelabs.com \
   -p 8080:8080 \
   sdk-proxy
 ```
@@ -55,8 +54,6 @@ containers:
     ports:
       - containerPort: 8080
     env:
-      - name: CDN_BASE_DOMAIN
-        value: fm.dynatracelabs.com
       - name: PROXY_INSTANCE_ID
         valueFrom:
           fieldRef:
@@ -106,11 +103,11 @@ See [docs/snapshot.md](docs/snapshot.md) for startup behavior, staleness handlin
 
 ## Configuration
 
-All configuration is via environment variables. `CDN_BASE_DOMAIN` is the only required variable.
+All configuration is via environment variables. All variables have safe defaults.
 
 | Variable | Default | Description |
 |---|---|---|
-| `CDN_BASE_DOMAIN` | — | **Required.** Bare hostname for the upstream CDN (e.g. `fm.dynatracelabs.com`). |
+| `CDN_BASE_DOMAIN` | `fm.dynatrace.com` | Bare hostname for the upstream CDN. Override for staging or custom environments. |
 | `PORT` | `8080` | TCP port the proxy listens on. |
 | `LOG_LEVEL` | `INFO` | Log verbosity: `DEBUG`, `INFO`, `WARN`, `ERROR`. |
 | `SHUTDOWN_TIMEOUT` | `30s` | Grace period for draining in-flight requests on shutdown. |
