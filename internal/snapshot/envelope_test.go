@@ -54,7 +54,7 @@ func TestEnvelope_PayloadByteFidelity(t *testing.T) {
 
 func TestEnvelope_UnknownVersionRejected(t *testing.T) {
 	// Manually craft an envelope with a higher version number.
-	raw := []byte(`{"snapshot_version":999,"sdk_key_hash":"k","etag":"","captured_at":"2026-01-01T00:00:00Z","payload":""}`)
+	raw := []byte(`{"snapshot_version":999,"sdk_key_id":"k","etag":"","captured_at":"2026-01-01T00:00:00Z","payload":""}`)
 	_, _, _, _, err := DecodeEnvelope(raw)
 	if !errors.Is(err, ErrUnknownVersion) {
 		t.Errorf("expected ErrUnknownVersion, got %v", err)
@@ -70,13 +70,13 @@ func TestEnvelope_MalformedJSON(t *testing.T) {
 
 func TestEnvelope_ForwardCompatUnknownFields(t *testing.T) {
 	// A known version with extra unknown fields should still decode without error.
-	raw := []byte(`{"snapshot_version":1,"sdk_key_hash":"k","etag":"e","captured_at":"2026-01-01T00:00:00Z","payload":"aGVsbG8=","future_field":"ignored"}`)
-	keyHash, etag, _, payload, err := DecodeEnvelope(raw)
+	raw := []byte(`{"snapshot_version":1,"sdk_key_id":"k","etag":"e","captured_at":"2026-01-01T00:00:00Z","payload":"aGVsbG8=","future_field":"ignored"}`)
+	keyID, etag, _, payload, err := DecodeEnvelope(raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if keyHash != "k" {
-		t.Errorf("keyHash: got %q", keyHash)
+	if keyID != "k" {
+		t.Errorf("keyID: got %q", keyID)
 	}
 	if etag != "e" {
 		t.Errorf("etag: got %q", etag)

@@ -128,12 +128,12 @@ func TestS3Store_PutAndGet(t *testing.T) {
 	fake := newS3Fake()
 	store, _ := newTestS3Store(t, fake)
 
-	body := []byte(`{"snapshot_version":1,"sdk_key_hash":"abc","etag":"v1","captured_at":"2026-01-01T00:00:00Z","payload":"dGVzdA=="}`)
-	if err := store.Put(context.Background(), "abc", body); err != nil {
+	body := []byte(`{"snapshot_version":1,"sdk_key_hash":"dt01.server_us_ab3xy9kp2q","etag":"v1","captured_at":"2026-01-01T00:00:00Z","payload":"dGVzdA=="}`)
+	if err := store.Put(context.Background(), "dt01.server_us_ab3xy9kp2q", body); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
-	got, err := store.Get(context.Background(), "abc")
+	got, err := store.Get(context.Background(), "dt01.server_us_ab3xy9kp2q")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -146,10 +146,10 @@ func TestS3Store_List(t *testing.T) {
 	fake := newS3Fake()
 	store, _ := newTestS3Store(t, fake)
 
-	if err := store.Put(context.Background(), "key1", []byte(`{}`)); err != nil {
+	if err := store.Put(context.Background(), "dt01.server_us_ab3xy9kp2q", []byte(`{}`)); err != nil {
 		t.Fatalf("Put key1: %v", err)
 	}
-	if err := store.Put(context.Background(), "key2", []byte(`{}`)); err != nil {
+	if err := store.Put(context.Background(), "dt01.server_eu_0000000000", []byte(`{}`)); err != nil {
 		t.Fatalf("Put key2: %v", err)
 	}
 
@@ -161,7 +161,7 @@ func TestS3Store_List(t *testing.T) {
 	for _, k := range keys {
 		found[k] = true
 	}
-	if !found["key1"] || !found["key2"] {
+	if !found["dt01.server_us_ab3xy9kp2q"] || !found["dt01.server_eu_0000000000"] {
 		t.Errorf("expected key1 and key2 in list, got %v", keys)
 	}
 }
@@ -170,7 +170,7 @@ func TestS3Store_GetMissing(t *testing.T) {
 	fake := newS3Fake()
 	store, _ := newTestS3Store(t, fake)
 
-	_, err := store.Get(context.Background(), "nonexistent")
+	_, err := store.Get(context.Background(), "dt01.server_ap_0000000099")
 	if err == nil {
 		t.Error("expected error for missing key, got nil")
 	}
@@ -193,13 +193,13 @@ func TestS3Store_Delete_RemovesObject(t *testing.T) {
 	fake := newS3Fake()
 	store, _ := newTestS3Store(t, fake)
 
-	if err := store.Put(context.Background(), "key1", []byte(`{}`)); err != nil {
+	if err := store.Put(context.Background(), "dt01.server_us_ab3xy9kp2q", []byte(`{}`)); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	if err := store.Delete(context.Background(), "key1"); err != nil {
+	if err := store.Delete(context.Background(), "dt01.server_us_ab3xy9kp2q"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	_, err := store.Get(context.Background(), "key1")
+	_, err := store.Get(context.Background(), "dt01.server_us_ab3xy9kp2q")
 	if err == nil {
 		t.Error("expected error after Delete, got nil")
 	}
@@ -209,26 +209,28 @@ func TestS3Store_Delete_MissingKeyReturnsNil(t *testing.T) {
 	fake := newS3Fake()
 	store, _ := newTestS3Store(t, fake)
 
-	if err := store.Delete(context.Background(), "nonexistent"); err != nil {
+	if err := store.Delete(context.Background(), "dt01.server_ap_0000000099"); err != nil {
 		t.Errorf("Delete on missing key: expected nil, got %v", err)
 	}
 }
 
-func TestExtractKeyHash(t *testing.T) {
+func TestExtractPublicID(t *testing.T) {
+	const validID = "dt01.server_us_ab3xy9kp2q"
 	cases := []struct {
 		key    string
 		prefix string
 		want   string
 	}{
-		{"snapshots/abc123.json", "snapshots/", "abc123"},
-		{"abc123.json", "", "abc123"},
-		{"snapshots/nested/key.json", "snapshots/", ""},
-		{"snapshots/", "snapshots/", ""},
+		{"snapshots/" + validID + ".json", "snapshots/", validID},
+		{validID + ".json", "", validID},
+		{"snapshots/nested/" + validID + ".json", "snapshots/", ""}, // nested slash rejected
+		{"snapshots/", "snapshots/", ""},                            // empty name
+		{"snapshots/abc123.json", "snapshots/", ""},                 // old-format hash rejected
 	}
 	for _, tc := range cases {
-		got := extractKeyHash(tc.key, tc.prefix)
+		got := extractPublicID(tc.key, tc.prefix)
 		if got != tc.want {
-			t.Errorf("extractKeyHash(%q, %q) = %q, want %q", tc.key, tc.prefix, got, tc.want)
+			t.Errorf("extractPublicID(%q, %q) = %q, want %q", tc.key, tc.prefix, got, tc.want)
 		}
 	}
 }

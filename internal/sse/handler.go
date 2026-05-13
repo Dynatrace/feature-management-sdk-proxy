@@ -29,7 +29,7 @@ const defaultEventType = "message"
 
 // Subscriber is the narrow interface the Handler needs from the SSE Manager.
 type Subscriber interface {
-	Subscribe(keyHash string) (<-chan Event, func())
+	Subscribe(keyID string) (<-chan Event, func())
 }
 
 // Handler serves GET /sse. It authenticates the caller via the sdk_key query
@@ -83,26 +83,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !isValidStreamID(streamID) {
+	if !cache.IsValidID(streamID) {
 		h.logger.Warn("sse: invalid stream_id format",
 			slog.Int("len", len(streamID)),
 		)
-		http.Error(w, "invalid stream_id: must be 16 lowercase hex characters", http.StatusBadRequest)
+		http.Error(w, "invalid stream_id: must be a valid SDK key public prefix", http.StatusBadRequest)
 		return
 	}
 
-	keyHash := streamID
+	keyID := streamID
 
 	// Extract W3C trace context and span the setup phase only — SSE connections
 	// can last hours and Dynatrace bins spans by completion time. Active connection
 	// duration is covered by the SSEClientConnections gauge metric.
 	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 	_, setupSpan := h.tracer.Start(ctx, "sse.client.subscribe",
-		trace.WithAttributes(tracing.SDKKeyHash(keyHash)))
+		trace.WithAttributes(tracing.SDKKeyPublicID(keyID)))
 
-	if _, ok := h.cache.Get(keyHash); !ok {
+	if _, ok := h.cache.Get(keyID); !ok {
 		h.logger.Warn("sse: client connected before config cached; returning 412",
-			slog.String("key", keyHash),
+			slog.String("key", keyID),
 		)
 		setupSpan.SetAttributes(attribute.String("outcome", "412_no_config"))
 		setupSpan.End()
@@ -114,7 +114,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Rejected requests (412 no config, invalid stream_id) are not counted —
 	// they never establish a connection and consume no ongoing proxy resources.
 	if h.counter != nil {
-		h.counter.IncrementByHash(keyHash)
+		h.counter.IncrementByHash(keyID)
 	}
 
 	flusher, ok := w.(http.Flusher)
@@ -137,10 +137,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setupSpan.End()
 
 	h.inst.SSEClientConnections.Add(context.Background(), 1, metric.WithAttributes(
-		attribute.String("sdk_key_hash", keyHash),
+		attribute.String("sdk_key_public_id", keyID),
 	))
 	defer h.inst.SSEClientConnections.Add(context.Background(), -1, metric.WithAttributes(
-		attribute.String("sdk_key_hash", keyHash),
+		attribute.String("sdk_key_public_id", keyID),
 	))
 
 	// When SSE is disabled (manager == nil), hold the connection open for
@@ -150,13 +150,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var ch <-chan Event
 	if h.manager != nil {
 		var unsub func()
-		ch, unsub = h.manager.Subscribe(keyHash)
+		ch, unsub = h.manager.Subscribe(keyID)
 		defer unsub()
 	} else {
-		h.logger.Debug("sse: SSE disabled — holding connection for heartbeats only", slog.String("key", keyHash))
+		h.logger.Debug("sse: SSE disabled — holding connection for heartbeats only", slog.String("key", keyID))
 	}
 
-	h.logger.Debug("sse: client connected", slog.String("key", keyHash))
+	h.logger.Debug("sse: client connected", slog.String("key", keyID))
 
 	heartbeat := time.NewTicker(h.heartbeatInterval)
 	defer heartbeat.Stop()
@@ -164,7 +164,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
-			h.logger.Debug("sse: client disconnected", slog.String("key", keyHash))
+			h.logger.Debug("sse: client disconnected", slog.String("key", keyID))
 			return
 		case evt, ok := <-ch:
 			if !ok {
@@ -175,7 +175,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			flusher.Flush()
 			h.inst.SSEEventsDelivered.Add(context.Background(), 1, metric.WithAttributes(
-				attribute.String("sdk_key_hash", keyHash),
+				attribute.String("sdk_key_public_id", keyID),
 			))
 		case <-heartbeat.C:
 			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
@@ -208,18 +208,4 @@ func writeSSEEvent(w http.ResponseWriter, evt Event) error {
 	}
 	_, err := fmt.Fprint(w, "\n")
 	return err
-}
-
-// isValidStreamID returns true if s is exactly 16 lowercase hex characters —
-// the format produced by cache.Key(sdkKey).
-func isValidStreamID(s string) bool {
-	if len(s) != 16 {
-		return false
-	}
-	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-			return false
-		}
-	}
-	return true
 }

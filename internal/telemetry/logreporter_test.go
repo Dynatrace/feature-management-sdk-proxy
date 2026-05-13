@@ -18,7 +18,7 @@ func TestLogReporter_Report_SDKKeyAbsent(t *testing.T) {
 	r := NewLogReporter(logger, "test-instance-1")
 
 	s := Sample{
-		KeyHash:     "aabbccddeeff0011",
+		KeyID:       "aabbccddeeff0011",
 		SDKKey:      "super-secret-sdk-key-do-not-log",
 		Count:       42,
 		WindowStart: time.Now().Add(-time.Minute).UTC(),
@@ -34,8 +34,8 @@ func TestLogReporter_Report_SDKKeyAbsent(t *testing.T) {
 	if strings.Contains(output, s.SDKKey) {
 		t.Errorf("log output contains raw SDKKey %q — must never appear in logs", s.SDKKey)
 	}
-	if !strings.Contains(output, s.KeyHash) {
-		t.Errorf("log output missing key_hash %q", s.KeyHash)
+	if !strings.Contains(output, s.KeyID) {
+		t.Errorf("log output missing key_hash %q", s.KeyID)
 	}
 	if !strings.Contains(output, "42") {
 		t.Errorf("log output missing count field")
@@ -48,7 +48,7 @@ func TestLogReporter_Report_SDKKeyAbsent(t *testing.T) {
 func TestLogReporter_Report_ReturnsNil(t *testing.T) {
 	var buf bytes.Buffer
 	r := NewLogReporter(slog.New(slog.NewJSONHandler(&buf, nil)), "instance-x")
-	s := Sample{KeyHash: "0000000000000000", SDKKey: "any-key", Count: 1}
+	s := Sample{KeyID: "0000000000000000", SDKKey: "any-key", Count: 1}
 
 	if err := r.Report(context.Background(), s); err != nil {
 		t.Errorf("Report() = %v, want nil", err)

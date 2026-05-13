@@ -25,22 +25,23 @@ const (
 // Configurable via LIFECYCLE_KEYS_CAP; see internal/config.
 const defaultLifecycleKeysCap = 10000
 
-// Invalidator is called for each key hash affected by a lifecycle event.
+// Invalidator is called for each key ID affected by a lifecycle event.
 type Invalidator interface {
-	Invalidate(keyHash string)
+	Invalidate(keyID string)
 }
 
 // InvalidatorFunc adapts a plain function to the Invalidator interface.
-type InvalidatorFunc func(keyHash string)
+type InvalidatorFunc func(keyID string)
 
-// Invalidate calls f with keyHash.
-func (f InvalidatorFunc) Invalidate(keyHash string) { f(keyHash) }
+// Invalidate calls f with keyID.
+func (f InvalidatorFunc) Invalidate(keyID string) { f(keyID) }
 
 // lifecycleEventData is the narrow JSON parse for lifecycle event data fields.
-// Either sdkKeyHashes (pre-hashed) or sdkKeys (raw, will be hashed) may be set.
+// Either sdkKeyHashes (public key identifiers) or sdkKeys (raw full keys) may be set.
+// The JSON field name "sdkKeyHashes" is kept for wire compatibility with the upstream service.
 type lifecycleEventData struct {
-	SDKKeyHashes []string `json:"sdkKeyHashes,omitempty"`
-	SDKKeys      []string `json:"sdkKeys,omitempty"`
+	SDKKeyIDs []string `json:"sdkKeyHashes,omitempty"` // public key identifiers; kept for wire compat
+	SDKKeys   []string `json:"sdkKeys,omitempty"`
 }
 
 // LifecycleHandler intercepts upstream SSE lifecycle events and calls Invalidate
@@ -55,7 +56,7 @@ type LifecycleHandler struct {
 }
 
 // NewLifecycleHandler constructs a LifecycleHandler. keysCap is the maximum
-// combined number of sdkKeyHashes + sdkKeys entries accepted in a single event;
+// combined number of sdkKeyIDs + sdkKeys entries accepted in a single event;
 // use config.LifecycleKeysCap (default 10000). Nil invalidators are filtered.
 func NewLifecycleHandler(inst *metrics.Instruments, logger *slog.Logger, keysCap int, invalidators ...Invalidator) *LifecycleHandler {
 	var filtered []Invalidator
@@ -84,7 +85,7 @@ func (h *LifecycleHandler) HandleEvent(evt Event) bool {
 	}
 
 	eventType := evt.EventType
-	keyHashes, ok := h.parseKeyHashes(evt)
+	keyIDs, ok := h.parseKeyIDs(evt)
 	if !ok {
 		h.inst.LifecycleEventsTotal.Add(context.Background(), 1, metric.WithAttributes(
 			attribute.String("event_type", eventType),
@@ -98,13 +99,13 @@ func (h *LifecycleHandler) HandleEvent(evt Event) bool {
 		attribute.String("result", "handled"),
 	))
 
-	for _, keyHash := range keyHashes {
+	for _, keyID := range keyIDs {
 		h.logger.Info("sse: lifecycle invalidation",
 			slog.String("event_type", eventType),
-			slog.String("key_hash", keyHash),
+			slog.String("sdk_key_public_id", keyID),
 		)
 		for _, inv := range h.invalidators {
-			inv.Invalidate(keyHash)
+			inv.Invalidate(keyID)
 		}
 		h.inst.LifecycleInvalidatedKeys.Add(context.Background(), 1, metric.WithAttributes(
 			attribute.String("event_type", eventType),
@@ -114,10 +115,10 @@ func (h *LifecycleHandler) HandleEvent(evt Event) bool {
 	return true
 }
 
-// parseKeyHashes extracts and validates key hashes from a lifecycle event's
-// data field. Accepts sdkKeyHashes (pre-hashed) or sdkKeys (raw, will be
-// hashed). Returns nil,false on malformed input.
-func (h *LifecycleHandler) parseKeyHashes(evt Event) ([]string, bool) {
+// parseKeyIDs extracts and validates key identifiers from a lifecycle event's
+// data field. Accepts sdkKeyHashes (public key IDs) or sdkKeys (raw full keys;
+// public prefix is extracted). Returns nil,false on malformed input.
+func (h *LifecycleHandler) parseKeyIDs(evt Event) ([]string, bool) {
 	if len(evt.Data) == 0 {
 		h.logger.Warn("sse: lifecycle event with empty data field",
 			slog.String("event_type", evt.EventType),
@@ -134,17 +135,17 @@ func (h *LifecycleHandler) parseKeyHashes(evt Event) ([]string, bool) {
 		return nil, false
 	}
 
-	if len(d.SDKKeyHashes) == 0 && len(d.SDKKeys) == 0 {
+	if len(d.SDKKeyIDs) == 0 && len(d.SDKKeys) == 0 {
 		h.logger.Warn("sse: lifecycle event data has no key identifiers",
 			slog.String("event_type", evt.EventType),
 		)
 		return nil, false
 	}
 
-	if total := len(d.SDKKeyHashes) + len(d.SDKKeys); total > h.keysCap {
+	if total := len(d.SDKKeyIDs) + len(d.SDKKeys); total > h.keysCap {
 		h.logger.Warn("sse: lifecycle event exceeds key array cap, rejecting",
 			slog.String("event_type", evt.EventType),
-			slog.Int("key_hashes_len", len(d.SDKKeyHashes)),
+			slog.Int("key_ids_len", len(d.SDKKeyIDs)),
 			slog.Int("keys_len", len(d.SDKKeys)),
 			slog.Int("total", total),
 			slog.Int("cap", h.keysCap),
@@ -152,34 +153,28 @@ func (h *LifecycleHandler) parseKeyHashes(evt Event) ([]string, bool) {
 		return nil, false
 	}
 
-	var hashes []string
+	var ids []string
 
-	for _, keyHash := range d.SDKKeyHashes {
-		if !isValidKeyHash(keyHash) {
+	for _, keyID := range d.SDKKeyIDs {
+		if !cache.IsValidID(keyID) {
 			h.logger.Warn("sse: skipping invalid sdkKeyHash in lifecycle event",
 				slog.String("event_type", evt.EventType),
 			)
 			continue
 		}
-		hashes = append(hashes, keyHash)
+		ids = append(ids, keyID)
 	}
 
 	for _, key := range d.SDKKeys {
-		hashes = append(hashes, cache.Key(key))
-	}
-
-	return hashes, true
-}
-
-// isValidKeyHash returns true for exactly 16 lowercase hex chars.
-func isValidKeyHash(s string) bool {
-	if len(s) != 16 {
-		return false
-	}
-	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-			return false
+		id := cache.PublicID(key)
+		if !cache.IsValidID(id) {
+			h.logger.Warn("sse: skipping sdkKey with invalid public prefix in lifecycle event",
+				slog.String("event_type", evt.EventType),
+			)
+			continue
 		}
+		ids = append(ids, id)
 	}
-	return true
+
+	return ids, true
 }

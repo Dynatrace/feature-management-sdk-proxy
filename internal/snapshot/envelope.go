@@ -19,7 +19,7 @@ var ErrUnknownVersion = errors.New("snapshot: unknown version")
 // Envelope is the on-disk format for a persisted cache entry.
 type Envelope struct {
 	Version    int       `json:"snapshot_version"`
-	KeyHash    string    `json:"sdk_key_hash"`
+	KeyID      string    `json:"sdk_key_id"`
 	ETag       string    `json:"etag"`
 	CapturedAt time.Time `json:"captured_at"`
 	// Payload is the raw flagd config bytes, base64-encoded so they survive
@@ -28,10 +28,10 @@ type Envelope struct {
 }
 
 // EncodeEnvelope serialises a cache entry into a JSON envelope.
-func EncodeEnvelope(keyHash, etag string, capturedAt time.Time, payload []byte) ([]byte, error) {
+func EncodeEnvelope(keyID, etag string, capturedAt time.Time, payload []byte) ([]byte, error) {
 	env := Envelope{
 		Version:    CurrentSnapshotVersion,
-		KeyHash:    keyHash,
+		KeyID:      keyID,
 		ETag:       etag,
 		CapturedAt: capturedAt,
 		Payload:    base64.StdEncoding.EncodeToString(payload),
@@ -46,7 +46,7 @@ func EncodeEnvelope(keyHash, etag string, capturedAt time.Time, payload []byte) 
 // DecodeEnvelope parses a JSON envelope and returns the constituent fields.
 // Returns ErrUnknownVersion when the snapshot_version is higher than
 // CurrentSnapshotVersion; callers must skip such objects rather than error.
-func DecodeEnvelope(data []byte) (keyHash, etag string, capturedAt time.Time, payload []byte, err error) {
+func DecodeEnvelope(data []byte) (keyID, etag string, capturedAt time.Time, payload []byte, err error) {
 	var env Envelope
 	if err = json.Unmarshal(data, &env); err != nil {
 		return "", "", time.Time{}, nil, fmt.Errorf("snapshot: decode envelope: %w", err)
@@ -58,5 +58,5 @@ func DecodeEnvelope(data []byte) (keyHash, etag string, capturedAt time.Time, pa
 	if err != nil {
 		return "", "", time.Time{}, nil, fmt.Errorf("snapshot: decode payload: %w", err)
 	}
-	return env.KeyHash, env.ETag, env.CapturedAt, payload, nil
+	return env.KeyID, env.ETag, env.CapturedAt, payload, nil
 }

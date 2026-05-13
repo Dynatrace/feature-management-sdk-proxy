@@ -115,7 +115,7 @@ func waitForCalls(reporter *spyReporter, n int, deadline time.Duration) bool {
 func TestFlusher_DrainOnTick(t *testing.T) {
 	reporter := &spyReporter{}
 	counter := NewCounter()
-	counter.Increment("dt_server_us_tok1")
+	counter.Increment("dt01.server_us_token001000.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	f := newFlusher(counter, reporter, NewNoopRetryBuffer(), newTestInst(t))
 	_, cancel, done := runFlusher(t, f)
@@ -139,7 +139,7 @@ func TestFlusher_DrainOnTick(t *testing.T) {
 func TestFlusher_WindowFieldsPopulated(t *testing.T) {
 	reporter := &spyReporter{}
 	counter := NewCounter()
-	counter.Increment("dt_server_us_tok1")
+	counter.Increment("dt01.server_us_token001000.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	before := time.Now().UTC()
 	f := newFlusher(counter, reporter, NewNoopRetryBuffer(), newTestInst(t))
@@ -194,7 +194,7 @@ func TestFlusher_PermanentError_Drops(t *testing.T) {
 	reporter.SetError(ErrPermanent)
 
 	counter := NewCounter()
-	counter.Increment("dt_server_us_tok1")
+	counter.Increment("dt01.server_us_token001000.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	spy := &spyRetryBuffer{}
 	f := newFlusher(counter, reporter, spy, newTestInst(t))
@@ -218,7 +218,7 @@ func TestFlusher_RetriableError_Enqueues(t *testing.T) {
 	reporter.SetError(retriableErr)
 
 	counter := NewCounter()
-	counter.Increment("dt_server_us_tok1")
+	counter.Increment("dt01.server_us_token001000.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	spy := &spyRetryBuffer{}
 	f := newFlusher(counter, reporter, spy, newTestInst(t))
@@ -240,8 +240,8 @@ func TestFlusher_RetryBeforeFresh(t *testing.T) {
 	// Pre-load the retry buffer with a sample before starting the flusher.
 	spy := &spyRetryBuffer{}
 	retrySample := Sample{
-		KeyHash:     "aabbccddeeff0011",
-		SDKKey:      "dt_server_us_retry_key",
+		KeyID:       "aabbccddeeff0011",
+		SDKKey:      "dt01.server_us_retrykey00.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a",
 		Count:       5,
 		WindowStart: time.Now().Add(-2 * time.Minute).UTC(),
 		WindowEnd:   time.Now().Add(-1 * time.Minute).UTC(),
@@ -249,7 +249,7 @@ func TestFlusher_RetryBeforeFresh(t *testing.T) {
 	spy.Enqueue(retrySample)
 
 	counter := NewCounter()
-	counter.Increment("dt_server_us_fresh_key")
+	counter.Increment("dt01.server_us_freshkey0.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	reporter := &spyReporter{}
 	f := newFlusher(counter, reporter, spy, newTestInst(t))
@@ -268,8 +268,8 @@ func TestFlusher_RetryBeforeFresh(t *testing.T) {
 		t.Fatalf("want >= 2 calls, got %d", len(calls))
 	}
 	// First call must be the retried sample.
-	if calls[0].KeyHash != retrySample.KeyHash {
-		t.Errorf("first call KeyHash = %q, want retry sample %q", calls[0].KeyHash, retrySample.KeyHash)
+	if calls[0].KeyID != retrySample.KeyID {
+		t.Errorf("first call KeyHash = %q, want retry sample %q", calls[0].KeyID, retrySample.KeyID)
 	}
 }
 
@@ -279,8 +279,8 @@ func TestFlusher_RetriedSample_PreservesWindow(t *testing.T) {
 	originalStart := time.Now().Add(-90 * time.Second).UTC()
 	originalEnd := time.Now().Add(-30 * time.Second).UTC()
 	preloaded := Sample{
-		KeyHash:     "ffeeddccbbaa9988",
-		SDKKey:      "dt_server_us_preloaded",
+		KeyID:       "ffeeddccbbaa9988",
+		SDKKey:      "dt01.server_us_preloaded.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a",
 		Count:       7,
 		WindowStart: originalStart,
 		WindowEnd:   originalEnd,
@@ -305,7 +305,7 @@ func TestFlusher_RetriedSample_PreservesWindow(t *testing.T) {
 
 	var found bool
 	for _, c := range calls {
-		if c.KeyHash == preloaded.KeyHash {
+		if c.KeyID == preloaded.KeyID {
 			found = true
 			if !c.WindowStart.Equal(originalStart) {
 				t.Errorf("retried sample WindowStart changed: got %v, want %v", c.WindowStart, originalStart)
@@ -331,7 +331,7 @@ func (r *blockingReporter) Report(ctx context.Context, _ Sample) error {
 func TestFlusher_Shutdown_FlushesPendingCounts(t *testing.T) {
 	reporter := &spyReporter{}
 	counter := NewCounter()
-	counter.Increment("dt_server_us_tok1")
+	counter.Increment("dt01.server_us_token001000.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	f := newFlusher(counter, reporter, NewNoopRetryBuffer(), newTestInst(t))
 
@@ -354,8 +354,8 @@ func TestFlusher_Shutdown_FlushesPendingCounts(t *testing.T) {
 func TestFlusher_Shutdown_DrainsRetryBufferFirst(t *testing.T) {
 	spy := &spyRetryBuffer{}
 	retrySample := Sample{
-		KeyHash:     "aabbccddeeff0011",
-		SDKKey:      "dt_server_us_retry_key",
+		KeyID:       "aabbccddeeff0011",
+		SDKKey:      "dt01.server_us_retrykey00.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a",
 		Count:       5,
 		WindowStart: time.Now().Add(-2 * time.Minute).UTC(),
 		WindowEnd:   time.Now().Add(-1 * time.Minute).UTC(),
@@ -363,7 +363,7 @@ func TestFlusher_Shutdown_DrainsRetryBufferFirst(t *testing.T) {
 	spy.Enqueue(retrySample)
 
 	counter := NewCounter()
-	counter.Increment("dt_server_us_fresh_key")
+	counter.Increment("dt01.server_us_freshkey0.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	reporter := &spyReporter{}
 	f := newFlusher(counter, reporter, spy, newTestInst(t))
@@ -376,8 +376,8 @@ func TestFlusher_Shutdown_DrainsRetryBufferFirst(t *testing.T) {
 	if len(calls) < 2 {
 		t.Fatalf("want >= 2 calls, got %d", len(calls))
 	}
-	if calls[0].KeyHash != retrySample.KeyHash {
-		t.Errorf("first call KeyHash = %q, want retry sample %q", calls[0].KeyHash, retrySample.KeyHash)
+	if calls[0].KeyID != retrySample.KeyID {
+		t.Errorf("first call KeyHash = %q, want retry sample %q", calls[0].KeyID, retrySample.KeyID)
 	}
 }
 
@@ -387,8 +387,8 @@ func TestFlusher_Shutdown_DeadlineExpired_DropsAndEnqueues(t *testing.T) {
 	// The second sample is then enqueued-with-log (not dispatched) because
 	// ctx.Err() != nil at the start of the next loop iteration.
 	counter := NewCounter()
-	counter.Increment("dt_server_us_tok1")
-	counter.Increment("dt_server_us_tok2")
+	counter.Increment("dt01.server_us_token001000.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	counter.Increment("dt01.server_us_token002000.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	spy := &spyRetryBuffer{}
 	f := newFlusher(counter, &blockingReporter{}, spy, newTestInst(t))

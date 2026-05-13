@@ -38,30 +38,30 @@ type Instruments struct {
 	// (hit, miss, upstream_error, client_error).
 	RequestsTotal metric.Int64Counter
 
-	// SSEConnections tracks active upstream SSE connections per sdk_key_hash.
+	// SSEConnections tracks active upstream SSE connections per sdk_key_public_id.
 	SSEConnections metric.Int64UpDownCounter
 
 	// SSEClientConnections tracks active SDK client SSE connections to the proxy
-	// per sdk_key_hash.
+	// per sdk_key_public_id.
 	SSEClientConnections metric.Int64UpDownCounter
 
 	// SSEEventsDelivered counts SSE events successfully written to SDK clients
-	// per sdk_key_hash.
+	// per sdk_key_public_id.
 	SSEEventsDelivered metric.Int64Counter
 
-	// SSEUpstreamReconnects counts upstream SSE reconnect attempts per sdk_key_hash
+	// SSEUpstreamReconnects counts upstream SSE reconnect attempts per sdk_key_public_id
 	// labeled by reason (eof/io_error/inactivity/url_change).
 	SSEUpstreamReconnects metric.Int64Counter
 
-	// SSEUpstreamEvents counts SSE events received from upstream per sdk_key_hash
+	// SSEUpstreamEvents counts SSE events received from upstream per sdk_key_public_id
 	// labeled by result (forwarded/dropped_no_subscribers/dropped_slow_subscriber).
 	SSEUpstreamEvents metric.Int64Counter
 
-	// CacheSize reports the number of bytes held for a given sdk_key_hash.
+	// CacheSize reports the number of bytes held for a given sdk_key_public_id.
 	// Synchronous gauge: each component pushes updates at mutation time.
 	CacheSize metric.Int64Gauge
 
-	// SnapshotAgeSeconds reports seconds since the snapshot was last written, per sdk_key_hash.
+	// SnapshotAgeSeconds reports seconds since the snapshot was last written, per sdk_key_public_id.
 	// Synchronous gauge: updated after each successful snapshot write and on startup.
 	SnapshotAgeSeconds metric.Float64Gauge
 
@@ -157,7 +157,7 @@ func Register(meter metric.Meter) (*Instruments, error) {
 	}
 
 	sseReconnects, err := meter.Int64Counter(SSEUpstreamReconnects,
-		metric.WithDescription("Upstream SSE reconnect attempts by sdk_key_hash and reason (eof/io_error/inactivity/url_change)"),
+		metric.WithDescription("Upstream SSE reconnect attempts by sdk_key_public_id and reason (eof/io_error/inactivity/url_change)"),
 		metric.WithUnit("{reconnect}"),
 	)
 	if err != nil {
@@ -165,7 +165,7 @@ func Register(meter metric.Meter) (*Instruments, error) {
 	}
 
 	sseEvents, err := meter.Int64Counter(SSEUpstreamEvents,
-		metric.WithDescription("Upstream SSE events received by sdk_key_hash and result (forwarded/dropped_no_subscribers/dropped_slow_subscriber)"),
+		metric.WithDescription("Upstream SSE events received by sdk_key_public_id and result (forwarded/dropped_no_subscribers/dropped_slow_subscriber)"),
 		metric.WithUnit("{event}"),
 	)
 	if err != nil {

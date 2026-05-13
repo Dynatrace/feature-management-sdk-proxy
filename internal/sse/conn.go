@@ -33,7 +33,7 @@ var errInactivity = errors.New("sse: inactivity timeout")
 type conn struct {
 	sseURL             string
 	inactivityDelaySec int
-	keyHash            string
+	keyID              string
 	client             *http.Client
 	logger             *slog.Logger
 	inst               *metrics.Instruments
@@ -52,10 +52,10 @@ type conn struct {
 // run is the reconnect loop. It blocks until ctx is cancelled.
 func (c *conn) run(ctx context.Context) {
 	c.inst.SSEConnections.Add(ctx, 1, metric.WithAttributes(
-		attribute.String("sdk_key_hash", c.keyHash),
+		attribute.String("sdk_key_public_id", c.keyID),
 	))
 	defer c.inst.SSEConnections.Add(context.Background(), -1, metric.WithAttributes(
-		attribute.String("sdk_key_hash", c.keyHash),
+		attribute.String("sdk_key_public_id", c.keyID),
 	))
 
 	b := newBackoff()
@@ -65,7 +65,7 @@ func (c *conn) run(ctx context.Context) {
 	for {
 		// One span per connect attempt — bounded by the attempt lifetime, not the key lifetime.
 		attemptCtx, attemptSpan := c.tracer.Start(ctx, "sse.upstream.connect",
-			trace.WithAttributes(tracing.SDKKeyHash(c.keyHash)))
+			trace.WithAttributes(tracing.SDKKeyPublicID(c.keyID)))
 
 		err := c.connect(attemptCtx, lastEventID, func(evt Event) {
 			if evt.ID != "" {
@@ -100,11 +100,11 @@ func (c *conn) run(ctx context.Context) {
 		attemptSpan.End()
 
 		c.inst.SSEUpstreamReconnects.Add(ctx, 1, metric.WithAttributes(
-			attribute.String("sdk_key_hash", c.keyHash),
+			attribute.String("sdk_key_public_id", c.keyID),
 			attribute.String("reason", reason),
 		))
 		c.logger.Warn("sse: upstream connection lost, will reconnect",
-			slog.String("key", c.keyHash),
+			slog.String("key", c.keyID),
 			slog.String("reason", reason),
 		)
 

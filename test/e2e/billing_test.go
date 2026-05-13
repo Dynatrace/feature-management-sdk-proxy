@@ -67,7 +67,7 @@ func TestBilling_FlushDeliversCorrectSample(t *testing.T) {
 			if s.Count <= 0 {
 				t.Errorf("sample Count = %d, want > 0", s.Count)
 			}
-			if s.KeyHash == "" {
+			if s.KeyID == "" {
 				t.Error("sample KeyHash is empty")
 			}
 		}

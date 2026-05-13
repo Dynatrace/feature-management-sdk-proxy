@@ -44,11 +44,11 @@ func LoadAll(ctx context.Context, store Store, c *cache.Cache, inst *metrics.Ins
 	}
 
 	loaded := 0
-	for _, keyHash := range keys {
-		body, err := store.Get(ctx, keyHash)
+	for _, keyID := range keys {
+		body, err := store.Get(ctx, keyID)
 		if err != nil {
 			logger.Warn("snapshot: load: failed to get object",
-				slog.String("key", keyHash),
+				slog.String("key", keyID),
 				slog.String("error", err.Error()),
 			)
 			inst.SnapshotLoadTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "backend_error")))
@@ -59,12 +59,12 @@ func LoadAll(ctx context.Context, store Store, c *cache.Cache, inst *metrics.Ins
 		if err != nil {
 			if errors.Is(err, ErrUnknownVersion) {
 				logger.Warn("snapshot: load: skipping object with unknown version",
-					slog.String("key", keyHash),
+					slog.String("key", keyID),
 				)
 				inst.SnapshotLoadTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "skipped_unknown_version")))
 			} else {
 				logger.Warn("snapshot: load: skipping corrupt envelope",
-					slog.String("key", keyHash),
+					slog.String("key", keyID),
 					slog.String("error", err.Error()),
 				)
 				inst.SnapshotLoadTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "skipped_corrupt")))
@@ -77,7 +77,7 @@ func LoadAll(ctx context.Context, store Store, c *cache.Cache, inst *metrics.Ins
 		// canonical since it was used to write the object.
 		_ = gotHash
 
-		c.Set(keyHash, cache.Entry{
+		c.Set(keyID, cache.Entry{
 			Payload:   payload,
 			ETag:      etag,
 			FetchedAt: capturedAt,
@@ -87,7 +87,7 @@ func LoadAll(ctx context.Context, store Store, c *cache.Cache, inst *metrics.Ins
 		if inst.SnapshotAgeSeconds != nil {
 			age := time.Since(capturedAt).Seconds()
 			inst.SnapshotAgeSeconds.Record(ctx, age,
-				metric.WithAttributes(attribute.String("sdk_key_hash", keyHash)),
+				metric.WithAttributes(attribute.String("sdk_key_public_id", keyID)),
 			)
 		}
 

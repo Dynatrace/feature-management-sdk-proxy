@@ -4,11 +4,11 @@ The proxy maintains exactly one upstream SSE connection per SDK key and fans eve
 
 ## Client Endpoint: `GET /sse`
 
-SDK clients connect to `GET /sse?stream_id={stream_id}`. The `stream_id` is the SDK key hash — the same 16 lowercase hex characters produced by `SHA-256(sdk_key)[:8]` (i.e. `cache.Key(sdkKey)`). It is embedded in the flagd config's `eventStreamEndpoint` URL by the proxy rewrite step, so clients receive it automatically.
+SDK clients connect to `GET /sse?stream_id={stream_id}`. The `stream_id` is the SDK key public identifier — `cache.PublicID(sdkKey)`, i.e. `{token}.{platform}_{geo}_{publicRandom}` (e.g. `dt01.server_us_ab3xy9kp2q`). It is embedded in the flagd config's `eventStreamEndpoint` URL by the proxy rewrite step, so clients receive it automatically.
 
 **Prerequisites before a connection is accepted:**
 
-1. `stream_id` must be present and exactly 16 lowercase hex characters. Invalid format returns 400.
+1. `stream_id` must be present and a valid SDK key public identifier (`^dt[0-9]{2}\.(web|mobile|server)_[a-z]{2}_[a-zA-Z0-9]{10}$`). Invalid format returns 400.
 2. A flagd config entry for that `stream_id` must already be cached. If the config has not been fetched yet, the handler returns **412 Precondition Failed** with a message directing the client to fetch `/server/{sdk_key}.json` first.
 
 Only connections that pass both gates are accepted and counted toward billing.
@@ -78,10 +78,10 @@ When the background cache refresher fetches a new 200 payload, it calls `OnRefre
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
-| `proxy.sse.connections` | UpDownCounter | `sdk_key_hash` | Active upstream SSE connections |
-| `proxy.sse.client.connections` | UpDownCounter | `sdk_key_hash` | Active SDK client connections to the proxy |
-| `proxy.sse.events_delivered_total` | Counter | `sdk_key_hash` | Events successfully written to SDK clients |
-| `proxy.sse.upstream.reconnects` | Counter | `sdk_key_hash`, `reason` | Upstream reconnect attempts |
-| `proxy.sse.upstream.events` | Counter | `sdk_key_hash`, `result` | Upstream events received, by dispatch result |
+| `proxy.sse.connections` | UpDownCounter | `sdk_key_public_id` | Active upstream SSE connections |
+| `proxy.sse.client.connections` | UpDownCounter | `sdk_key_public_id` | Active SDK client connections to the proxy |
+| `proxy.sse.events_delivered_total` | Counter | `sdk_key_public_id` | Events successfully written to SDK clients |
+| `proxy.sse.upstream.reconnects` | Counter | `sdk_key_public_id`, `reason` | Upstream reconnect attempts |
+| `proxy.sse.upstream.events` | Counter | `sdk_key_public_id`, `result` | Upstream events received, by dispatch result |
 
 The `result` label on `proxy.sse.upstream.events` takes values `forwarded`, `dropped_no_subscribers`, or `dropped_slow_subscriber`.

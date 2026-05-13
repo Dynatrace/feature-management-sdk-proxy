@@ -153,7 +153,7 @@ func TestConn_ReconnectsOnEOF(t *testing.T) {
 	c := &conn{
 		sseURL:             srv.URL,
 		inactivityDelaySec: 60,
-		keyHash:            "testhash",
+		keyID:              "testhash",
 		client:             srv.Client(),
 		logger:             slog.Default(),
 		inst:               newTestInstruments(t),
@@ -199,7 +199,7 @@ func TestConn_LastEventIDSentOnReconnect(t *testing.T) {
 	c := &conn{
 		sseURL:             srv.URL,
 		inactivityDelaySec: 60,
-		keyHash:            "testhash",
+		keyID:              "testhash",
 		client:             srv.Client(),
 		logger:             slog.Default(),
 		inst:               newTestInstruments(t),
@@ -249,7 +249,7 @@ func TestConn_StopsOnContextCancel(t *testing.T) {
 	c := &conn{
 		sseURL:             srv.URL,
 		inactivityDelaySec: 60,
-		keyHash:            "testhash",
+		keyID:              "testhash",
 		client:             srv.Client(),
 		logger:             slog.Default(),
 		inst:               newTestInstruments(t),
@@ -309,7 +309,7 @@ func TestConn_InactivityTimeout(t *testing.T) {
 	c := &conn{
 		sseURL:             srv.URL,
 		inactivityDelaySec: 1, // 1-second inactivity timeout
-		keyHash:            "testhash",
+		keyID:              "testhash",
 		client:             srv.Client(),
 		logger:             slog.Default(),
 		inst:               newTestInstruments(t),
@@ -349,7 +349,7 @@ func collectEvents(t *testing.T, url string, want int, timeout time.Duration) []
 	c := &conn{
 		sseURL:             url,
 		inactivityDelaySec: 60,
-		keyHash:            "testhash",
+		keyID:              "testhash",
 		client:             http.DefaultClient,
 		logger:             slog.Default(),
 		inst:               newTestInstruments(t),

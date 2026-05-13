@@ -59,7 +59,7 @@ func (m *mockSubscriber) count() int {
 	return len(m.subs)
 }
 
-const testSDKKey = "dt_server_us_abc123"
+const testSDKKey = "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
 
 func newTestHandlerWithCache(t *testing.T, sub Subscriber) (*Handler, *cache.Cache) {
 	t.Helper()
@@ -83,7 +83,7 @@ func waitForSubs(sub *mockSubscriber, n int) bool {
 
 func TestHandler_NonGet_Returns405(t *testing.T) {
 	h, _ := newTestHandlerWithCache(t, &mockSubscriber{})
-	streamID := cache.Key(testSDKKey)
+	streamID := cache.PublicID(testSDKKey)
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		rr := httptest.NewRecorder()
 		req := httptest.NewRequest(method, "/sse?stream_id="+streamID, nil)
@@ -106,8 +106,15 @@ func TestHandler_MissingStreamID_Returns400(t *testing.T) {
 
 func TestHandler_InvalidStreamID_Returns400(t *testing.T) {
 	h, _ := newTestHandlerWithCache(t, &mockSubscriber{})
-	// invalid: wrong length, non-hex chars, uppercase hex
-	for _, id := range []string{"bogus", "abc123", "ABCDEF0123456789", "gg00ff11ee22dd33", "abc123def456abc"} {
+	// invalid: not a valid public key prefix
+	for _, id := range []string{
+		"bogus",
+		"abc123",
+		"ABCDEF0123456789",                    // old-format hash, no longer valid
+		"dt01.invalid_us_ab3xy9kp2q",          // invalid platform
+		"dt01.server_US_ab3xy9kp2q",           // uppercase geo
+		cache.PublicID(testSDKKey) + ".extra", // full key, not public ID
+	} {
 		t.Run(id, func(t *testing.T) {
 			rr := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+id, nil)
@@ -122,7 +129,7 @@ func TestHandler_InvalidStreamID_Returns400(t *testing.T) {
 func TestHandler_ConfigNotCached_Returns412(t *testing.T) {
 	h, _ := newTestHandlerWithCache(t, &mockSubscriber{})
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.Key(testSDKKey), nil)
+	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.PublicID(testSDKKey), nil)
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusPreconditionFailed {
 		t.Errorf("got %d, want 412", rr.Code)
@@ -134,13 +141,13 @@ func TestHandler_ConfigNotCached_Returns412(t *testing.T) {
 func TestHandler_HappyPath_StreamsEvent(t *testing.T) {
 	sub := &mockSubscriber{}
 	h, c := newTestHandlerWithCache(t, sub)
-	c.Set(cache.Key(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
+	c.Set(cache.PublicID(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.Key(testSDKKey), nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.PublicID(testSDKKey), nil).WithContext(ctx)
 
 	done := make(chan struct{})
 	go func() {
@@ -175,7 +182,7 @@ func TestHandler_MultipleSubscribers_AllReceiveEvent(t *testing.T) {
 	const n = 3
 	sub := &mockSubscriber{}
 	c := cache.New()
-	c.Set(cache.Key(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
+	c.Set(cache.PublicID(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
 	h := NewHandler(c, sub, newTestInstruments(t), nil, slog.Default(), time.Minute, "/server/")
 
 	cancels := make([]context.CancelFunc, n)
@@ -187,7 +194,7 @@ func TestHandler_MultipleSubscribers_AllReceiveEvent(t *testing.T) {
 		cancels[i] = cancel
 		rrs[i] = httptest.NewRecorder()
 		done[i] = make(chan struct{})
-		req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.Key(testSDKKey), nil).WithContext(ctx)
+		req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.PublicID(testSDKKey), nil).WithContext(ctx)
 		go func(rr *httptest.ResponseRecorder, req *http.Request, d chan struct{}) {
 			defer close(d)
 			h.ServeHTTP(rr, req)
@@ -216,11 +223,11 @@ func TestHandler_MultipleSubscribers_AllReceiveEvent(t *testing.T) {
 func TestHandler_ClientDisconnect_Unsubscribes(t *testing.T) {
 	sub := &mockSubscriber{}
 	h, c := newTestHandlerWithCache(t, sub)
-	c.Set(cache.Key(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
+	c.Set(cache.PublicID(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.Key(testSDKKey), nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.PublicID(testSDKKey), nil).WithContext(ctx)
 
 	done := make(chan struct{})
 	go func() {
@@ -243,14 +250,14 @@ func TestHandler_ClientDisconnect_Unsubscribes(t *testing.T) {
 func TestHandler_Heartbeat_EmitsPing(t *testing.T) {
 	sub := &mockSubscriber{}
 	c := cache.New()
-	c.Set(cache.Key(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
+	c.Set(cache.PublicID(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
 	h := NewHandler(c, sub, newTestInstruments(t), nil, slog.Default(), 50*time.Millisecond, "/server/")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.Key(testSDKKey), nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.PublicID(testSDKKey), nil).WithContext(ctx)
 
 	done := make(chan struct{})
 	go func() {
@@ -273,7 +280,7 @@ func TestHandler_RawSDKKeyNeverLogged(t *testing.T) {
 
 	sub := &mockSubscriber{}
 	c := cache.New()
-	streamID := cache.Key(testSDKKey)
+	streamID := cache.PublicID(testSDKKey)
 	c.Set(streamID, cache.Entry{Payload: []byte(`{}`)})
 	h := NewHandler(c, sub, newTestInstruments(t), nil, logger, 15*time.Second, "/server/")
 
@@ -308,13 +315,13 @@ func TestHandler_RawSDKKeyNeverLogged(t *testing.T) {
 func TestHandler_ChannelClose_HandlerReturnsCleanly(t *testing.T) {
 	sub := &mockSubscriber{}
 	h, c := newTestHandlerWithCache(t, sub)
-	c.Set(cache.Key(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
+	c.Set(cache.PublicID(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.Key(testSDKKey), nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.PublicID(testSDKKey), nil).WithContext(ctx)
 
 	done := make(chan struct{})
 	go func() {
@@ -346,7 +353,7 @@ func TestHandler_ChannelClose_HandlerReturnsCleanly(t *testing.T) {
 func TestSSEHandler_Counter_IncrementOnAcceptedSubscription(t *testing.T) {
 	sub := &mockSubscriber{}
 	c := cache.New()
-	streamID := cache.Key(testSDKKey)
+	streamID := cache.PublicID(testSDKKey)
 	c.Set(streamID, cache.Entry{Payload: []byte(`{}`)})
 
 	counter := telemetry.NewCounter()
@@ -379,8 +386,8 @@ func TestSSEHandler_Counter_IncrementOnAcceptedSubscription(t *testing.T) {
 	if samples[0].SDKKey != "" {
 		t.Errorf("SSE counter entry must have empty SDKKey (hash-only), got %q", samples[0].SDKKey)
 	}
-	if samples[0].KeyHash != streamID {
-		t.Errorf("SSE counter entry KeyHash = %q, want %q", samples[0].KeyHash, streamID)
+	if samples[0].KeyID != streamID {
+		t.Errorf("SSE counter entry KeyID = %q, want %q", samples[0].KeyID, streamID)
 	}
 }
 
@@ -390,7 +397,7 @@ func TestSSEHandler_Counter_NoIncrementOn405(t *testing.T) {
 	c := cache.New()
 	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
 
-	streamID := cache.Key(testSDKKey)
+	streamID := cache.PublicID(testSDKKey)
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		rr := httptest.NewRecorder()
 		req := httptest.NewRequest(method, "/sse?stream_id="+streamID, nil)
@@ -427,7 +434,7 @@ func TestSSEHandler_Counter_NoIncrementOn412(t *testing.T) {
 	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.Key(testSDKKey), nil)
+	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.PublicID(testSDKKey), nil)
 	h.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusPreconditionFailed {

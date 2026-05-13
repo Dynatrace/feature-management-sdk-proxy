@@ -104,7 +104,7 @@ func (f *Flusher) tick(ctx context.Context) {
 // any subsequent buffer-overflow drop is observable in the structured log.
 func (f *Flusher) enqueueWithLog(s Sample) {
 	f.logger.Warn("billing: enqueueing sample for retry",
-		slog.String("key_hash", s.KeyHash),
+		slog.String("sdk_key_public_id", s.KeyID),
 		slog.Int64("count", s.Count),
 		slog.Time("window_start", s.WindowStart),
 		slog.Time("window_end", s.WindowEnd),
@@ -129,7 +129,7 @@ func (f *Flusher) dispatchSample(ctx context.Context, s Sample) {
 	// HTTP request repairs the entry via Increment(sdkKey).
 	if s.SDKKey == "" {
 		f.logger.Warn("billing: dropping SSE-only sample (no SDK key available)",
-			slog.String("key_hash", s.KeyHash),
+			slog.String("sdk_key_public_id", s.KeyID),
 			slog.Int64("count", s.Count),
 		)
 		f.inst.BillingFlushTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "missing_sdk_key")))
@@ -151,7 +151,7 @@ func (f *Flusher) dispatchSample(ctx context.Context, s Sample) {
 
 	if errors.Is(err, ErrPermanent) {
 		f.logger.Warn("billing: permanent error, dropping sample",
-			slog.String("key_hash", s.KeyHash),
+			slog.String("sdk_key_public_id", s.KeyID),
 			slog.Int64("count", s.Count),
 			slog.Time("window_start", s.WindowStart),
 			slog.Time("window_end", s.WindowEnd),
@@ -170,7 +170,7 @@ func (f *Flusher) dispatchSample(ctx context.Context, s Sample) {
 			f.enqueueWithLog(s)
 		} else {
 			f.logger.Warn("billing: dropping sample on shutdown",
-				slog.String("key_hash", s.KeyHash),
+				slog.String("sdk_key_public_id", s.KeyID),
 				slog.Int64("count", s.Count),
 				slog.Time("window_start", s.WindowStart),
 				slog.Time("window_end", s.WindowEnd),

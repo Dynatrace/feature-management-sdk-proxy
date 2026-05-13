@@ -2,12 +2,12 @@ package cache
 
 import (
 	"context"
-	"crypto/sha256"
-	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,11 +29,41 @@ const RefreshIntervalConnected = 10 * time.Minute
 // or disabled. Polling is the only update mechanism, so the interval is short.
 const RefreshIntervalDisconnected = 10 * time.Second
 
+var (
+	// publicIDRe matches a valid SDK key public identifier: {token}.{platform}_{geo}_{publicRandom}
+	publicIDRe = regexp.MustCompile(`^dt[0-9]{2}\.(web|mobile|server)_[a-z]{2}_[a-zA-Z0-9]{10}$`)
+	// fullKeyRe matches a valid full SDK key: {token}.{platform}_{geo}_{publicRandom}.{secret}_{sha1}
+	fullKeyRe = regexp.MustCompile(`^dt[0-9]{2}\.(?:web|mobile|server)_[a-z]{2}_[a-zA-Z0-9]{10}\.[a-f0-9]{32}_[a-f0-9]{10,}$`)
+)
+
+// PublicID returns the log-safe public prefix of an SDK key.
+// It splits on "." and drops the last segment (the private segment).
+// The raw SDK key must never be logged; use this function when logging key context.
+func PublicID(sdkKey string) string {
+	i := strings.LastIndex(sdkKey, ".")
+	if i < 0 {
+		return ""
+	}
+	return sdkKey[:i]
+}
+
+// IsValidID reports whether s is a valid SDK key public identifier:
+// {token}.{platform}_{geo}_{publicRandom}
+func IsValidID(s string) bool {
+	return publicIDRe.MatchString(s)
+}
+
+// ValidateFullKey reports whether s is a well-formed full SDK key:
+// {token}.{platform}_{geo}_{publicRandom}.{secret}_{sha1}
+func ValidateFullKey(s string) bool {
+	return fullKeyRe.MatchString(s)
+}
+
 // RefreshIntervalProvider returns the appropriate polling interval for a given
 // cache key. Implementations are expected to consult SSE connection state.
 // Defined here (consumer's package) to avoid a cache → sse import cycle.
 type RefreshIntervalProvider interface {
-	RefreshInterval(keyHash string) time.Duration
+	RefreshInterval(keyID string) time.Duration
 }
 
 // Entry holds a cached flagd config payload and metadata for revalidation.
@@ -52,7 +82,7 @@ func (e Entry) IsStale(now time.Time, interval time.Duration) bool {
 	return now.Sub(e.FetchedAt) >= interval
 }
 
-// Cache is a thread-safe in-memory store keyed by SHA-256(sdk_key)[:16].
+// Cache is a thread-safe in-memory store keyed by SDK key public prefix (cache.PublicID(sdk_key)).
 //
 // Last-access tracking: each entry carries a last-access timestamp stored as an
 // atomic.Int64 (Unix nanoseconds). The pointer into lastAccess is read under
@@ -71,13 +101,6 @@ func New() *Cache {
 		entries:    make(map[string]Entry),
 		lastAccess: make(map[string]*atomic.Int64),
 	}
-}
-
-// Key returns the safe opaque cache key for the given SDK key.
-// The raw SDK key is hashed so it never appears in logs, metrics, or storage.
-func Key(sdkKey string) string {
-	h := sha256.Sum256([]byte(sdkKey))
-	return fmt.Sprintf("%x", h[:8])
 }
 
 // Get retrieves an entry and refreshes its last-access timestamp. Returns false when the key is absent.
@@ -185,18 +208,18 @@ type FetchResult struct {
 }
 
 // Fetcher is satisfied by anything that can revalidate a cache entry upstream.
-// keyHash is cache.Key(sdkKey) — used for telemetry only, never the raw key.
+// keyID is cache.PublicID(sdkKey) — used for telemetry only, never the raw key.
 // fetchURL is the full upstream URL (including path and query); etag is the
 // previously cached ETag value, which should be sent as If-None-Match.
 type Fetcher interface {
-	Fetch(ctx context.Context, keyHash, fetchURL, etag string) (FetchResult, error)
+	Fetch(ctx context.Context, keyID, fetchURL, etag string) (FetchResult, error)
 }
 
 // RefreshObserver is notified when the background refresher fetches a new
 // payload from upstream (200 response). It is never called for 304 responses
-// or fetch errors. keyHash is the safe SHA-256 identifier for the SDK key.
+// or fetch errors. keyID is the SDK key public identifier (cache.PublicID(sdkKey)).
 type RefreshObserver interface {
-	OnRefreshed(keyHash string, payload []byte)
+	OnRefreshed(keyID string, payload []byte)
 }
 
 // Refresher drives background TTL refresh using a Fetcher.
@@ -205,7 +228,7 @@ type Refresher struct {
 	fetcher          Fetcher
 	observers        []RefreshObserver
 	intervalProvider RefreshIntervalProvider // nil → always use RefreshIntervalDisconnected
-	evictor          func(keyHash string)    // nil → no side-effect eviction
+	evictor          func(keyID string)      // nil → no side-effect eviction
 	inst             *metrics.Instruments    // nil → metrics skipped
 	logger           *slog.Logger
 	tracer           trace.Tracer
@@ -236,9 +259,9 @@ func (r *Refresher) SetTracer(t trace.Tracer) {
 
 // SetEvictor wires a callback invoked after a cache entry is deleted due to a
 // 4xx eviction. The callback should close the upstream SSE connection and delete
-// the persisted snapshot for keyHash (same contract as Sweeper.evict). Must be
+// the persisted snapshot for keyID (same contract as Sweeper.evict). Must be
 // called before Run.
-func (r *Refresher) SetEvictor(evict func(keyHash string)) {
+func (r *Refresher) SetEvictor(evict func(keyID string)) {
 	r.evictor = evict
 }
 
@@ -280,10 +303,10 @@ func (r *Refresher) Run(ctx context.Context) {
 
 func (r *Refresher) refresh(ctx context.Context) {
 	now := time.Now()
-	for keyHash, entry := range r.cache.Snapshot() {
+	for keyID, entry := range r.cache.Snapshot() {
 		interval := RefreshIntervalDisconnected
 		if r.intervalProvider != nil {
-			interval = r.intervalProvider.RefreshInterval(keyHash)
+			interval = r.intervalProvider.RefreshInterval(keyID)
 		}
 		if !entry.IsStale(now, interval) {
 			continue
@@ -291,21 +314,21 @@ func (r *Refresher) refresh(ctx context.Context) {
 		// FetchURL is empty for snapshot-restored entries until the first SDK
 		// request repairs it. Skip quietly; the handler will hydrate it on hit.
 		if entry.FetchURL == "" {
-			r.logger.Debug("cache: skipping stale snapshot-restored entry (no FetchURL yet)", slog.String("key", keyHash))
+			r.logger.Debug("cache: skipping stale snapshot-restored entry (no FetchURL yet)", slog.String("key", keyID))
 			continue
 		}
 		fetchCtx, span := r.tracer.Start(ctx, "proxy.refresh_fetch",
 			trace.WithAttributes(
-				attribute.String("sdk_key_hash", keyHash),
+				attribute.String("sdk_key_public_id", keyID),
 				attribute.Bool("if_none_match", entry.ETag != ""),
 			))
-		result, err := r.fetcher.Fetch(fetchCtx, keyHash, entry.FetchURL, entry.ETag)
+		result, err := r.fetcher.Fetch(fetchCtx, keyID, entry.FetchURL, entry.ETag)
 		if err != nil {
 			span.RecordError(err)
 			span.SetAttributes(attribute.String("result", "error"))
 			span.End()
 			r.logger.Warn("cache: background refresh failed",
-				slog.String("key", keyHash),
+				slog.String("key", keyID),
 				slog.String("error", err.Error()),
 			)
 			continue
@@ -313,8 +336,8 @@ func (r *Refresher) refresh(ctx context.Context) {
 		if result.NotModified {
 			span.SetAttributes(attribute.String("result", "not_modified"))
 			span.End()
-			r.cache.ResetTTL(keyHash, time.Now())
-			r.logger.Debug("cache: background refresh — upstream unchanged (304), TTL extended", slog.String("key", keyHash))
+			r.cache.ResetTTL(keyID, time.Now())
+			r.logger.Debug("cache: background refresh — upstream unchanged (304), TTL extended", slog.String("key", keyID))
 			continue
 		}
 		if result.Entry != nil {
@@ -322,10 +345,10 @@ func (r *Refresher) refresh(ctx context.Context) {
 			result.Entry.OriginatingFetch = span.SpanContext()
 			span.SetAttributes(attribute.String("result", "ok"))
 			span.End()
-			r.cache.Set(keyHash, *result.Entry)
-			r.logger.Debug("cache: background refresh — new content received (200), cache updated", slog.String("key", keyHash))
+			r.cache.Set(keyID, *result.Entry)
+			r.logger.Debug("cache: background refresh — new content received (200), cache updated", slog.String("key", keyID))
 			for _, obs := range r.observers {
-				obs.OnRefreshed(keyHash, result.Entry.Payload)
+				obs.OnRefreshed(keyID, result.Entry.Payload)
 			}
 			continue
 		}
@@ -338,9 +361,9 @@ func (r *Refresher) refresh(ctx context.Context) {
 			)
 			span.End()
 			if shouldEvict(result.StatusCode) {
-				r.cache.Delete(keyHash)
+				r.cache.Delete(keyID)
 				r.logger.Warn("cache: background refresh got evictable status, evicting entry",
-					slog.String("key", keyHash),
+					slog.String("key", keyID),
 					slog.Int("upstream_status", result.StatusCode),
 					slog.String("reason", evictionReason(result.StatusCode)),
 				)
@@ -350,14 +373,14 @@ func (r *Refresher) refresh(ctx context.Context) {
 				}
 				if r.evictor == nil {
 					r.logger.Warn("cache: evictor not set — SSE close and snapshot delete skipped on eviction",
-						slog.String("key", keyHash),
+						slog.String("key", keyID),
 					)
 				} else {
-					r.evictor(keyHash)
+					r.evictor(keyID)
 				}
 			} else {
 				r.logger.Warn("cache: background refresh got upstream error, preserving stale entry",
-					slog.String("key", keyHash),
+					slog.String("key", keyID),
 					slog.Int("upstream_status", result.StatusCode),
 				)
 				if r.inst != nil {

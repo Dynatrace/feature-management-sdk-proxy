@@ -29,9 +29,9 @@ import (
 
 const (
 	// TestSDKKey is a valid-format SDK key for use in tests.
-	TestSDKKey = "dt_server_us_testtoken012345"
+	TestSDKKey = "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
 	// TestSDKKey2 is a second valid SDK key for multi-key tests.
-	TestSDKKey2 = "dt_server_eu_testtoken067890"
+	TestSDKKey2 = "dt01.server_eu_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
 
 	configHandlerPath = "/server/"
 )
@@ -267,7 +267,7 @@ func (h *Harness) ConfigPath(sdkKey string) string {
 
 // SSEPath returns the proxy SSE path for the given SDK key using stream_id.
 func (h *Harness) SSEPath(sdkKey string) string {
-	return sse.HandlerPath + "?stream_id=" + cache.Key(sdkKey)
+	return sse.HandlerPath + "?stream_id=" + cache.PublicID(sdkKey)
 }
 
 // GetConfig makes a GET request to the proxy's config endpoint for sdkKey.

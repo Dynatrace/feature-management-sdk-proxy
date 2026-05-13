@@ -11,11 +11,11 @@ import (
 )
 
 const (
-	hashA = "abc0000000000000"
-	hashB = "0000000000000001"
-	hashC = "0000000000000002"
-	hashD = "00000000000000aa"
-	hashE = "000000000000bbbb"
+	hashA = "dt01.server_us_ab3xy9kp2q"
+	hashB = "dt01.server_eu_0000000001"
+	hashC = "dt01.server_ap_0000000002"
+	hashD = "dt01.server_oc_00000000aa"
+	hashE = "dt02.mobile_us_000000bbbb"
 )
 
 func TestLocalStore_PutAndGet(t *testing.T) {
@@ -23,7 +23,7 @@ func TestLocalStore_PutAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalStore: %v", err)
 	}
-	body := []byte(`{"snapshot_version":1,"sdk_key_hash":"abc0000000000000","etag":"v1","captured_at":"2026-01-01T00:00:00Z","payload":"dGVzdA=="}`)
+	body := []byte(`{"snapshot_version":1,"sdk_key_id":"dt01.server_us_ab3xy9kp2q","etag":"v1","captured_at":"2026-01-01T00:00:00Z","payload":"dGVzdA=="}`)
 	if err := store.Put(context.Background(), hashA, body); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestLocalStore_InvalidKeyHash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalStore: %v", err)
 	}
-	for _, bad := range []string{"abc", "../escape", "ABCDEFGHIJKLMNOP", "gggggggggggggggg"} {
+	for _, bad := range []string{"abc", "../escape", "dt01.invalid_us_ab3xy9kp2q", "dt01.server_US_ab3xy9kp2q"} {
 		if err := store.Put(context.Background(), bad, []byte(`{}`)); err == nil {
 			t.Errorf("Put(%q): expected error, got nil", bad)
 		}
@@ -224,7 +224,7 @@ func TestLocalStore_ConcurrentPuts(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			key := fmt.Sprintf("a1b2c3d4e5f6%04x", i)
+			key := fmt.Sprintf("dt01.server_us_%010d", i)
 			if err := store.Put(context.Background(), key, []byte(`{}`)); err != nil {
 				t.Errorf("Put %s: %v", key, err)
 			}

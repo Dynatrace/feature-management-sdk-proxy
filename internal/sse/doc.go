@@ -1,6 +1,6 @@
 // Package sse manages upstream SSE connections and fan-out to SDK clients.
 //
-// Manager maintains exactly one upstream SSE connection per SDK key hash.
+// Manager maintains exactly one upstream SSE connection per SDK key public identifier.
 // It reads the upstream SSE URL from the flagd config JSON eventStreams array
 // (narrow parse exception 1: only eventStreams[*].url and .inactivityDelaySec
 // are read; the rest of the payload is treated as opaque bytes).
@@ -22,7 +22,7 @@
 // connection and closes all subscriber channels for the invalidated key.
 //
 // Handler serves GET /sse for SDK clients. The stream_id query parameter
-// carries the SDK key hash (cache.Key(sdkKey)) — the raw SDK key must never
+// carries the SDK key public identifier (cache.PublicID(sdkKey)) — the raw SDK key must never
 // appear in this URL. The handler gates on cache presence (412 if the config
 // has not been fetched yet), then subscribes to the Manager and re-broadcasts
 // refetchEvaluation events to the client. It never opens an upstream SSE

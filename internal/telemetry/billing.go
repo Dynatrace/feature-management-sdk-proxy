@@ -18,7 +18,7 @@ import "context"
 //
 //	{
 //	  "schema_version": 1,
-//	  "key_hash":       "<16 hex chars; SHA-256(sdk_key) truncated>",
+//	  "sdk_key_id":     "<public prefix of the SDK key; cache.PublicID(sdk_key)>",
 //	  "request_count":  <int64; non-zero>,
 //	  "window_start":   "<RFC3339Nano UTC>",
 //	  "window_end":     "<RFC3339Nano UTC>",
@@ -27,12 +27,12 @@ import "context"
 //
 // Field semantics:
 //   - schema_version: integer; currently 1. Bump on any breaking change.
-//   - key_hash: SHA-256(sdk_key) truncated to 16 hex chars (cache.Key). Raw
-//     SDK key is auth-only and must never appear in the body.
+//   - sdk_key_id: public prefix of the SDK key (cache.PublicID). Raw SDK key
+//     is auth-only and must never appear in the body.
 //   - request_count: delta since the last successful flush for this token;
 //     always > 0 (zero counts are not reported).
 //   - window_start / window_end: half-open interval [start, end); the Worker
-//     deduplicates by (key_hash, window_start).
+//     deduplicates by (sdk_key_id, window_start).
 //   - proxy_instance: opaque pod/container identifier provided at reporter
 //     construction time; helps correlate fleet-wide counts across replicas.
 //
@@ -51,8 +51,8 @@ import "context"
 //
 // The originating SDK token authenticates the HTTP call via the Authorization
 // header. The proxy holds no separate billing credential. The Worker validates
-// that the Authorization token matches the key_hash in the body by computing
-// SHA-256(token)[:16] server-side.
+// that the Authorization token matches the sdk_key_id in the body by computing
+// cache.PublicID(token) server-side.
 //
 // # Back-pressure
 //

@@ -52,7 +52,7 @@ func TestManager_OnConfigCached_StartsOneConn(t *testing.T) {
 
 	payload := configWithSSEURL(srv.URL)
 	for range 5 {
-		m.OnConfigCached(ctx, "dt_server_us_abc123", payload)
+		m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", payload)
 	}
 
 	time.Sleep(200 * time.Millisecond)
@@ -78,9 +78,9 @@ func TestManager_OnConfigCached_SameURLIsNoop(t *testing.T) {
 	defer cancel()
 
 	payload := configWithSSEURL(srv.URL)
-	m.OnConfigCached(ctx, "dt_server_us_abc123", payload)
+	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", payload)
 	time.Sleep(100 * time.Millisecond)
-	m.OnConfigCached(ctx, "dt_server_us_abc123", payload) // same URL — no-op
+	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", payload) // same URL — no-op
 
 	time.Sleep(200 * time.Millisecond)
 	if n := connCount.Load(); n != 1 {
@@ -105,9 +105,9 @@ func TestManager_OnConfigCached_URLChangeRestartsConn(t *testing.T) {
 	defer cancel()
 
 	// First URL: srv.URL + "/v1", second URL: srv.URL + "/v2"
-	m.OnConfigCached(ctx, "dt_server_us_abc123", configWithSSEURL(srv.URL+"/v1"))
+	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", configWithSSEURL(srv.URL+"/v1"))
 	time.Sleep(150 * time.Millisecond)
-	m.OnConfigCached(ctx, "dt_server_us_abc123", configWithSSEURL(srv.URL+"/v2"))
+	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", configWithSSEURL(srv.URL+"/v2"))
 	time.Sleep(300 * time.Millisecond)
 
 	if n := connCount.Load(); n < 2 {
@@ -132,10 +132,10 @@ func TestManager_OnRefreshed_SameURLIsNoop(t *testing.T) {
 	defer cancel()
 
 	payload := configWithSSEURL(srv.URL)
-	m.OnConfigCached(ctx, "dt_server_us_abc123", payload)
+	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", payload)
 	time.Sleep(150 * time.Millisecond)
 
-	keyHash := cache.Key("dt_server_us_abc123")
+	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	m.OnRefreshed(keyHash, payload) // same URL
 
 	time.Sleep(150 * time.Millisecond)
@@ -162,11 +162,11 @@ func TestManager_Subscribe_ReceivesEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	keyHash := cache.Key("dt_server_us_abc123")
+	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	ch, unsub := m.Subscribe(keyHash)
 	defer unsub()
 
-	m.OnConfigCached(ctx, "dt_server_us_abc123", configWithSSEURL(srv.URL))
+	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", configWithSSEURL(srv.URL))
 
 	select {
 	case evt := <-ch:
@@ -183,7 +183,7 @@ func TestManager_Subscribe_ReceivesEvents(t *testing.T) {
 func TestManager_Unsubscribe_StopsDelivery(t *testing.T) {
 	m := newTestManager(t, nil)
 
-	keyHash := cache.Key("dt_server_us_abc123")
+	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	ch, unsub := m.Subscribe(keyHash)
 
 	// Dispatch before unsubscribe: channel should be populated
@@ -270,8 +270,8 @@ func TestManager_Close_CancelsUpstreamConn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	keyHash := cache.Key("dt_server_us_abc123")
-	m.OnConfigCached(ctx, "dt_server_us_abc123", configWithSSEURL(srv.URL))
+	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", configWithSSEURL(srv.URL))
 	time.Sleep(150 * time.Millisecond)
 
 	m.Close(keyHash)
@@ -289,7 +289,7 @@ func TestManager_Close_CancelsUpstreamConn(t *testing.T) {
 // channels belonging to subscribers of the key.
 func TestManager_Close_ClosesSubscriberChannels(t *testing.T) {
 	m := newTestManager(t, nil)
-	keyHash := cache.Key("dt_server_us_abc123")
+	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	ch1, unsub1 := m.Subscribe(keyHash)
 	ch2, unsub2 := m.Subscribe(keyHash)
@@ -321,7 +321,7 @@ func TestManager_Close_UnknownKeyIsNoop(t *testing.T) {
 // Subscribe call after Close creates fresh state (channel is open).
 func TestManager_Close_SubscribeAfterCloseCreatesNewState(t *testing.T) {
 	m := newTestManager(t, nil)
-	keyHash := cache.Key("dt_server_us_abc123")
+	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	ch1, _ := m.Subscribe(keyHash)
 	m.Close(keyHash)
@@ -361,7 +361,7 @@ func TestManager_NoSSEInConfig_NoConnection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	m.OnConfigCached(ctx, "dt_server_us_abc123", []byte(`{"flags":{}}`))
+	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", []byte(`{"flags":{}}`))
 	time.Sleep(200 * time.Millisecond)
 
 	if n := connCount.Load(); n != 0 {
@@ -400,8 +400,8 @@ func TestManager_RefreshInterval_Connected(t *testing.T) {
 
 	m := newTestManager(t, srv.Client())
 
-	keyHash := cache.Key("dt_server_us_abc123")
-	m.OnConfigCached(t.Context(), "dt_server_us_abc123", configWithSSEURL(srv.URL+"/sse"))
+	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	m.OnConfigCached(t.Context(), "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", configWithSSEURL(srv.URL+"/sse"))
 
 	// Wait for the read loop to enter streaming state.
 	select {
@@ -422,7 +422,7 @@ func TestManager_RefreshInterval_Connected(t *testing.T) {
 // the connection is closed.
 func TestManager_RefreshInterval_AfterClose(t *testing.T) {
 	m := newTestManager(t, nil)
-	keyHash := cache.Key("dt_server_us_abc123")
+	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	// Manually register state without an active goroutine — simulates a key
 	// whose connection was closed or never became streaming.
@@ -438,7 +438,7 @@ func TestManager_RefreshInterval_AfterClose(t *testing.T) {
 
 func TestManager_HasSubscribers_NoSubscribers(t *testing.T) {
 	m := newTestManager(t, nil)
-	keyHash := cache.Key("dt_server_us_abc123")
+	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	if m.HasSubscribers(keyHash) {
 		t.Error("expected false for key with no subscribers")
@@ -454,7 +454,7 @@ func TestManager_HasSubscribers_UnknownKey(t *testing.T) {
 
 func TestManager_HasSubscribers_WithSubscriber(t *testing.T) {
 	m := newTestManager(t, nil)
-	keyHash := cache.Key("dt_server_us_abc123")
+	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	_, unsubscribe := m.Subscribe(keyHash)
 	defer unsubscribe()
@@ -466,7 +466,7 @@ func TestManager_HasSubscribers_WithSubscriber(t *testing.T) {
 
 func TestManager_HasSubscribers_AfterUnsubscribe(t *testing.T) {
 	m := newTestManager(t, nil)
-	keyHash := cache.Key("dt_server_us_abc123")
+	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	_, unsubscribe := m.Subscribe(keyHash)
 	unsubscribe()
@@ -478,7 +478,7 @@ func TestManager_HasSubscribers_AfterUnsubscribe(t *testing.T) {
 
 func TestManager_HasSubscribers_AfterClose(t *testing.T) {
 	m := newTestManager(t, nil)
-	keyHash := cache.Key("dt_server_us_abc123")
+	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	_, unsubscribe := m.Subscribe(keyHash)
 	defer unsubscribe()
