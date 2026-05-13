@@ -13,6 +13,20 @@ SDK clients connect to `GET /sse?stream_id={stream_id}`. The `stream_id` is the 
 
 Only connections that pass both gates are accepted and counted toward billing.
 
+### Cold-start behavior
+
+On a fresh proxy — before any SDK client has fetched the flagd config for a given SDK key — `GET /sse` returns **412 Precondition Failed** with a body directing the client to fetch the config first:
+
+```
+config not cached; fetch /server/{sdk_key}.json first
+```
+
+This is intentional. The 412 signals a precondition failure, not a server error: the proxy is healthy, it simply hasn't seen this key yet. Once a client fetches the config via `GET /server/{sdk_key}.json`, the proxy caches the entry and opens an upstream SSE connection. Subsequent `GET /sse` requests for that key succeed.
+
+**Expected provider behavior:**
+
+A provider that receives 412 at cold start should retry the SSE connection after fetching the config. Providers using the `proxyUrl` configuration option retrieve the config (which includes the rewritten SSE URL) before opening the SSE connection, so they naturally follow the correct sequence. A provider that opens the SSE connection before the config fetch will receive 412 and should back off briefly before retrying — the proxy will be ready as soon as one flag evaluation triggers a config fetch.
+
 **Response headers** set on acceptance:
 
 ```

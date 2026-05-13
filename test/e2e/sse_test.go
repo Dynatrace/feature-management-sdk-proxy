@@ -103,6 +103,50 @@ func TestSSE_BeforeConfigCached_Returns412(t *testing.T) {
 	drainBody(t, resp)
 }
 
+// TestSSE_ColdStart_BootstrapAndReconnect verifies the full cold-start recovery
+// sequence: 412 before config is cached, then 200 once the proxy bootstraps
+// via a config fetch and upstream SSE is established.
+func TestSSE_ColdStart_BootstrapAndReconnect(t *testing.T) {
+	h := MustNew(t, Options{})
+
+	sseURL := h.URL(h.SSEPath(TestSDKKey))
+
+	// SSE before config cached → 412.
+	req, err := http.NewRequest(http.MethodGet, sseURL, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("SSE connect: %v", err)
+	}
+	assertStatus(t, resp, http.StatusPreconditionFailed)
+	drainBody(t, resp)
+
+	// Fetch config — bootstraps the proxy for this SDK key.
+	configResp := h.GetConfig(t, TestSDKKey)
+	assertStatus(t, configResp, http.StatusOK)
+	drainBody(t, configResp)
+
+	// Wait for upstream SSE connection to be established.
+	eventually(t,
+		func() bool { return h.SSE.ConnCount() == 1 },
+		3*time.Second, 50*time.Millisecond,
+		"upstream SSE connection not established after config cached",
+	)
+
+	// SSE now succeeds.
+	ch, cancel := connectSSE(t, sseURL)
+	defer cancel()
+
+	// Give the handler time to register the subscriber before sending.
+	time.Sleep(100 * time.Millisecond)
+
+	// Event delivered end-to-end.
+	h.SSE.SendEvent(FormatEvent("refetchEvaluation", `{"flags":"all"}`))
+	receiveEvent(t, ch, "refetchEvaluation", 3*time.Second)
+}
+
 // TestSSE_MissingSDKKey_Returns400 verifies that a request to /sse without
 // an sdk_key query parameter returns 400.
 func TestSSE_MissingSDKKey_Returns400(t *testing.T) {
