@@ -14,7 +14,7 @@ import (
 
 // writeJob is an item queued for async persistence.
 type writeJob struct {
-	keyHash  string
+	keyID    string
 	etag     string
 	payload  []byte
 	isDelete bool // when true, Delete is called instead of Put
@@ -51,21 +51,21 @@ func NewWriter(store Store, inst *metrics.Instruments, logger *slog.Logger, queu
 
 // OnConfigCached is called by the proxy handler after a successful cold fetch (200).
 // This implements the hot-path notification; it is non-blocking.
-func (w *Writer) OnConfigCached(keyHash, etag string, payload []byte) {
-	w.enqueue(writeJob{keyHash: keyHash, etag: etag, payload: payload})
+func (w *Writer) OnConfigCached(keyID, etag string, payload []byte) {
+	w.enqueue(writeJob{keyID: keyID, etag: etag, payload: payload})
 }
 
 // OnRefreshed implements cache.RefreshObserver. It is called by the background
 // refresher after a successful upstream 200 (never for 304 responses).
-func (w *Writer) OnRefreshed(keyHash string, payload []byte) {
-	w.enqueue(writeJob{keyHash: keyHash, payload: payload})
+func (w *Writer) OnRefreshed(keyID string, payload []byte) {
+	w.enqueue(writeJob{keyID: keyID, payload: payload})
 }
 
-// OnInvalidated queues an async delete of the persisted snapshot for keyHash.
+// OnInvalidated queues an async delete of the persisted snapshot for keyID.
 // It is called by the lifecycle handler when a key is rotated or deleted.
 // A failed delete logs a warning and increments a metric; it never blocks.
-func (w *Writer) OnInvalidated(keyHash string) {
-	w.enqueue(writeJob{keyHash: keyHash, isDelete: true})
+func (w *Writer) OnInvalidated(keyID string) {
+	w.enqueue(writeJob{keyID: keyID, isDelete: true})
 }
 
 func (w *Writer) enqueue(job writeJob) {
@@ -88,7 +88,7 @@ func (w *Writer) enqueue(job writeJob) {
 	select {
 	case dropped = <-w.queue:
 		w.logger.Warn("snapshot: write queue full, dropping oldest",
-			slog.String("key_hash", dropped.keyHash),
+			slog.String("sdk_key_public_id", dropped.keyID),
 		)
 		w.inst.SnapshotWriteQueueDropped.Add(context.Background(), 1)
 	default:
@@ -141,15 +141,15 @@ func (w *Writer) Shutdown(ctx context.Context) {
 
 func (w *Writer) persist(job writeJob) {
 	if job.isDelete {
-		w.persistDelete(job.keyHash)
+		w.persistDelete(job.keyID)
 		return
 	}
 
 	now := time.Now()
-	body, err := EncodeEnvelope(job.keyHash, job.etag, now, job.payload)
+	body, err := EncodeEnvelope(job.keyID, job.etag, now, job.payload)
 	if err != nil {
 		w.logger.Warn("snapshot: encode failed",
-			slog.String("key", job.keyHash),
+			slog.String("key", job.keyID),
 			slog.String("error", err.Error()),
 		)
 		w.inst.SnapshotWritesTotal.Add(context.Background(), 1,
@@ -157,9 +157,9 @@ func (w *Writer) persist(job writeJob) {
 		return
 	}
 
-	if err := w.store.Put(context.Background(), job.keyHash, body); err != nil {
+	if err := w.store.Put(context.Background(), job.keyID, body); err != nil {
 		w.logger.Warn("snapshot: write failed",
-			slog.String("key", job.keyHash),
+			slog.String("key", job.keyID),
 			slog.String("error", err.Error()),
 		)
 		w.inst.SnapshotWritesTotal.Add(context.Background(), 1,
@@ -170,13 +170,13 @@ func (w *Writer) persist(job writeJob) {
 	w.inst.SnapshotWritesTotal.Add(context.Background(), 1,
 		metric.WithAttributes(attribute.String("result", "success"), attribute.String("operation", "put")))
 	w.inst.SnapshotAgeSeconds.Record(context.Background(), 0,
-		metric.WithAttributes(attribute.String("sdk_key_hash", job.keyHash)))
+		metric.WithAttributes(attribute.String("sdk_key_public_id", job.keyID)))
 }
 
-func (w *Writer) persistDelete(keyHash string) {
-	if err := w.store.Delete(context.Background(), keyHash); err != nil {
+func (w *Writer) persistDelete(keyID string) {
+	if err := w.store.Delete(context.Background(), keyID); err != nil {
 		w.logger.Warn("snapshot: delete failed",
-			slog.String("key", keyHash),
+			slog.String("key", keyID),
 			slog.String("error", err.Error()),
 		)
 		w.inst.SnapshotWritesTotal.Add(context.Background(), 1,

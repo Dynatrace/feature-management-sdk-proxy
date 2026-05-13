@@ -18,14 +18,14 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable export. Metrics push every **30 seco
 | Metric | Instrument | Unit | Labels | Description |
 |---|---|---|---|---|
 | `proxy.requests.total` | Counter | `{request}` | `result` | Completed proxy requests. `result`: `hit`, `miss`, `upstream_error`, `client_error` |
-| `proxy.cache.size` | Gauge | `By` | `sdk_key_hash` | Cached payload size in bytes per SDK key |
+| `proxy.cache.size` | Gauge | `By` | `sdk_key_public_id` | Cached payload size in bytes per SDK key |
 | `proxy.config.sse_rewrite_total` | Counter | `{rewrite}` | `result` | SSE URL rewrite outcomes. `result`: `rewritten`, `no_sse_entry`, `not_found_in_body`, `unknown` |
-| `proxy.sse.connections` | UpDownCounter | `{connection}` | `sdk_key_hash` | Active upstream SSE connections |
-| `proxy.sse.client.connections` | UpDownCounter | `{connection}` | `sdk_key_hash` | Active SDK client SSE connections to the proxy |
-| `proxy.sse.events_delivered_total` | Counter | `{event}` | `sdk_key_hash` | Events successfully written to SDK clients |
-| `proxy.sse.upstream.reconnects` | Counter | `{reconnect}` | `sdk_key_hash`, `reason` | Upstream SSE reconnect attempts. `reason`: `eof`, `io_error`, `inactivity`, `url_change` |
-| `proxy.sse.upstream.events` | Counter | `{event}` | `sdk_key_hash`, `result` | Upstream SSE events received. `result`: `forwarded`, `dropped_no_subscribers`, `dropped_slow_subscriber` |
-| `proxy.snapshot.age_seconds` | Gauge | `s` | `sdk_key_hash` | Seconds since the snapshot was last written |
+| `proxy.sse.connections` | UpDownCounter | `{connection}` | `sdk_key_public_id` | Active upstream SSE connections |
+| `proxy.sse.client.connections` | UpDownCounter | `{connection}` | `sdk_key_public_id` | Active SDK client SSE connections to the proxy |
+| `proxy.sse.events_delivered_total` | Counter | `{event}` | `sdk_key_public_id` | Events successfully written to SDK clients |
+| `proxy.sse.upstream.reconnects` | Counter | `{reconnect}` | `sdk_key_public_id`, `reason` | Upstream SSE reconnect attempts. `reason`: `eof`, `io_error`, `inactivity`, `url_change` |
+| `proxy.sse.upstream.events` | Counter | `{event}` | `sdk_key_public_id`, `result` | Upstream SSE events received. `result`: `forwarded`, `dropped_no_subscribers`, `dropped_slow_subscriber` |
+| `proxy.snapshot.age_seconds` | Gauge | `s` | `sdk_key_public_id` | Seconds since the snapshot was last written |
 | `proxy.snapshot.writes.total` | Counter | `{write}` | `result`, `operation` | Snapshot write attempts. `result`: `success`, `failure`; `operation`: `put`, `delete` |
 | `proxy.snapshot.load.total` | Counter | `{object}` | `result` | Snapshot objects processed at startup. `result`: `loaded`, `skipped_unknown_version`, `skipped_corrupt`, `backend_error` |
 | `proxy.snapshot.write_queue.dropped_total` | Counter | `{write}` | — | Snapshot writes dropped due to write queue overflow |
@@ -46,13 +46,13 @@ The proxy emits distributed traces via OTLP/HTTP (same `OTEL_EXPORTER_OTLP_ENDPO
 
 | Span name | Where | Key attributes |
 |-----------|-------|----------------|
-| `GET /server/{sdk_key}.json` | Proxy handler — every SDK config request (name follows OTel HTTP server semconv: `{method} {route}`) | `http.request.method`, `http.route`, `sdk_key_hash`, `result` (`hit`, `miss`, `upstream_error`, `client_error`) |
-| `proxy.serve_cache_hit` | Serving a cached entry — child of `GET /server/` with a **Span Link** to the originating fetch when available | `sdk_key_hash`, `result` |
-| `proxy.cold_fetch` | Upstream CDN fetch on a cache miss — child of `GET /server/` | `sdk_key_hash`, `upstream.status_code`, `result` |
+| `GET /server/{sdk_key}.json` | Proxy handler — every SDK config request (name follows OTel HTTP server semconv: `{method} {route}`) | `http.request.method`, `http.route`, `sdk_key_public_id`, `result` (`hit`, `miss`, `upstream_error`, `client_error`) |
+| `proxy.serve_cache_hit` | Serving a cached entry — child of `GET /server/` with a **Span Link** to the originating fetch when available | `sdk_key_public_id`, `result` |
+| `proxy.cold_fetch` | Upstream CDN fetch on a cache miss — child of `GET /server/` | `sdk_key_public_id`, `upstream.status_code`, `result` |
 | `GET` | CDN HTTP call — child of `proxy.cold_fetch` or `proxy.refresh_fetch`; `url.full` is intentionally omitted (URL contains raw SDK key) | `http.request.method`, `server.address`, `http.response.status_code` |
-| `proxy.refresh_fetch` | Background TTL revalidation fetch — standalone (not tied to any client request) | `sdk_key_hash`, `if_none_match`, `result` |
-| `sse.upstream.connect` | One span per upstream SSE connect attempt — reconnects emit separate spans | `sdk_key_hash`, `reconnect.reason`, `streaming` |
-| `sse.client.subscribe` | SSE client connection setup phase (auth + cache gate + headers sent) | `sdk_key_hash`, `outcome` (`200_connected`, `412_no_config`, `500_no_flusher`) |
+| `proxy.refresh_fetch` | Background TTL revalidation fetch — standalone (not tied to any client request) | `sdk_key_public_id`, `if_none_match`, `result` |
+| `sse.upstream.connect` | One span per upstream SSE connect attempt — reconnects emit separate spans | `sdk_key_public_id`, `reconnect.reason`, `streaming` |
+| `sse.client.subscribe` | SSE client connection setup phase (auth + cache gate + headers sent) | `sdk_key_public_id`, `outcome` (`200_connected`, `412_no_config`, `500_no_flusher`) |
 
 ### Span Link: cache hit → originating fetch
 

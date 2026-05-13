@@ -75,7 +75,7 @@ func TestHandler_CacheMiss_FetchesUpstream(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -101,10 +101,10 @@ func TestHandler_CacheMiss_PopulatesCache(t *testing.T) {
 	h := newTestHandlerWithCache(t, upstream, c)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
-	key := cache.Key("dt_server_us_abc123")
+	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	entry, ok := c.Get(key)
 	if !ok {
 		t.Fatal("expected cache to be populated after miss")
@@ -127,11 +127,11 @@ func TestHandler_CacheMiss_PathForwardedToUpstream(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
-	if gotPath != "/server/dt_server_us_abc123.json" {
-		t.Errorf("upstream received path %q, want /server/dt_server_us_abc123.json", gotPath)
+	if gotPath != "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json" {
+		t.Errorf("upstream received path %q, want /server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", gotPath)
 	}
 }
 
@@ -144,7 +144,7 @@ func TestHandler_CacheMiss_Upstream304_Returns503(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -160,7 +160,7 @@ func TestHandler_CacheMiss_UpstreamServerError_Returns503(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -178,7 +178,7 @@ func TestHandler_CacheMiss_NetworkError_Returns503(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -195,7 +195,7 @@ func TestHandler_CacheMiss_UpstreamClientError_PassedThrough(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
@@ -218,7 +218,7 @@ func TestHandler_CacheMiss_IfNoneMatch_NotForwardedToUpstream(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Header.Set("If-None-Match", `"abc123"`)
 	h.ServeHTTP(rec, req)
 
@@ -236,17 +236,17 @@ func TestHandler_CacheHit_ServesFromCache_NoUpstreamCall(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.Key("dt_server_us_abc123")
+	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{"foo":true}}`),
 		ETag:      `"v1"`,
 		FetchedAt: time.Now(),
-		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json",
 	})
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -267,17 +267,17 @@ func TestHandler_CacheHit_ETagMatch_Returns304(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.Key("dt_server_us_abc123")
+	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{}}`),
 		ETag:      `"abc123"`,
 		FetchedAt: time.Now(),
-		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json",
 	})
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Header.Set("If-None-Match", `"abc123"`)
 	h.ServeHTTP(rec, req)
 
@@ -299,17 +299,17 @@ func TestHandler_CacheHit_ETagMismatch_Returns200WithPayload(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.Key("dt_server_us_abc123")
+	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{"updated":true}}`),
 		ETag:      `"v2"`,
 		FetchedAt: time.Now(),
-		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json",
 	})
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Header.Set("If-None-Match", `"v1"`) // stale client version
 	h.ServeHTTP(rec, req)
 
@@ -328,17 +328,17 @@ func TestHandler_CacheHit_NoETag_Returns200(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.Key("dt_server_us_abc123")
+	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{}}`),
 		ETag:      "", // no ETag stored
 		FetchedAt: time.Now(),
-		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json",
 	})
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Header.Set("If-None-Match", `"anything"`)
 	h.ServeHTTP(rec, req)
 
@@ -359,7 +359,7 @@ func TestHandler_NonGetMethod_Returns405(t *testing.T) {
 	h := newTestHandler(t, upstream)
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(method, "/server/dt_server_us_abc123.json", nil)
+		req := httptest.NewRequest(method, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s: expected 405, got %d", method, rec.Code)
@@ -375,7 +375,7 @@ func TestHandler_MissingJsonSuffix_Returns400(t *testing.T) {
 
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -409,7 +409,8 @@ func TestHandler_UnrecognizedSDKKeyFormat_Returns400(t *testing.T) {
 	for _, path := range []string{
 		"/server/bogus.json",
 		"/server/my-sdk-key.json",
-		"/server/dt_client_us_abc.json",
+		// public ID only — valid format but missing private segment
+		"/server/dt01.server_us_ab3xy9kp2q.json",
 	} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -427,17 +428,17 @@ func TestHandler_HEAD_CacheHit_NoBody(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.Key("dt_server_us_abc123")
+	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{}}`),
 		ETag:      `"v1"`,
 		FetchedAt: time.Now(),
-		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json",
 	})
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodHead, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodHead, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -488,40 +489,34 @@ func TestExtractSDKKey(t *testing.T) {
 	}
 }
 
-func TestExtractRegion(t *testing.T) {
+func TestExtractGeo(t *testing.T) {
 	cases := []struct {
-		sdkKey     string
-		wantRegion string
-		wantOK     bool
+		sdkKey  string
+		wantGeo string
+		wantOK  bool
 	}{
-		{"dt_server_us_abc123", "us", true},
-		{"dt_server_eu_abc123", "eu", true},
-		{"dt_server_eu_tok_with_underscores", "eu", true}, // token may contain underscores
-		{"dt_client_us_abc", "", false},                   // wrong second segment
-		{"dt_server__abc", "", false},                     // empty region
-		{"dt_server_us_", "", false},                      // empty token
-		{"dt_server_us", "", false},                       // too few parts
-		{"dt_server_US_abc", "", false},                   // uppercase region rejected
-		{"dt_server_us.east_abc", "", false},              // dot in region rejected (SSRF guard)
-		{"dt_server_evil.com:8080_abc", "", false},        // port in region rejected (SSRF guard)
+		{"dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "us", true},
+		{"dt01.server_eu_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "eu", true},
+		{"dt01.server_ap_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "ap", true},
+		{"dt01.server_us_ab3xy9kp2q", "", false}, // public ID only, no private segment
 		{"bogus", "", false},
 		{"", "", false},
 	}
 	for _, tc := range cases {
-		region, ok := extractRegion(tc.sdkKey)
-		if ok != tc.wantOK || region != tc.wantRegion {
-			t.Errorf("extractRegion(%q) = (%q, %v), want (%q, %v)", tc.sdkKey, region, ok, tc.wantRegion, tc.wantOK)
+		geo, ok := extractGeo(tc.sdkKey)
+		if ok != tc.wantOK || geo != tc.wantGeo {
+			t.Errorf("extractGeo(%q) = (%q, %v), want (%q, %v)", tc.sdkKey, geo, ok, tc.wantGeo, tc.wantOK)
 		}
 	}
 }
 
 func TestBuildTarget_ConstructsGeoBoundURL(t *testing.T) {
 	h := &Handler{cdnBaseDomain: "fm.dynatracelabs.com"}
-	got, ok := h.buildTarget("dt_server_us_abc123")
+	got, ok := h.buildTarget("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	if !ok {
 		t.Fatal("buildTarget returned ok=false for valid SDK key")
 	}
-	want := "https://cdn.us.fm.dynatracelabs.com/server/dt_server_us_abc123.json"
+	want := "https://cdn.us.fm.dynatracelabs.com/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json"
 	if got != want {
 		t.Errorf("buildTarget = %q, want %q", got, want)
 	}
@@ -539,17 +534,17 @@ func TestHandler_CacheHit_RewritesSSEURL(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.Key("dt_server_us_abc123")
+	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(testPayloadWithSSE),
 		ETag:      `"v1"`,
 		FetchedAt: time.Now(),
-		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json",
 	})
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Host = "proxy.example.com"
 	h.ServeHTTP(rec, req)
 
@@ -560,11 +555,11 @@ func TestHandler_CacheHit_RewritesSSEURL(t *testing.T) {
 	if strings.Contains(body, "upstream.sse.example.com") {
 		t.Errorf("response still contains upstream SSE URL: %q", body)
 	}
-	wantStreamID := cache.Key("dt_server_us_abc123")
+	wantStreamID := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	if !strings.Contains(body, "proxy.example.com/sse?stream_id="+wantStreamID) {
 		t.Errorf("response missing proxy SSE URL with stream_id, got: %q", body)
 	}
-	if strings.Contains(body, "dt_server_us_abc123") {
+	if strings.Contains(body, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a") {
 		t.Errorf("response contains raw SDK key in URL: %q", body)
 	}
 }
@@ -580,7 +575,7 @@ func TestHandler_CacheMiss_RewritesSSEURLInResponse_StoresRawInCache(t *testing.
 	c := cache.New()
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Host = "proxy.example.com"
 	h.ServeHTTP(rec, req)
 
@@ -590,19 +585,19 @@ func TestHandler_CacheMiss_RewritesSSEURLInResponse_StoresRawInCache(t *testing.
 
 	// Response served to SDK should have the proxy SSE URL with stream_id.
 	body := rec.Body.String()
-	wantStreamID := cache.Key("dt_server_us_abc123")
+	wantStreamID := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	if strings.Contains(body, "upstream.sse.example.com") {
 		t.Errorf("response still contains upstream SSE URL: %q", body)
 	}
 	if !strings.Contains(body, "proxy.example.com/sse?stream_id="+wantStreamID) {
 		t.Errorf("response missing proxy SSE URL with stream_id, got: %q", body)
 	}
-	if strings.Contains(body, "dt_server_us_abc123") {
+	if strings.Contains(body, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a") {
 		t.Errorf("response contains raw SDK key in URL: %q", body)
 	}
 
 	// Cache must store raw upstream bytes so the SSE manager can dial the real upstream.
-	keyHash := cache.Key("dt_server_us_abc123")
+	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	entry, ok := c.Get(keyHash)
 	if !ok {
 		t.Fatal("expected cache populated after miss")
@@ -620,16 +615,16 @@ func TestHandler_NoSSEEntry_PayloadServedByteIdentical(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.Key("dt_server_us_abc123")
+	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(testPayloadNoSSE),
 		FetchedAt: time.Now(),
-		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json",
 	})
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Host = "proxy.example.com"
 	h.ServeHTTP(rec, req)
 
@@ -648,17 +643,17 @@ func TestHandler_HEAD_NoSSERewrite(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.Key("dt_server_us_abc123")
+	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(testPayloadWithSSE),
 		ETag:      `"v1"`,
 		FetchedAt: time.Now(),
-		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json",
 	})
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodHead, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodHead, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Host = "proxy.example.com"
 	h.ServeHTTP(rec, req)
 
@@ -721,16 +716,16 @@ func TestHandler_MalformedHostHeader_FallsBackToUnknown(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.Key("dt_server_us_abc123")
+	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(testPayloadWithSSE),
 		FetchedAt: time.Now(),
-		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json",
 	})
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Host = "proxy.example.com\r\nX-Injected: bad"
 	h.ServeHTTP(rec, req)
 
@@ -755,13 +750,14 @@ func TestHandler_Rewrite_StreamIDFormat(t *testing.T) {
 	}))
 	defer upstream.Close()
 
+	// Use a different geo (eu) to verify geo-specific routing works.
 	c := cache.New()
-	sdkKey := "dt_server_us-east_abc123"
-	key := cache.Key(sdkKey)
+	sdkKey := "dt01.server_eu_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
+	key := cache.PublicID(sdkKey)
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{},"eventStreams":[{"type":"sse","url":"https://upstream.sse.example.com/stream","inactivityDelaySec":60}]}`),
 		FetchedAt: time.Now(),
-		FetchURL:  "https://cdn.us-east.fm.test/server/" + sdkKey + ".json",
+		FetchURL:  "https://cdn.eu.fm.test/server/" + sdkKey + ".json",
 	})
 
 	h := newTestHandlerWithCache(t, upstream, c)
@@ -775,7 +771,7 @@ func TestHandler_Rewrite_StreamIDFormat(t *testing.T) {
 	}
 	body := rec.Body.String()
 	if !strings.Contains(body, "stream_id="+key) {
-		t.Errorf("rewritten URL missing stream_id hash, got: %q", body)
+		t.Errorf("rewritten URL missing stream_id public ID, got: %q", body)
 	}
 	if strings.Contains(body, sdkKey) {
 		t.Errorf("rewritten URL contains raw SDK key %q: %q", sdkKey, body)
@@ -789,22 +785,22 @@ func TestHandler_Rewrite_HTTPSSchemeFromXForwardedProto(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.Key("dt_server_us_abc123")
+	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(testPayloadWithSSE),
 		FetchedAt: time.Now(),
-		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json",
 	})
 
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Host = "proxy.example.com"
 	req.Header.Set("X-Forwarded-Proto", "https")
 	h.ServeHTTP(rec, req)
 
 	body := rec.Body.String()
-	wantStreamID := cache.Key("dt_server_us_abc123")
+	wantStreamID := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	if !strings.Contains(body, "https://proxy.example.com/sse?stream_id="+wantStreamID) {
 		t.Errorf("expected https URL with stream_id in rewritten URL, got: %q", body)
 	}
@@ -841,7 +837,7 @@ func TestHandler_Counter_IncrementOnCacheMiss(t *testing.T) {
 	h := newTestHandlerWithCounter(t, upstream, counter)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
 	samples := counter.Drain()
@@ -857,16 +853,16 @@ func TestHandler_Counter_IncrementOnCacheHit(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	c.Set(cache.Key("dt_server_us_abc123"), cache.Entry{
+	c.Set(cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"), cache.Entry{
 		Payload:   []byte(`{"flags":{}}`),
 		FetchedAt: time.Now(),
-		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json",
 	})
 	counter := telemetry.NewCounter()
 	h := newTestHandlerWithCacheAndCounter(t, upstream, c, counter)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
 	samples := counter.Drain()
@@ -885,7 +881,7 @@ func TestHandler_Counter_IncrementOnUpstreamError(t *testing.T) {
 	h := newTestHandlerWithCounter(t, upstream, counter)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -904,16 +900,16 @@ func TestHandler_Counter_IncrementOnHEAD(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	c.Set(cache.Key("dt_server_us_abc123"), cache.Entry{
+	c.Set(cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"), cache.Entry{
 		Payload:   []byte(`{"flags":{}}`),
 		FetchedAt: time.Now(),
-		FetchURL:  "https://cdn.us.fm.test/server/dt_server_us_abc123.json",
+		FetchURL:  "https://cdn.us.fm.test/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json",
 	})
 	counter := telemetry.NewCounter()
 	h := newTestHandlerWithCacheAndCounter(t, upstream, c, counter)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodHead, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodHead, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
 	samples := counter.Drain()
@@ -931,7 +927,7 @@ func TestHandler_Counter_NoIncrementOn405(t *testing.T) {
 
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(method, "/server/dt_server_us_abc123.json", nil)
+		req := httptest.NewRequest(method, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 		h.ServeHTTP(rec, req)
 	}
 
@@ -963,7 +959,7 @@ func TestHandler_Counter_NoIncrementOnUnrecognizedKeyFormat(t *testing.T) {
 	counter := telemetry.NewCounter()
 	h := newTestHandlerWithCounter(t, upstream, counter)
 
-	for _, path := range []string{"/server/bogus.json", "/server/dt_client_us_abc.json"} {
+	for _, path := range []string{"/server/bogus.json", "/server/dt01.server_us_ab3xy9kp2q.json"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		h.ServeHTTP(rec, req)
@@ -1010,7 +1006,7 @@ func TestHandler_CacheMiss_InvokesSnapshotNotifier(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -1022,7 +1018,7 @@ func TestHandler_CacheMiss_InvokesSnapshotNotifier(t *testing.T) {
 	if len(notifier.calls) != 1 {
 		t.Fatalf("expected 1 snapshot notifier call, got %d", len(notifier.calls))
 	}
-	if got := notifier.calls[0].keyHash; got != cache.Key("dt_server_us_abc123") {
+	if got := notifier.calls[0].keyHash; got != cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a") {
 		t.Errorf("wrong keyHash: got %q", got)
 	}
 	if got := notifier.calls[0].etag; got != `"v1"` {
@@ -1037,8 +1033,8 @@ func TestHandler_SnapshotRestoredEntry_HydratesFetchURL(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	sdkKey := "dt_server_us_abc123"
-	key := cache.Key(sdkKey)
+	sdkKey := "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
+	key := cache.PublicID(sdkKey)
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{}}`),
 		ETag:      `"v1"`,
@@ -1099,7 +1095,7 @@ func TestHandler_ColdMiss_Singleflight_OneUpstreamCall(t *testing.T) {
 		rec := responses[i]
 		go func() {
 			defer wg.Done()
-			req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+			req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 			h.ServeHTTP(rec, req)
 		}()
 	}
@@ -1155,7 +1151,7 @@ func TestHandler_ColdMiss_Singleflight_ErrorShared(t *testing.T) {
 		rec := responses[i]
 		go func() {
 			defer wg.Done()
-			req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+			req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 			h.ServeHTTP(rec, req)
 		}()
 	}
@@ -1204,7 +1200,7 @@ func TestHandler_ColdMiss_Singleflight_SideEffectsOnce(t *testing.T) {
 	for range n {
 		go func() {
 			defer wg.Done()
-			req := httptest.NewRequest(http.MethodGet, "/server/dt_server_us_abc123.json", nil)
+			req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 			h.ServeHTTP(httptest.NewRecorder(), req)
 		}()
 	}

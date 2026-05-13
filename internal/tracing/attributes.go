@@ -2,8 +2,8 @@ package tracing
 
 import "go.opentelemetry.io/otel/attribute"
 
-// SDKKeyHash returns a span attribute for the opaque SDK key identifier.
-// The value must be cache.Key(sdkKey) — never the raw SDK key.
-func SDKKeyHash(keyHash string) attribute.KeyValue {
-	return attribute.String("sdk_key_hash", keyHash)
+// SDKKeyPublicID returns a span attribute for the SDK key public identifier.
+// The value must be cache.PublicID(sdkKey) — never the raw SDK key or the full key.
+func SDKKeyPublicID(keyID string) attribute.KeyValue {
+	return attribute.String("sdk_key_public_id", keyID)
 }

@@ -13,14 +13,14 @@ const inactivitySweepInterval = 1 * time.Hour
 // Liveness reports whether a cache key currently has active downstream clients.
 // Defined in the cache package (consumer) to avoid a cache → sse import cycle.
 type Liveness interface {
-	HasSubscribers(keyHash string) bool
+	HasSubscribers(keyID string) bool
 }
 
 // LivenessFunc is a function adapter for Liveness.
-type LivenessFunc func(keyHash string) bool
+type LivenessFunc func(keyID string) bool
 
 // HasSubscribers implements Liveness by calling the underlying function.
-func (f LivenessFunc) HasSubscribers(keyHash string) bool { return f(keyHash) }
+func (f LivenessFunc) HasSubscribers(keyID string) bool { return f(keyID) }
 
 // Sweeper evicts cache entries that have been inactive for longer than
 // evictAfter and have no active downstream subscribers. Eviction is a full
@@ -28,7 +28,7 @@ func (f LivenessFunc) HasSubscribers(keyHash string) bool { return f(keyHash) }
 // removed (identical to lifecycle invalidation).
 type Sweeper struct {
 	cache      *Cache
-	evict      func(keyHash string)
+	evict      func(keyID string)
 	liveness   Liveness
 	evictAfter time.Duration
 	interval   time.Duration
@@ -43,7 +43,7 @@ type Sweeper struct {
 // true the entry is skipped regardless of its last-access time.
 func NewSweeper(
 	c *Cache,
-	evict func(keyHash string),
+	evict func(keyID string),
 	liveness Liveness,
 	evictAfter time.Duration,
 	inst *metrics.Instruments,
@@ -80,25 +80,25 @@ func (s *Sweeper) sweep() {
 	now := s.now()
 	cutoff := now.Add(-s.evictAfter)
 
-	for keyHash := range s.cache.Snapshot() {
-		lastAccess := s.cache.LastAccess(keyHash)
+	for keyID := range s.cache.Snapshot() {
+		lastAccess := s.cache.LastAccess(keyID)
 		if lastAccess.IsZero() || !lastAccess.Before(cutoff) {
 			continue
 		}
-		if s.liveness.HasSubscribers(keyHash) {
+		if s.liveness.HasSubscribers(keyID) {
 			s.logger.Debug("cache: inactivity sweeper: skipping key with active subscribers",
-				slog.String("key_hash", keyHash),
+				slog.String("sdk_key_public_id", keyID),
 			)
 			continue
 		}
-		if s.cache.DeleteIfInactiveSince(keyHash, cutoff) {
+		if s.cache.DeleteIfInactiveSince(keyID, cutoff) {
 			idleFor := now.Sub(lastAccess)
 			s.logger.Info("cache: evicted inactive entry",
-				slog.String("key_hash", keyHash),
+				slog.String("sdk_key_public_id", keyID),
 				slog.Duration("idle_for", idleFor),
 			)
 			s.inst.CacheInactivityEvictionsTotal.Add(context.Background(), 1)
-			s.evict(keyHash)
+			s.evict(keyID)
 		}
 	}
 }

@@ -18,7 +18,7 @@ The proxy's `internal/telemetry` package already accumulates per-SDK-key request
 
 - **Token passthrough invariant:** the proxy holds no credentials. Any billing approach must authenticate using the originating SDK token, not a separate service credential. This is a load-bearing constraint.
 - **Billing unit clarity:** the proxy can only report proxy-level HTTP requests (one per cache interval per SDK key), not raw SDK flag evaluation calls. The billing system must account for this.
-- **Multi-replica behavior:** two proxy instances serving the same SDK key emit counts independently. The billing backend must aggregate by `key_hash = SHA-256(sdk_key)[:16]` across replicas.
+- **Multi-replica behavior:** two proxy instances serving the same SDK key emit counts independently. The billing backend must aggregate by `sdk_key_id = cache.PublicID(sdk_key)` across replicas.
 - **Operational simplicity:** avoid introducing a second network transport, retry loop, and back-pressure contract if a simpler path exists.
 
 ---
@@ -70,7 +70,7 @@ The proxy-side design is already implemented in `internal/telemetry/billing.go`.
 1. Does the billing Worker endpoint exist today, or must it be built? Who owns it?
 2. Is `Authorization: Api-Token <sdk_key>` (SDK token passthrough) the acceptable auth mechanism?
 3. What are the Worker team's expectations around guaranteed delivery? The proxy has a bounded in-memory retry buffer; counts are dropped after the buffer fills.
-4. Is `key_hash = SHA-256(sdk_key)[:16]` sufficient as the billing identifier, or does the Worker need additional context?
+4. Is `sdk_key_id = cache.PublicID(sdk_key)` sufficient as the billing identifier, or does the Worker need additional context?
 
 ### Option B — Count on SSE Connection
 
@@ -90,7 +90,7 @@ Send counts as custom headers on the ongoing upstream SSE connection. **Ruled ou
 
 - **Downstream consumer:** Where does billing data land — Grail, a dedicated billing store, Analytics Engine? This affects retention, replay, and late-arrival handling.
 - **Billing unit:** The proxy reports proxy-level fetches, not individual flag evaluation calls. Does the billing model account for the multiplier (N SDK evaluations per proxy fetch)?
-- **Multi-replica aggregation:** Two proxy replicas serving the same SDK key emit independent counts. The billing backend aggregates by `key_hash` across replicas. Confirm this is expected.
+- **Multi-replica aggregation:** Two proxy replicas serving the same SDK key emit independent counts. The billing backend aggregates by `sdk_key_id` across replicas. Confirm this is expected.
 
 ---
 
@@ -99,7 +99,7 @@ Send counts as custom headers on the ongoing upstream SSE connection. **Ruled ou
 **If Option A is chosen:**
 - Delete `internal/telemetry/billing.go`, `internal/telemetry/logreporter.go`.
 - Remove the billing flush goroutine from `cmd/proxy/main.go`.
-- Add `Counter.DrainOne(keyHash)` to `internal/telemetry/counter.go`.
+- Add `Counter.DrainOne(keyID)` to `internal/telemetry/counter.go`.
 - Set `X-Downstream-Request-Count` header in `internal/proxy/handler.go` (`serveMiss`, `Fetch`).
 - Cancel issues: `sdk-proxy-sim` (billingShutdownGrace config), `sdk-proxy-7fp` (BoundedRetryBuffer ring buffer).
 

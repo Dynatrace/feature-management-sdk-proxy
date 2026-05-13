@@ -74,7 +74,7 @@ SDK Proxy is a single Go binary with four core components:
 
 | Component | Responsibility |
 |---|---|
-| **HTTP proxy + cache** | Serves flagd config from in-memory cache; fetches upstream on miss; keyed by `SHA-256(sdk_key)`. See [`docs/cache.md`](docs/cache.md). |
+| **HTTP proxy + cache** | Serves flagd config from in-memory cache; fetches upstream on miss; keyed by SDK key public prefix (`cache.PublicID(sdk_key)`). See [`docs/cache.md`](docs/cache.md). |
 | **SSE fan-out** | Maintains one upstream SSE connection per SDK key; re-broadcasts `refetchEvaluation` events (OFREP ADR-0008) to all connected clients via `GET /sse`. See [`docs/sse.md`](docs/sse.md). |
 | **Usage telemetry** | Increments a per-SDK-token counter on every request; batch-flushes to the billing endpoint on a configurable interval. See [`docs/telemetry.md`](docs/telemetry.md). |
 | **Snapshot persistence** | Optional. Writes cache entries to S3-compatible object storage (or local file) asynchronously after each update; loaded on startup to survive restarts. Skipped entirely if not configured. |
@@ -104,7 +104,7 @@ SDK Proxy is a single Go binary with four core components:
 These are load-bearing constraints — do not break them without an explicit design discussion:
 
 - **Token passthrough**: the proxy holds no credentials. Every upstream request uses the SDK token from the originating request.
-- **Cache key**: `SHA-256(sdk_key)` truncated to 16 hex chars. Raw SDK keys must never appear in files, object storage, or metric labels — the hash is used as a safe persistent identifier. In-memory use of the raw key is fine (it's retained for upstream requests anyway). When SDK keys gain a structured public identifier, replace the hash with that.
+- **Cache key**: `cache.PublicID(sdk_key)` — the first two dot-segments of the SDK key: `{token}.{platform}_{geo}_{publicRandom}`. The private segment must never appear in files, object storage, logs, or metric labels. In-memory use of the full raw key is fine (it's retained for upstream requests). OTel attribute name: `sdk_key_public_id`.
 - **ETag / revalidation**: cache entries store the upstream CDN `ETag`. TTL refresh uses `If-None-Match`; a `304` resets the TTL only — no snapshot write, no fan-out.
 - **Payload opaque**: the proxy never parses the flagd config JSON. Treat it as bytes.
 - **Snapshot writes are async**: a failed snapshot write must never fail an SDK request. Log + metric only. Snapshots are skipped entirely if persistence is not configured.

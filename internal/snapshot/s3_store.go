@@ -13,6 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+
+	"github.com/dynatrace/sdk-proxy/internal/cache"
 )
 
 // S3Store implements Store against any S3-compatible object storage service
@@ -79,40 +81,46 @@ func NewS3Store(ctx context.Context, cfg S3Config) (*S3Store, error) {
 	}, nil
 }
 
-func (s *S3Store) objectKey(keyHash string) string {
+func (s *S3Store) objectKey(keyID string) string {
 	if s.prefix != "" {
-		return s.prefix + "/" + keyHash + ".json"
+		return s.prefix + "/" + keyID + ".json"
 	}
-	return keyHash + ".json"
+	return keyID + ".json"
 }
 
-// Put writes the snapshot body to the bucket under the key hash.
-func (s *S3Store) Put(ctx context.Context, keyHash string, body []byte) error {
+// Put writes the snapshot body to the bucket under the key ID.
+func (s *S3Store) Put(ctx context.Context, keyID string, body []byte) error {
+	if !cache.IsValidID(keyID) {
+		return fmt.Errorf("snapshot: s3: invalid key ID %q", keyID)
+	}
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(s.bucket),
-		Key:         aws.String(s.objectKey(keyHash)),
+		Key:         aws.String(s.objectKey(keyID)),
 		Body:        bytes.NewReader(body),
 		ContentType: aws.String("application/json"),
 	})
 	if err != nil {
-		return fmt.Errorf("snapshot: s3: put %s: %w", keyHash, err)
+		return fmt.Errorf("snapshot: s3: put %s: %w", keyID, err)
 	}
 	return nil
 }
 
-// Get retrieves the snapshot body for the given key hash.
-func (s *S3Store) Get(ctx context.Context, keyHash string) ([]byte, error) {
+// Get retrieves the snapshot body for the given key ID.
+func (s *S3Store) Get(ctx context.Context, keyID string) ([]byte, error) {
+	if !cache.IsValidID(keyID) {
+		return nil, fmt.Errorf("snapshot: s3: invalid key ID %q", keyID)
+	}
 	resp, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
-		Key:    aws.String(s.objectKey(keyHash)),
+		Key:    aws.String(s.objectKey(keyID)),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("snapshot: s3: get %s: %w", keyHash, err)
+		return nil, fmt.Errorf("snapshot: s3: get %s: %w", keyID, err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("snapshot: s3: read %s: %w", keyHash, err)
+		return nil, fmt.Errorf("snapshot: s3: read %s: %w", keyID, err)
 	}
 	return data, nil
 }
@@ -138,7 +146,7 @@ func (s *S3Store) List(ctx context.Context) ([]string, error) {
 			if obj.Key == nil {
 				continue
 			}
-			key := extractKeyHash(*obj.Key, prefix)
+			key := extractPublicID(*obj.Key, prefix)
 			if key != "" {
 				keys = append(keys, key)
 			}
@@ -147,24 +155,27 @@ func (s *S3Store) List(ctx context.Context) ([]string, error) {
 	return keys, nil
 }
 
-// extractKeyHash derives the key hash from an object key by stripping the
-// prefix and the ".json" suffix.
-func extractKeyHash(objectKey, prefix string) string {
+// extractPublicID derives the public key identifier from an object key by
+// stripping the prefix and the ".json" suffix, then validating the result.
+func extractPublicID(objectKey, prefix string) string {
 	name := strings.TrimPrefix(objectKey, prefix)
 	name = strings.TrimSuffix(name, ".json")
-	// Guard against nested slashes or non-leaf objects.
-	if strings.ContainsRune(name, '/') || name == "" {
+	// Guard against nested slashes or non-matching key IDs (e.g. legacy hex files).
+	if strings.ContainsRune(name, '/') || !cache.IsValidID(name) {
 		return ""
 	}
 	return name
 }
 
-// Delete removes the snapshot object for the given key hash.
+// Delete removes the snapshot object for the given key ID.
 // Returns nil when the object does not exist (idempotent).
-func (s *S3Store) Delete(ctx context.Context, keyHash string) error {
+func (s *S3Store) Delete(ctx context.Context, keyID string) error {
+	if !cache.IsValidID(keyID) {
+		return fmt.Errorf("snapshot: s3: invalid key ID %q", keyID)
+	}
 	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(s.bucket),
-		Key:    aws.String(s.objectKey(keyHash)),
+		Key:    aws.String(s.objectKey(keyID)),
 	})
 	if err != nil {
 		// S3 DeleteObject returns NoSuchKey only in certain configurations; treat it as success.
@@ -172,7 +183,7 @@ func (s *S3Store) Delete(ctx context.Context, keyHash string) error {
 		if errors.As(err, &nsk) {
 			return nil
 		}
-		return fmt.Errorf("snapshot: s3: delete %s: %w", keyHash, err)
+		return fmt.Errorf("snapshot: s3: delete %s: %w", keyID, err)
 	}
 	return nil
 }

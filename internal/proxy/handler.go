@@ -48,7 +48,7 @@ var hopByHopHeaders = map[string]bool{
 // persist the new cache entry asynchronously. Defined here (rather than
 // importing internal/snapshot) to keep the dependency graph acyclic.
 type SnapshotNotifier interface {
-	OnConfigCached(keyHash, etag string, payload []byte)
+	OnConfigCached(keyID, etag string, payload []byte)
 }
 
 // coldFetchResult carries the shared outcome of a singleflight cold-miss fetch.
@@ -63,7 +63,7 @@ type coldFetchResult struct {
 
 // Handler serves flagd config requests from an in-memory cache, falling back
 // to the upstream CDN on a miss. The SDK key is never logged or stored; only
-// its SHA-256 hash is used as a stable identifier.
+// its public prefix is used as a stable identifier.
 type Handler struct {
 	cdnBaseDomain    string
 	client           *http.Client
@@ -103,12 +103,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	target, ok := h.buildTarget(sdkKey)
 	if !ok {
-		h.logger.Warn("proxy: unrecognized SDK key format", slog.String("key", cache.Key(sdkKey)))
-		http.Error(w, "unrecognized SDK key format: must be dt_server_{region}_{token}", http.StatusBadRequest)
+		h.logger.Warn("proxy: unrecognized SDK key format", slog.String("key", cache.PublicID(sdkKey)))
+		http.Error(w, "unrecognized SDK key format: must be {token}.{platform}_{geo}_{publicRandom}.{secret}_{sha1}", http.StatusBadRequest)
 		return
 	}
 
-	key := cache.Key(sdkKey)
+	key := cache.PublicID(sdkKey)
 
 	// Extract W3C trace context from the incoming request so upstream tracestate
 	// is honoured when the SDK has its own tracer configured.
@@ -118,7 +118,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		trace.WithAttributes(
 			attribute.String("http.request.method", r.Method),
 			attribute.String("http.route", "/server/{sdk_key}.json"),
-			tracing.SDKKeyHash(key),
+			tracing.SDKKeyPublicID(key),
 		))
 	defer span.End()
 
@@ -147,7 +147,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // the originating fetch when available) and delegates to serveFromCache.
 func (h *Handler) serveCacheHit(ctx context.Context, w http.ResponseWriter, r *http.Request, entry cache.Entry, sdkKey, key string) {
 	opts := []trace.SpanStartOption{
-		trace.WithAttributes(tracing.SDKKeyHash(key)),
+		trace.WithAttributes(tracing.SDKKeyPublicID(key)),
 	}
 	if sc, ok := entry.OriginatingFetch.(trace.SpanContext); ok && sc.IsValid() {
 		opts = append(opts, trace.WithLinks(trace.Link{SpanContext: sc}))
@@ -169,7 +169,7 @@ func (h *Handler) serveFromCache(w http.ResponseWriter, r *http.Request, entry c
 	if entry.FetchURL == "" {
 		if target, ok := h.buildTarget(sdkKey); ok {
 			entry.FetchURL = target
-			h.cache.Set(cache.Key(sdkKey), entry)
+			h.cache.Set(cache.PublicID(sdkKey), entry)
 		}
 	}
 
@@ -186,8 +186,8 @@ func (h *Handler) serveFromCache(w http.ResponseWriter, r *http.Request, entry c
 	if r.Method == http.MethodHead {
 		return
 	}
-	payload, result := sse.RewriteSSEURL(entry.Payload, h.proxySSEURL(r, cache.Key(sdkKey)))
-	h.recordRewriteResult(result, cache.Key(sdkKey))
+	payload, result := sse.RewriteSSEURL(entry.Payload, h.proxySSEURL(r, cache.PublicID(sdkKey)))
+	h.recordRewriteResult(result, cache.PublicID(sdkKey))
 	_, _ = w.Write(payload)
 }
 
@@ -229,7 +229,7 @@ func (h *Handler) serveMiss(ctx context.Context, w http.ResponseWriter, r *http.
 // All side effects (cache write, SSE notification, snapshot) fire exactly once per fetch.
 func (h *Handler) coldFetch(ctx context.Context, sdkKey, key, target string) coldFetchResult {
 	ctx, span := h.tracer.Start(ctx, "proxy.cold_fetch",
-		trace.WithAttributes(tracing.SDKKeyHash(key)))
+		trace.WithAttributes(tracing.SDKKeyPublicID(key)))
 	defer span.End()
 
 	// Defensive read: a prior singleflight group for this key may have just
@@ -340,7 +340,7 @@ func NewFetcher(client *http.Client, logger *slog.Logger) *Fetcher {
 // Fetch implements cache.Fetcher. It sends an If-None-Match revalidation
 // request and interprets the result. Network errors are sanitized before
 // returning to prevent SDK key leakage via *url.Error.Error() in log messages.
-// The span for this fetch is emitted by cache.Refresher.refresh which owns keyHash.
+// The span for this fetch is emitted by cache.Refresher.refresh which owns keyID.
 func (f *Fetcher) Fetch(ctx context.Context, _ string, fetchURL, etag string) (cache.FetchResult, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fetchURL, nil)
 	if err != nil {
@@ -382,29 +382,25 @@ func (f *Fetcher) Fetch(ctx context.Context, _ string, fetchURL, etag string) (c
 // buildTarget derives the geo-bound CDN URL for an SDK key.
 // Returns ("", false) if the SDK key format is not recognized.
 func (h *Handler) buildTarget(sdkKey string) (string, bool) {
-	region, ok := extractRegion(sdkKey)
+	geo, ok := extractGeo(sdkKey)
 	if !ok {
 		return "", false
 	}
-	return "https://cdn." + region + "." + h.cdnBaseDomain + "/server/" + sdkKey + ".json", true
+	return "https://cdn." + geo + "." + h.cdnBaseDomain + "/server/" + sdkKey + ".json", true
 }
 
-// extractRegion parses the region segment from an SDK key in the format
-// dt_server_{region}_{token}. Returns ("", false) for any other format.
-// The region is validated to contain only [a-z0-9-] to prevent SSRF via
-// crafted region segments in the derived CDN URL.
-func extractRegion(sdkKey string) (string, bool) {
-	parts := strings.SplitN(sdkKey, "_", 4)
-	if len(parts) != 4 || parts[0] != "dt" || parts[1] != "server" || parts[2] == "" || parts[3] == "" {
+// extractGeo parses the geo segment from an SDK key in the new format
+// {token}.{platform}_{geo}_{publicRandom}.{secret}_{sha1}.
+// Returns ("", false) for any other format. The geo is always [a-z]{2} per the
+// full-key regex, so it is safe to embed in the derived CDN URL.
+func extractGeo(sdkKey string) (string, bool) {
+	if !cache.ValidateFullKey(sdkKey) {
 		return "", false
 	}
-	region := parts[2]
-	for _, c := range region {
-		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
-			return "", false
-		}
-	}
-	return region, true
+	// second dot-segment: {platform}_{geo}_{publicRandom}
+	dotParts := strings.SplitN(sdkKey, ".", 3)
+	underParts := strings.SplitN(dotParts[1], "_", 3)
+	return underParts[1], true
 }
 
 // sanitizeErr strips request URL values from *url.Error to prevent raw SDK
@@ -465,22 +461,22 @@ func derivedScheme(r *http.Request) string {
 // config payload. The scheme and host are derived from the incoming request,
 // so no static PROXY_PUBLIC_URL configuration is required.
 //
-// keyHash is the SDK key hash (cache.Key(sdkKey)) — the raw SDK key must
+// keyID is the SDK key public identifier (cache.PublicID(sdkKey)) — the raw SDK key must
 // never appear in the rewritten URL (logs, browser history, reverse proxies).
 //
 // r.Host is client-controlled, but the URL is returned only to the same client
 // that provided the header — there is no SSRF surface here. The host is
 // validated to reject values containing whitespace or control characters that
 // could malform the resulting URL string.
-func (h *Handler) proxySSEURL(r *http.Request, keyHash string) string {
+func (h *Handler) proxySSEURL(r *http.Request, keyID string) string {
 	host := r.Host
 	if strings.ContainsAny(host, " \t\r\n") {
 		h.logger.Warn("proxy: malformed Host header discarded in SSE URL rewrite",
-			slog.String("key", keyHash),
+			slog.String("key", keyID),
 		)
 		host = "unknown"
 	}
-	return derivedScheme(r) + "://" + host + sse.HandlerPath + "?stream_id=" + keyHash
+	return derivedScheme(r) + "://" + host + sse.HandlerPath + "?stream_id=" + keyID
 }
 
 // recordResult increments RequestsTotal with the given result label.
@@ -493,7 +489,7 @@ func (h *Handler) recordResult(ctx context.Context, result string) {
 
 // recordRewriteResult increments the ConfigSSERewriteTotal counter and emits
 // a warning log when the upstream URL was not found as a byte literal.
-func (h *Handler) recordRewriteResult(result sse.RewriteResult, keyHash string) {
+func (h *Handler) recordRewriteResult(result sse.RewriteResult, keyID string) {
 	var label string
 	switch result {
 	case sse.RewriteResultRewritten:
@@ -503,12 +499,12 @@ func (h *Handler) recordRewriteResult(result sse.RewriteResult, keyHash string) 
 	case sse.RewriteResultNotFoundInBody:
 		label = "not_found_in_body"
 		h.logger.Warn("proxy: SSE URL rewrite skipped — upstream URL not found as literal byte sequence",
-			slog.String("key", keyHash),
+			slog.String("key", keyID),
 		)
 	default:
 		label = "unknown"
 		h.logger.Warn("proxy: unknown SSE rewrite result",
-			slog.String("key", keyHash),
+			slog.String("key", keyID),
 			slog.Int("result", int(result)),
 		)
 	}

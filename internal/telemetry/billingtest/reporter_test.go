@@ -15,7 +15,7 @@ var _ telemetry.BillingReporter = (*billingtest.Reporter)(nil)
 
 func TestReporter_RecordsCall(t *testing.T) {
 	r := &billingtest.Reporter{}
-	s := telemetry.Sample{KeyHash: "aabbccddeeff0011", SDKKey: "test-sdk-key-1", Count: 42}
+	s := telemetry.Sample{KeyID: "aabbccddeeff0011", SDKKey: "test-sdk-key-1", Count: 42}
 
 	if err := r.Report(context.Background(), s); err != nil {
 		t.Fatalf("Report returned unexpected error: %v", err)
@@ -32,7 +32,7 @@ func TestReporter_RecordsCall(t *testing.T) {
 
 func TestReporter_CallsReturnsDefensiveCopy(t *testing.T) {
 	r := &billingtest.Reporter{}
-	s := telemetry.Sample{KeyHash: "1122334455667788", SDKKey: "test-sdk-key-2", Count: 7}
+	s := telemetry.Sample{KeyID: "1122334455667788", SDKKey: "test-sdk-key-2", Count: 7}
 	_ = r.Report(context.Background(), s)
 
 	calls := r.Calls()
@@ -50,7 +50,7 @@ func TestReporter_InjectedErrorReturned(t *testing.T) {
 	sentinel := errors.New("billing unavailable")
 	r.SetError(sentinel)
 
-	s := telemetry.Sample{KeyHash: "ffeeddccbbaa9988", SDKKey: "test-sdk-key-3", Count: 1}
+	s := telemetry.Sample{KeyID: "ffeeddccbbaa9988", SDKKey: "test-sdk-key-3", Count: 1}
 	err := r.Report(context.Background(), s)
 	if !errors.Is(err, sentinel) {
 		t.Errorf("Report error = %v, want %v", err, sentinel)
@@ -67,7 +67,7 @@ func TestReporter_Reset_ClearsCallsPreservesError(t *testing.T) {
 	sentinel := errors.New("oops")
 	r.SetError(sentinel)
 
-	s := telemetry.Sample{KeyHash: "0102030405060708", SDKKey: "test-sdk-key-4", Count: 3}
+	s := telemetry.Sample{KeyID: "0102030405060708", SDKKey: "test-sdk-key-4", Count: 3}
 	_ = r.Report(context.Background(), s)
 	if len(r.Calls()) != 1 {
 		t.Fatalf("pre-reset: want 1 call, got %d", len(r.Calls()))
@@ -87,7 +87,7 @@ func TestReporter_Reset_ClearsCallsPreservesError(t *testing.T) {
 func TestReporter_ConcurrentReport_RaceFree(t *testing.T) {
 	r := &billingtest.Reporter{}
 	const goroutines = 50
-	s := telemetry.Sample{KeyHash: "a0b1c2d3e4f56789", SDKKey: "test-sdk-key-5", Count: 1}
+	s := telemetry.Sample{KeyID: "a0b1c2d3e4f56789", SDKKey: "test-sdk-key-5", Count: 1}
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)

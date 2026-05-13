@@ -1,10 +1,13 @@
 # In-Memory Cache & Flagd Config Passthrough
 
-The proxy caches flagd config payloads in memory, keyed by a hash of the SDK key. Every incoming SDK request is served from this cache; upstream CDN calls happen only on a miss or during background TTL refresh.
+The proxy caches flagd config payloads in memory, keyed by the SDK key's public prefix. Every incoming SDK request is served from this cache; upstream CDN calls happen only on a miss or during background TTL refresh.
 
 ## Cache Key
 
-The cache is keyed by `SHA-256(sdk_key)` truncated to 16 hex characters (`cache.Key()`). Raw SDK keys are never written to files, logs, metric labels, or object storage — the hash is the only safe persistent identifier. In-memory retention of the raw key is fine; it's needed for upstream request authentication.
+The cache is keyed by `cache.PublicID(sdk_key)` — the first two dot-segments of the SDK key: `{token}.{platform}_{geo}_{publicRandom}` (e.g. `dt01.server_us_ab3xy9kp2q`). The private segment (`{secret}_{sha1}`) is stripped and must never appear in files, logs, metric labels, or object storage. The raw SDK key is retained in memory only; it is needed for upstream request authentication.
+
+**Canonical redaction rule:** split on `.`, drop the last segment, rejoin on `.`. `cache.PublicID(sdkKey)` implements this rule.
+
 
 ## Cache Entry
 

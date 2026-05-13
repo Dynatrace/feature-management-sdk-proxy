@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,24 +15,79 @@ func noopLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-func TestKey_Deterministic(t *testing.T) {
-	k1 := Key("abc")
-	k2 := Key("abc")
-	if k1 != k2 {
-		t.Error("Key should be deterministic")
+const (
+	testFullKey  = "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
+	testPublicID = "dt01.server_us_ab3xy9kp2q"
+)
+
+func TestPublicID_TwoSegmentKey(t *testing.T) {
+	got := PublicID(testFullKey)
+	if got != testPublicID {
+		t.Errorf("PublicID = %q, want %q", got, testPublicID)
 	}
 }
 
-func TestKey_DifferentInputs(t *testing.T) {
-	if Key("abc") == Key("def") {
-		t.Error("different inputs should produce different keys")
+func TestPublicID_NoDot_ReturnsEmpty(t *testing.T) {
+	if got := PublicID("nodots"); got != "" {
+		t.Errorf("PublicID(%q) = %q, want empty", "nodots", got)
 	}
 }
 
-func TestKey_Length(t *testing.T) {
-	k := Key("anything")
-	if len(k) != 16 {
-		t.Errorf("expected 16 hex chars, got %d: %q", len(k), k)
+func TestPublicID_MatchesSplitRule(t *testing.T) {
+	// canonical rule: split on ".", drop last segment, rejoin
+	parts := strings.Split(testFullKey, ".")
+	want := strings.Join(parts[:len(parts)-1], ".")
+	got := PublicID(testFullKey)
+	if got != want {
+		t.Errorf("PublicID = %q, want %q", got, want)
+	}
+}
+
+func TestIsValidID(t *testing.T) {
+	valid := []string{
+		"dt01.server_us_ab3xy9kp2q",
+		"dt02.mobile_eu_0000000000",
+		"dt99.web_ap_xXxXxXxXxX",
+		"dt00.server_oc_aaaaaaaaaa",
+	}
+	for _, v := range valid {
+		if !IsValidID(v) {
+			t.Errorf("IsValidID(%q) = false, want true", v)
+		}
+	}
+	invalid := []string{
+		"",
+		"abc",
+		"dt01.invalid_us_ab3xy9kp2q",
+		"DT01.server_us_ab3xy9kp2q",
+		"dt01.server_US_ab3xy9kp2q",
+		"dt01.server_us_abc",
+		"dt01.server_us_ab3xy9kp2q!",
+		"dt01.server_us_ab3xy9kp2qq", // 11-char publicRandom
+		testFullKey,                  // full key, not public ID
+	}
+	for _, v := range invalid {
+		if IsValidID(v) {
+			t.Errorf("IsValidID(%q) = true, want false", v)
+		}
+	}
+}
+
+func TestValidateFullKey(t *testing.T) {
+	if !ValidateFullKey(testFullKey) {
+		t.Errorf("ValidateFullKey(%q) = false, want true", testFullKey)
+	}
+	invalid := []string{
+		"",
+		testPublicID,                          // public only, missing private segment
+		"dt01.server_us_ab3xy9kp2q.short_abc", // secret too short
+		"dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f_d4f8a9c12a", // secret 31 hex
+		"bogus",
+	}
+	for _, v := range invalid {
+		if ValidateFullKey(v) {
+			t.Errorf("ValidateFullKey(%q) = true, want false", v)
+		}
 	}
 }
 

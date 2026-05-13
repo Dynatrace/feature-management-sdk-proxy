@@ -49,7 +49,7 @@ Omit a version field. New envelope fields are added with `omitempty`; old reader
 
 - Field name: `snapshot_version` (snake_case, consistent with `schema_version` in `internal/telemetry`).
 - Initial value: `1`.
-- On read: if `snapshot_version > CurrentSnapshotVersion`, skip the object, log at WARN with `sdk_key_hash`, and increment `proxy.snapshot.load.total{result="skipped_unknown_version"}`. Startup continues; the cache entry for that key starts empty and fills on the first live request.
+- On read: if `snapshot_version > CurrentSnapshotVersion`, skip the object, log at WARN with `sdk_key_public_id`, and increment `proxy.snapshot.load.total{result="skipped_unknown_version"}`. Startup continues; the cache entry for that key starts empty and fills on the first live request.
 - On read: unknown fields within a known version are ignored (default `encoding/json` behaviour).
 - No `x-amz-meta-*` or sidecar metadata files: the version is always embedded in the object body so the local-file backend needs no special treatment.
 

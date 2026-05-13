@@ -5,20 +5,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	"github.com/dynatrace/sdk-proxy/internal/cache"
 )
 
 // LocalStore implements Store against a local directory.
-// Files are stored as <dir>/<keyHash>.json with atomic writes via a temp file
+// Files are stored as <dir>/<keyID>.json with atomic writes via a temp file
 // and rename (POSIX-atomic within the same directory).
 // Safe for concurrent use.
 type LocalStore struct {
 	dir string
 }
-
-// keyHashRe matches the only valid keyHash format: exactly 16 lowercase hex chars.
-var keyHashRe = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
 // NewLocalStore creates a LocalStore rooted at dir.
 // The directory is created (with permissions 0o700) if it does not exist.
@@ -29,53 +27,53 @@ func NewLocalStore(dir string) (*LocalStore, error) {
 	return &LocalStore{dir: dir}, nil
 }
 
-// Put writes body to <dir>/<keyHash>.json atomically via a unique temp file + rename.
-func (s *LocalStore) Put(_ context.Context, keyHash string, body []byte) error {
-	if !keyHashRe.MatchString(keyHash) {
-		return fmt.Errorf("snapshot: local: invalid key hash %q", keyHash)
+// Put writes body to <dir>/<keyID>.json atomically via a unique temp file + rename.
+func (s *LocalStore) Put(_ context.Context, keyID string, body []byte) error {
+	if !cache.IsValidID(keyID) {
+		return fmt.Errorf("snapshot: local: invalid key ID %q", keyID)
 	}
-	dst := filepath.Join(s.dir, keyHash+".json")
-	tmp, err := os.CreateTemp(s.dir, keyHash+".json.*")
+	dst := filepath.Join(s.dir, keyID+".json")
+	tmp, err := os.CreateTemp(s.dir, keyID+".json.*")
 	if err != nil {
-		return fmt.Errorf("snapshot: local: create temp %s: %w", keyHash, err)
+		return fmt.Errorf("snapshot: local: create temp %s: %w", keyID, err)
 	}
 	tmpName := tmp.Name()
 	if _, err := tmp.Write(body); err != nil {
 		tmp.Close()
 		_ = os.Remove(tmpName)
-		return fmt.Errorf("snapshot: local: write %s: %w", keyHash, err)
+		return fmt.Errorf("snapshot: local: write %s: %w", keyID, err)
 	}
 	if err := tmp.Chmod(0o600); err != nil {
 		tmp.Close()
 		_ = os.Remove(tmpName)
-		return fmt.Errorf("snapshot: local: chmod %s: %w", keyHash, err)
+		return fmt.Errorf("snapshot: local: chmod %s: %w", keyID, err)
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpName)
-		return fmt.Errorf("snapshot: local: close %s: %w", keyHash, err)
+		return fmt.Errorf("snapshot: local: close %s: %w", keyID, err)
 	}
 	if err := os.Rename(tmpName, dst); err != nil {
 		_ = os.Remove(tmpName)
-		return fmt.Errorf("snapshot: local: rename %s: %w", keyHash, err)
+		return fmt.Errorf("snapshot: local: rename %s: %w", keyID, err)
 	}
 	return nil
 }
 
-// Get reads the snapshot body for the given key hash.
-func (s *LocalStore) Get(_ context.Context, keyHash string) ([]byte, error) {
-	if !keyHashRe.MatchString(keyHash) {
-		return nil, fmt.Errorf("snapshot: local: invalid key hash %q", keyHash)
+// Get reads the snapshot body for the given key ID.
+func (s *LocalStore) Get(_ context.Context, keyID string) ([]byte, error) {
+	if !cache.IsValidID(keyID) {
+		return nil, fmt.Errorf("snapshot: local: invalid key ID %q", keyID)
 	}
-	data, err := os.ReadFile(filepath.Join(s.dir, keyHash+".json"))
+	data, err := os.ReadFile(filepath.Join(s.dir, keyID+".json"))
 	if err != nil {
-		return nil, fmt.Errorf("snapshot: local: get %s: %w", keyHash, err)
+		return nil, fmt.Errorf("snapshot: local: get %s: %w", keyID, err)
 	}
 	return data, nil
 }
 
-// List returns the key hashes of all stored snapshots.
-// Only regular files whose name is exactly <16-hex-chars>.json are included;
-// temp files, subdirectories, and non-hash filenames are ignored.
+// List returns the key IDs of all stored snapshots.
+// Only regular files whose name is exactly <keyID>.json are included;
+// temp files, subdirectories, and non-matching filenames are ignored.
 func (s *LocalStore) List(_ context.Context) ([]string, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -91,7 +89,7 @@ func (s *LocalStore) List(_ context.Context) ([]string, error) {
 			continue
 		}
 		stem := strings.TrimSuffix(name, ".json")
-		if !keyHashRe.MatchString(stem) {
+		if !cache.IsValidID(stem) {
 			continue
 		}
 		keys = append(keys, stem)
@@ -99,15 +97,15 @@ func (s *LocalStore) List(_ context.Context) ([]string, error) {
 	return keys, nil
 }
 
-// Delete removes the snapshot file for the given key hash.
+// Delete removes the snapshot file for the given key ID.
 // Returns nil when the file does not exist (idempotent).
-func (s *LocalStore) Delete(_ context.Context, keyHash string) error {
-	if !keyHashRe.MatchString(keyHash) {
-		return fmt.Errorf("snapshot: local: invalid key hash %q", keyHash)
+func (s *LocalStore) Delete(_ context.Context, keyID string) error {
+	if !cache.IsValidID(keyID) {
+		return fmt.Errorf("snapshot: local: invalid key ID %q", keyID)
 	}
-	err := os.Remove(filepath.Join(s.dir, keyHash+".json"))
+	err := os.Remove(filepath.Join(s.dir, keyID+".json"))
 	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("snapshot: local: delete %s: %w", keyHash, err)
+		return fmt.Errorf("snapshot: local: delete %s: %w", keyID, err)
 	}
 	return nil
 }

@@ -25,7 +25,7 @@ func TestCache_Miss_FetchesUpstream(t *testing.T) {
 		t.Errorf("CDN calls = %d, want 1", got)
 	}
 
-	keyHash := cache.Key(TestSDKKey)
+	keyHash := cache.PublicID(TestSDKKey)
 	if _, ok := h.Cache.Get(keyHash); !ok {
 		t.Error("cache: entry not found after cold fetch")
 	}
@@ -106,7 +106,7 @@ func TestCache_DifferentKeys_IndependentEntries(t *testing.T) {
 	drainBody(t, resp1)
 
 	// Key 2 must still be absent.
-	keyHash2 := cache.Key(TestSDKKey2)
+	keyHash2 := cache.PublicID(TestSDKKey2)
 	if _, ok := h.Cache.Get(keyHash2); ok {
 		t.Error("key2 found in cache before any request for it")
 	}
@@ -123,7 +123,7 @@ func TestCache_TTLRefresh_ResetsOnRevalidation(t *testing.T) {
 	assertStatus(t, resp, http.StatusOK)
 	drainBody(t, resp)
 
-	keyHash := cache.Key(TestSDKKey)
+	keyHash := cache.PublicID(TestSDKKey)
 	entry, ok := h.Cache.Get(keyHash)
 	if !ok {
 		t.Fatal("cache entry missing after cold fetch")
@@ -131,7 +131,7 @@ func TestCache_TTLRefresh_ResetsOnRevalidation(t *testing.T) {
 	originalFetchedAt := entry.FetchedAt
 
 	// Manually age the entry to make it stale (older than the disconnected interval).
-	h.Cache.ResetTTL(keyHash, time.Now().Add(-(cache.RefreshIntervalDisconnected+time.Second)))
+	h.Cache.ResetTTL(keyHash, time.Now().Add(-(cache.RefreshIntervalDisconnected + time.Second)))
 
 	// CDN returns 304 on revalidation (default ETag matches).
 	// The refresher only ticks at TTL/2 so we trigger a second fetch manually

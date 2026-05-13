@@ -63,7 +63,7 @@ func (b *boundedRetryBuffer) Enqueue(s Sample) {
 
 	if dropped != nil {
 		b.log.Warn("billing: retry buffer full, dropping oldest sample",
-			slog.String("key_hash", dropped.KeyHash),
+			slog.String("sdk_key_public_id", dropped.KeyID),
 			slog.Int64("count", dropped.Count),
 			slog.Time("window_start", dropped.WindowStart),
 			slog.Time("window_end", dropped.WindowEnd),

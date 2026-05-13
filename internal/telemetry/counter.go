@@ -27,7 +27,7 @@ type Counter struct {
 // WindowStart and WindowEnd are zero when returned by Counter.Drain; the flush
 // loop populates them at drain time before dispatching to BillingReporter.
 type Sample struct {
-	KeyHash     string // safe for logs and metric labels
+	KeyID       string // SDK key public identifier; safe for logs and metric labels
 	SDKKey      string // raw token for billing flush auth — never log this field
 	Count       int64
 	WindowStart time.Time // flush loop sets at drain time; zero in counter output
@@ -37,8 +37,8 @@ type Sample struct {
 // String returns a safe log representation with the raw SDK key redacted.
 // Use this when logging or formatting a Sample to avoid leaking the token.
 func (s Sample) String() string {
-	return fmt.Sprintf("{KeyHash:%s Count:%d WindowStart:%s WindowEnd:%s}",
-		s.KeyHash, s.Count,
+	return fmt.Sprintf("{KeyID:%s Count:%d WindowStart:%s WindowEnd:%s}",
+		s.KeyID, s.Count,
 		s.WindowStart.UTC().Format(time.RFC3339Nano),
 		s.WindowEnd.UTC().Format(time.RFC3339Nano),
 	)
@@ -53,10 +53,10 @@ func NewCounter() *Counter {
 // If an entry already exists with an empty rawKey (created by IncrementByHash),
 // Increment repairs it so the entry becomes eligible for billing flush.
 func (c *Counter) Increment(sdkKey string) {
-	keyHash := cache.Key(sdkKey)
+	keyID := cache.PublicID(sdkKey)
 
 	c.mu.RLock()
-	e, ok := c.entries[keyHash]
+	e, ok := c.entries[keyID]
 	rawKey := ""
 	if ok {
 		rawKey = e.rawKey
@@ -80,9 +80,9 @@ func (c *Counter) Increment(sdkKey string) {
 	}
 
 	c.mu.Lock()
-	if e, ok = c.entries[keyHash]; !ok {
+	if e, ok = c.entries[keyID]; !ok {
 		e = &entry{rawKey: sdkKey}
-		c.entries[keyHash] = e
+		c.entries[keyID] = e
 	} else if e.rawKey == "" {
 		e.rawKey = sdkKey
 	}
@@ -94,9 +94,9 @@ func (c *Counter) Increment(sdkKey string) {
 // Used by the SSE handler, which receives stream_id (a key hash) rather than
 // the raw SDK key. Entries created this way have an empty rawKey and are
 // skipped at billing flush until a paired Increment(sdkKey) repairs the entry.
-func (c *Counter) IncrementByHash(keyHash string) {
+func (c *Counter) IncrementByHash(keyID string) {
 	c.mu.RLock()
-	e, ok := c.entries[keyHash]
+	e, ok := c.entries[keyID]
 	c.mu.RUnlock()
 
 	if ok {
@@ -105,9 +105,9 @@ func (c *Counter) IncrementByHash(keyHash string) {
 	}
 
 	c.mu.Lock()
-	if e, ok = c.entries[keyHash]; !ok {
+	if e, ok = c.entries[keyID]; !ok {
 		e = &entry{} // rawKey intentionally empty; repaired by Increment when HTTP path sees the key
-		c.entries[keyHash] = e
+		c.entries[keyID] = e
 	}
 	c.mu.Unlock()
 	e.count.Add(1)
@@ -124,10 +124,10 @@ func (c *Counter) Drain() []Sample {
 	defer c.mu.RUnlock()
 
 	var out []Sample
-	for keyHash, e := range c.entries {
+	for keyID, e := range c.entries {
 		n := e.count.Swap(0)
 		if n > 0 {
-			out = append(out, Sample{KeyHash: keyHash, SDKKey: e.rawKey, Count: n})
+			out = append(out, Sample{KeyID: keyID, SDKKey: e.rawKey, Count: n})
 		}
 	}
 	return out

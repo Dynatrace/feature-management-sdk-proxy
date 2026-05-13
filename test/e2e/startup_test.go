@@ -41,7 +41,7 @@ func TestStartup_SnapshotFresh(t *testing.T) {
 		SnapshotMaxAge: 24 * time.Hour,
 	})
 
-	keyHash := cache.Key(TestSDKKey)
+	keyHash := cache.PublicID(TestSDKKey)
 	if _, ok := h.Cache.Get(keyHash); !ok {
 		t.Error("cache: entry not found after loading fresh snapshot")
 	}
@@ -70,7 +70,7 @@ func TestStartup_SnapshotStale(t *testing.T) {
 		SnapshotMaxAge: 24 * time.Hour,
 	})
 
-	keyHash := cache.Key(TestSDKKey)
+	keyHash := cache.PublicID(TestSDKKey)
 	if _, ok := h.Cache.Get(keyHash); !ok {
 		t.Error("cache: entry not found after loading stale snapshot")
 	}
@@ -124,7 +124,7 @@ func TestStartup_SnapshotWrittenDuringOperation(t *testing.T) {
 	assertStatus(t, resp, http.StatusOK)
 	drainBody(t, resp)
 
-	keyHash2 := cache.Key(TestSDKKey2)
+	keyHash2 := cache.PublicID(TestSDKKey2)
 	store, err := snapshot.NewLocalStore(dir)
 	if err != nil {
 		t.Fatalf("NewLocalStore: %v", err)
@@ -156,7 +156,7 @@ const h2sseURL = "https://sse.example.invalid"
 // capturedAt controls the FetchedAt timestamp used for freshness classification.
 func writeTestSnapshot(t *testing.T, dir, sdkKey string, payload []byte, capturedAt time.Time) {
 	t.Helper()
-	keyHash := cache.Key(sdkKey)
+	keyHash := cache.PublicID(sdkKey)
 	envelope, err := snapshot.EncodeEnvelope(keyHash, `"test-etag"`, capturedAt, payload)
 	if err != nil {
 		t.Fatalf("EncodeEnvelope: %v", err)

@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+
+	"github.com/dynatrace/sdk-proxy/internal/cache"
 )
 
 type mockInvalidator struct {
@@ -43,15 +45,15 @@ func TestLifecycleHandler_KnownEventType_CallsInvalidators(t *testing.T) {
 
 		evt := Event{
 			EventType: evtType,
-			Data:      []byte(`{"sdkKeyHashes":["abc0000000000001"]}`),
+			Data:      []byte(`{"sdkKeyHashes":["dt01.server_us_ab3xy9kp2q"]}`),
 		}
 		got := h.HandleEvent(evt)
 		if !got {
 			t.Errorf("%s: HandleEvent returned false, want true", evtType)
 		}
 		calls := inv.called()
-		if len(calls) != 1 || calls[0] != "abc0000000000001" {
-			t.Errorf("%s: invalidator calls = %v, want [abc0000000000001]", evtType, calls)
+		if len(calls) != 1 || calls[0] != "dt01.server_us_ab3xy9kp2q" {
+			t.Errorf("%s: invalidator calls = %v, want [dt01.server_us_ab3xy9kp2q]", evtType, calls)
 		}
 	}
 }
@@ -110,7 +112,7 @@ func TestLifecycleHandler_EmptyData_ReturnsTrue_NoInvalidation(t *testing.T) {
 	}
 }
 
-func TestLifecycleHandler_SDKKeys_AreHashed(t *testing.T) {
+func TestLifecycleHandler_SDKKeys_PublicIDExtracted(t *testing.T) {
 	inv := &mockInvalidator{}
 	h := &LifecycleHandler{
 		invalidators: []Invalidator{inv},
@@ -119,9 +121,10 @@ func TestLifecycleHandler_SDKKeys_AreHashed(t *testing.T) {
 		keysCap:      defaultLifecycleKeysCap,
 	}
 
+	const fullKey = "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
 	evt := Event{
 		EventType: EventTypeTokenRotated,
-		Data:      []byte(`{"sdkKeys":["dt_server_us_abc123"]}`),
+		Data:      []byte(`{"sdkKeys":["` + fullKey + `"]}`),
 	}
 	if !h.HandleEvent(evt) {
 		t.Error("HandleEvent returned false, want true")
@@ -130,9 +133,10 @@ func TestLifecycleHandler_SDKKeys_AreHashed(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("expected 1 invalidation, got %v", calls)
 	}
-	// The hash must be 16 lowercase hex chars and deterministic.
-	if len(calls[0]) != 16 {
-		t.Errorf("key hash length = %d, want 16", len(calls[0]))
+	// The public ID must be valid and the private segment must be stripped.
+	want := cache.PublicID(fullKey)
+	if calls[0] != want || !cache.IsValidID(calls[0]) {
+		t.Errorf("public ID = %q, want %q (valid: %v)", calls[0], want, cache.IsValidID(calls[0]))
 	}
 }
 
@@ -147,7 +151,7 @@ func TestLifecycleHandler_MultipleKeys_AllInvalidated(t *testing.T) {
 
 	evt := Event{
 		EventType: EventTypeProjectDeleted,
-		Data:      []byte(`{"sdkKeyHashes":["abc0000000000001","abc0000000000002","abc0000000000003"]}`),
+		Data:      []byte(`{"sdkKeyHashes":["dt01.server_us_ab3xy9kp2q","dt01.server_eu_0000000000","dt01.server_ap_xxxxxxxxxx"]}`),
 	}
 	if !h.HandleEvent(evt) {
 		t.Error("HandleEvent returned false, want true")
@@ -189,7 +193,7 @@ func TestLifecycleHandler_NilInvalidatorsFiltered(t *testing.T) {
 
 	evt := Event{
 		EventType: EventTypeTokenRotated,
-		Data:      []byte(`{"sdkKeyHashes":["abc0000000000001"]}`),
+		Data:      []byte(`{"sdkKeyHashes":["dt01.server_us_ab3xy9kp2q"]}`),
 	}
 	h.HandleEvent(evt)
 	if len(inv.called()) != 1 {
@@ -198,7 +202,7 @@ func TestLifecycleHandler_NilInvalidatorsFiltered(t *testing.T) {
 }
 
 // makeLifecycleData builds lifecycle event JSON with numHashes sdkKeyHashes
-// entries (valid 16-char hex) and numKeys sdkKeys entries.
+// entries (valid public IDs) and numKeys sdkKeys entries (valid full keys).
 func makeLifecycleData(t *testing.T, numHashes, numKeys int) []byte {
 	t.Helper()
 	type payload struct {
@@ -207,10 +211,10 @@ func makeLifecycleData(t *testing.T, numHashes, numKeys int) []byte {
 	}
 	p := payload{}
 	for i := range numHashes {
-		p.SDKKeyHashes = append(p.SDKKeyHashes, fmt.Sprintf("%016x", i))
+		p.SDKKeyHashes = append(p.SDKKeyHashes, fmt.Sprintf("dt01.server_us_%010d", i))
 	}
 	for i := range numKeys {
-		p.SDKKeys = append(p.SDKKeys, fmt.Sprintf("sdk-key-%d", i))
+		p.SDKKeys = append(p.SDKKeys, fmt.Sprintf("dt01.server_eu_%010d.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", i))
 	}
 	data, err := json.Marshal(p)
 	if err != nil {
@@ -287,17 +291,28 @@ func TestLifecycleHandler_KeyArrayCap(t *testing.T) {
 	}
 }
 
-func TestIsValidKeyHash(t *testing.T) {
-	valid := []string{"abc0000000000001", "0000000000000000", "ffffffffffffffff"}
+func TestIsValidID(t *testing.T) {
+	valid := []string{
+		"dt01.server_us_ab3xy9kp2q",
+		"dt02.mobile_eu_0000000000",
+		"dt99.web_ap_xXxXxXxXxX",
+	}
 	for _, h := range valid {
-		if !isValidKeyHash(h) {
-			t.Errorf("isValidKeyHash(%q) = false, want true", h)
+		if !cache.IsValidID(h) {
+			t.Errorf("cache.IsValidID(%q) = false, want true", h)
 		}
 	}
-	invalid := []string{"", "abc", "ABCDEFGHIJKLMNOP", "gggggggggggggggg", "abc000000000000g", "abc00000000000001"}
+	invalid := []string{
+		"",
+		"abc",
+		"abc0000000000001", // old-format hash
+		"ABCDEFGHIJKLMNOP",
+		"dt01.invalid_us_ab3xy9kp2q",
+		"dt01.server_US_ab3xy9kp2q",
+	}
 	for _, h := range invalid {
-		if isValidKeyHash(h) {
-			t.Errorf("isValidKeyHash(%q) = true, want false", h)
+		if cache.IsValidID(h) {
+			t.Errorf("cache.IsValidID(%q) = true, want false", h)
 		}
 	}
 }

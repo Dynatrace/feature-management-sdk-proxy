@@ -260,12 +260,12 @@ func run() error {
 	refresher.SetInstruments(inst)
 	// sseManager and snapshotWriter are fully initialized before this point;
 	// the closure captures are stable for the lifetime of the refresher.
-	refresher.SetEvictor(func(keyHash string) {
+	refresher.SetEvictor(func(keyID string) {
 		if sseManager != nil {
-			sseManager.Close(keyHash)
+			sseManager.Close(keyID)
 		}
 		if snapshotWriter != nil {
-			snapshotWriter.OnInvalidated(keyHash)
+			snapshotWriter.OnInvalidated(keyID)
 		}
 	})
 	go refresher.Run(ctx)
@@ -279,12 +279,12 @@ func run() error {
 		if sseManager != nil {
 			liveness = sseManager
 		}
-		evict := func(keyHash string) {
+		evict := func(keyID string) {
 			if sseManager != nil {
-				sseManager.Close(keyHash)
+				sseManager.Close(keyID)
 			}
 			if snapshotWriter != nil {
-				snapshotWriter.OnInvalidated(keyHash)
+				snapshotWriter.OnInvalidated(keyID)
 			}
 		}
 		sweeper := cache.NewSweeper(flagCache, evict, liveness, cfg.CacheInactivityEvictAfter, inst, logger)

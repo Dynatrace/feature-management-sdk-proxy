@@ -17,7 +17,7 @@ func TestCounter_ZeroState_DrainReturnsNil(t *testing.T) {
 
 func TestCounter_SingleIncrement(t *testing.T) {
 	c := NewCounter()
-	const key = "dt_server_us_abc123"
+	const key = "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
 	c.Increment(key)
 
 	samples := c.Drain()
@@ -31,14 +31,14 @@ func TestCounter_SingleIncrement(t *testing.T) {
 	if s.SDKKey != key {
 		t.Errorf("SDKKey = %q, want %q", s.SDKKey, key)
 	}
-	if s.KeyHash != cache.Key(key) {
-		t.Errorf("KeyHash = %q, want %q", s.KeyHash, cache.Key(key))
+	if s.KeyID != cache.PublicID(key) {
+		t.Errorf("KeyHash = %q, want %q", s.KeyID, cache.PublicID(key))
 	}
 }
 
 func TestCounter_MultipleIncrements_Accumulate(t *testing.T) {
 	c := NewCounter()
-	const key = "dt_server_eu_tok1"
+	const key = "dt01.server_eu_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
 	for range 5 {
 		c.Increment(key)
 	}
@@ -55,9 +55,9 @@ func TestCounter_MultipleIncrements_Accumulate(t *testing.T) {
 func TestCounter_MultipleKeys(t *testing.T) {
 	c := NewCounter()
 	keys := []string{
-		"dt_server_us_tok1",
-		"dt_server_eu_tok2",
-		"dt_server_ap_tok3",
+		"dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a",
+		"dt01.server_eu_0000000000.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a",
+		"dt01.server_ap_0000000000.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a",
 	}
 	for i, k := range keys {
 		for range i + 1 {
@@ -84,7 +84,7 @@ func TestCounter_MultipleKeys(t *testing.T) {
 
 func TestCounter_DrainResetsCount(t *testing.T) {
 	c := NewCounter()
-	const key = "dt_server_us_abc123"
+	const key = "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
 	c.Increment(key)
 	c.Increment(key)
 
@@ -101,7 +101,7 @@ func TestCounter_DrainResetsCount(t *testing.T) {
 
 func TestCounter_DrainEmpty_AfterZeroIncrements(t *testing.T) {
 	c := NewCounter()
-	const key = "dt_server_us_abc123"
+	const key = "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
 	c.Increment(key)
 	c.Drain()
 
@@ -114,22 +114,22 @@ func TestCounter_DrainEmpty_AfterZeroIncrements(t *testing.T) {
 
 func TestCounter_KeyHash_MatchesCacheKey(t *testing.T) {
 	c := NewCounter()
-	const key = "dt_server_us_mytoken"
+	const key = "dt01.server_us_mytoken000.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
 	c.Increment(key)
 
 	samples := c.Drain()
 	if len(samples) != 1 {
 		t.Fatalf("want 1 sample, got %d", len(samples))
 	}
-	want := cache.Key(key)
-	if samples[0].KeyHash != want {
-		t.Errorf("KeyHash = %q, want cache.Key(%q) = %q", samples[0].KeyHash, key, want)
+	want := cache.PublicID(key)
+	if samples[0].KeyID != want {
+		t.Errorf("KeyHash = %q, want cache.Key(%q) = %q", samples[0].KeyID, key, want)
 	}
 }
 
 func TestCounter_RawKeyRoundTrip(t *testing.T) {
 	c := NewCounter()
-	const key = "dt_server_us_raw_sdk_key"
+	const key = "dt01.server_us_rawsdk0000.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
 	c.Increment(key)
 
 	samples := c.Drain()
@@ -143,7 +143,7 @@ func TestCounter_RawKeyRoundTrip(t *testing.T) {
 
 func TestCounter_ConcurrentIncrements_Race(t *testing.T) {
 	c := NewCounter()
-	const key = "dt_server_us_concurrent"
+	const key = "dt01.server_us_concurrent.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
 	const goroutines = 50
 	const incPerGoroutine = 100
 
@@ -171,7 +171,7 @@ func TestCounter_ConcurrentIncrements_Race(t *testing.T) {
 
 func TestSample_WindowFieldsZeroByDefault(t *testing.T) {
 	c := NewCounter()
-	c.Increment("dt_server_us_abc123")
+	c.Increment("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	samples := c.Drain()
 	if len(samples) != 1 {
@@ -198,8 +198,8 @@ func TestCounter_IncrementByHash_NewEntry_EmptyRawKey(t *testing.T) {
 	if samples[0].Count != 1 {
 		t.Errorf("Count = %d, want 1", samples[0].Count)
 	}
-	if samples[0].KeyHash != hash {
-		t.Errorf("KeyHash = %q, want %q", samples[0].KeyHash, hash)
+	if samples[0].KeyID != hash {
+		t.Errorf("KeyHash = %q, want %q", samples[0].KeyID, hash)
 	}
 	if samples[0].SDKKey != "" {
 		t.Errorf("SDKKey = %q, want empty (hash-only entry)", samples[0].SDKKey)
@@ -224,8 +224,8 @@ func TestCounter_IncrementByHash_AccumulatesCount(t *testing.T) {
 
 func TestCounter_Increment_RepairsEmptyRawKey(t *testing.T) {
 	c := NewCounter()
-	const key = "dt_server_us_abc123"
-	keyHash := cache.Key(key)
+	const key = "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
+	keyHash := cache.PublicID(key)
 
 	// Establish entry via IncrementByHash (no raw key).
 	c.IncrementByHash(keyHash)
@@ -252,8 +252,8 @@ func TestCounter_Increment_RepairsEmptyRawKey(t *testing.T) {
 
 func TestCounter_IncrementByHash_AfterIncrement_KeepsRawKey(t *testing.T) {
 	c := NewCounter()
-	const key = "dt_server_eu_tok1"
-	keyHash := cache.Key(key)
+	const key = "dt01.server_eu_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
+	keyHash := cache.PublicID(key)
 
 	// HTTP path first — rawKey set.
 	c.Increment(key)

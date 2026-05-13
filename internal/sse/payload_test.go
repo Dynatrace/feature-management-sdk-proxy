@@ -88,7 +88,7 @@ func TestExtractSSEURL(t *testing.T) {
 
 func TestRewriteSSEURL(t *testing.T) {
 	const upstream = "https://upstream.sse.example.com/stream?ch=abc"
-	proxy := "http://proxy.example.com/sse?stream_id=" + cache.Key("dt_server_us_abc123")
+	proxy := "http://proxy.example.com/sse?stream_id=" + cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	cases := []struct {
 		name       string
