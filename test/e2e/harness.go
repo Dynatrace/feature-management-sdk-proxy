@@ -47,6 +47,10 @@ type Options struct {
 	// BillingFlushInterval overrides the billing flush ticker interval.
 	// Defaults to 1 hour (effectively disabled during tests) when zero.
 	BillingFlushInterval time.Duration
+	// EnableDemandRevalidation wires the demand refreshFetcher into the proxy
+	// handler so snapshot-loaded entries are conditionally revalidated on the
+	// first stale hit. Disabled by default to preserve existing test behaviour.
+	EnableDemandRevalidation bool
 }
 
 // Harness wires all proxy components in-process for integration testing.
@@ -149,12 +153,17 @@ func New(t *testing.T, opts Options) (*Harness, error) {
 	if snapshotWriter != nil {
 		snapNotifier = snapshotWriter
 	}
+	var demandFetcher cache.Fetcher
+	if opts.EnableDemandRevalidation {
+		demandFetcher = proxy.NewFetcher(cdnMock.redirectingClient(), logger)
+	}
 	proxyHandler, err := proxy.New(
 		"fm.test",
 		cdnMock.redirectingClient(),
 		flagCache,
 		sseManager,
 		snapNotifier,
+		demandFetcher,
 		inst,
 		counter,
 		logger,
@@ -164,6 +173,12 @@ func New(t *testing.T, opts Options) (*Harness, error) {
 		cancel()
 		return nil, fmt.Errorf("proxy.New: %w", err)
 	}
+	proxyHandler.SetEvictor(func(keyID string) {
+		sseManager.Close(keyID)
+		if snapshotWriter != nil {
+			snapshotWriter.OnInvalidated(keyID)
+		}
+	})
 
 	sseHandler := sse.NewHandler(flagCache, sseManager, inst, counter, logger, 15*time.Second, configHandlerPath)
 

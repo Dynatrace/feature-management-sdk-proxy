@@ -360,12 +360,12 @@ func (r *Refresher) refresh(ctx context.Context) {
 				attribute.Int("upstream.status_code", result.StatusCode),
 			)
 			span.End()
-			if shouldEvict(result.StatusCode) {
+			if ShouldEvict(result.StatusCode) {
 				r.cache.Delete(keyID)
 				r.logger.Warn("cache: background refresh got evictable status, evicting entry",
 					slog.String("key", keyID),
 					slog.Int("upstream_status", result.StatusCode),
-					slog.String("reason", evictionReason(result.StatusCode)),
+					slog.String("reason", EvictionReason(result.StatusCode)),
 				)
 				if r.inst != nil {
 					r.inst.CacheRefreshEvictionsTotal.Add(ctx, 1,
@@ -397,9 +397,9 @@ func (r *Refresher) refresh(ctx context.Context) {
 	}
 }
 
-// evictionReason returns a human-readable label for a status code that warrants
+// EvictionReason returns a human-readable label for a status code that warrants
 // eviction, for use in structured log fields.
-func evictionReason(statusCode int) string {
+func EvictionReason(statusCode int) string {
 	switch statusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return "revoked_credentials"
@@ -409,11 +409,11 @@ func evictionReason(statusCode int) string {
 	return "unknown"
 }
 
-// shouldEvict reports whether an HTTP status code from the upstream CDN warrants
+// ShouldEvict reports whether an HTTP status code from the upstream CDN warrants
 // immediate cache eviction. 401/403 indicate revoked credentials; 404/410 indicate
 // the resource no longer exists. 429 (rate-limit) and 5xx are explicitly excluded
 // to avoid amplifying outages with thundering-herd cold fetches.
-func shouldEvict(statusCode int) bool {
+func ShouldEvict(statusCode int) bool {
 	return statusCode == http.StatusUnauthorized ||
 		statusCode == http.StatusForbidden ||
 		statusCode == http.StatusNotFound ||

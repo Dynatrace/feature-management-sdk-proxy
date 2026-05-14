@@ -199,18 +199,27 @@ func run() error {
 		Timeout:   30 * time.Second,
 		Transport: tracing.NewTransport(nil, tracer),
 	}
-	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, snapshotWriter, inst, counter, logger, tracer)
-	if err != nil {
-		return fmt.Errorf("proxy: %w", err)
-	}
 
-	// Background refresher uses a separate 5s client — intentionally shorter than
-	// the minimum poll interval (10s) to prevent overlapping requests.
+	// Background and demand refresher uses a separate 5s client — intentionally shorter
+	// than the minimum poll interval (10s) to prevent overlapping requests.
 	refreshClient := &http.Client{
 		Timeout:   5 * time.Second,
 		Transport: tracing.NewTransport(nil, tracer),
 	}
 	refreshFetcher := proxy.NewFetcher(refreshClient, logger)
+
+	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, snapshotWriter, refreshFetcher, inst, counter, logger, tracer)
+	if err != nil {
+		return fmt.Errorf("proxy: %w", err)
+	}
+	proxyHandler.SetEvictor(func(keyID string) {
+		if sseManager != nil {
+			sseManager.Close(keyID)
+		}
+		if snapshotWriter != nil {
+			snapshotWriter.OnInvalidated(keyID)
+		}
+	})
 
 	// Use a true nil interface (not a typed-nil *sse.Manager) so the handler can
 	// safely check manager == nil when SSE is disabled.

@@ -46,7 +46,13 @@ Events are dispatched to subscriber channels (buffered at 16). If a client's buf
 
 ## Upstream SSE Client
 
-The `Manager` owns all upstream connections. It starts a connection for a given SDK key when `OnConfigCached` is called after a successful cold fetch (200). It never opens an upstream connection from the snapshot load path — SSE is established only after the proxy has confirmed upstream reachability via a live HTTP response.
+The `Manager` owns all upstream connections. A connection is started (or confirmed) for a given SDK key in three situations:
+
+1. **Cold fetch** — the proxy fetches config from CDN for the first time for this key.
+2. **Demand revalidation** — a snapshot-loaded entry is confirmed or refreshed on the first SDK request after startup (see [cache.md](cache.md#demand-revalidation-of-snapshot-loaded-entries)). SSE opens at this point for snapshot-loaded keys.
+3. **Background refresh** — the background TTL refresher receives a new payload and detects an SSE URL change.
+
+The proxy never opens an upstream SSE connection during snapshot loading — SSE starts only after the proxy has confirmed upstream reachability via a live HTTP response. If multiple requests trigger the same key simultaneously, the operation is idempotent.
 
 ### Connection Lifecycle
 

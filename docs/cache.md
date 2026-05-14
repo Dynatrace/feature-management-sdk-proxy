@@ -37,6 +37,32 @@ The background CDN request has a **5-second timeout** — intentionally less tha
 
 A background refresh error is logged but never fails an SDK request. The stale entry stays in cache and continues to be served.
 
+## Demand Revalidation of Snapshot-Loaded Entries
+
+When the proxy starts from a snapshot, loaded entries may be hours old. The background `Refresher` eventually revalidates them, but that can take up to 10 minutes depending on SSE connection state. For the first SDK request after startup, serving potentially stale config without checking the CDN is the wrong trade-off.
+
+**Demand revalidation** solves this: on the first cache hit for a snapshot-loaded entry that is older than the current refresh interval, the proxy performs a synchronous conditional GET to the CDN before writing the response. The SDK receives confirmed-valid (or updated) config, at the cost of one CDN round-trip. Subsequent requests within the refresh interval are served from cache without a CDN call.
+
+### Behavior by CDN response
+
+| CDN response | Proxy action |
+|---|---|
+| **304 Not Modified** | Config confirmed valid; served from cache |
+| **200 OK** | Fresh config received; cache updated; snapshot written asynchronously |
+| **401 / 403 / 404 / 410** | Entry evicted; SSE connection closed; 503 returned to client (next request triggers a fresh CDN fetch) |
+| **429 / 5xx** | Stale entry preserved; served from cache |
+| **Network error** | Stale entry preserved; served from cache |
+
+### Concurrency
+
+Concurrent requests for the same stale snapshot-loaded key share a single CDN call. Only one round-trip is made regardless of how many requests arrive simultaneously.
+
+### Scope
+
+Demand revalidation fires once per snapshot-loaded entry after startup. Once confirmed or refreshed, the background `Refresher` handles normal TTL maintenance going forward.
+
+Metric: `proxy.snapshot.demand_revalidation.total{result}` — see [telemetry.md](telemetry.md).
+
 ## 4xx Eviction Policy
 
 When the background refresher receives a 4xx response from the upstream CDN, the proxy takes one of two actions depending on the status code:

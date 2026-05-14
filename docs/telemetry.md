@@ -35,6 +35,7 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable export. Metrics push every **30 seco
 | `proxy.cache.inactivity_evictions.total` | Counter | `{entry}` | — | Cache entries evicted by the inactivity sweeper (idle for longer than `CACHE_INACTIVITY_EVICT_AFTER`) |
 | `proxy.cache.refresh_evictions.total` | Counter | `{entry}` | `status_code` | Cache entries evicted during background refresh due to a 4xx response from upstream. `status_code`: `401`, `403`, `404`, `410` |
 | `proxy.cache.refresh_preserved_stale.total` | Counter | `{response}` | `status_code` | Background refresh non-200/non-304 responses that preserved the stale entry (429 or 5xx). Enables alerting on sustained upstream errors without eviction. |
+| `proxy.snapshot.demand_revalidation.total` | Counter | `{revalidation}` | `result` | Demand revalidations of snapshot-loaded entries triggered on the first stale hit. `result`: `hit` (fresh — no CDN call), `not_modified` (304), `refreshed` (200), `evicted` (4xx), `preserved_stale` (429/5xx), `error` (network). See [cache.md](cache.md#demand-revalidation-of-snapshot-loaded-entries). |
 
 See [monitoring.md](monitoring.md) for guidance on interpreting these metrics by operator concern.
 

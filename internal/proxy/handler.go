@@ -26,6 +26,7 @@ import (
 )
 
 const (
+	resultHit           = "hit"
 	resultMiss          = "miss"
 	resultClientError   = "client_error"
 	resultUpstreamError = "upstream_error"
@@ -70,23 +71,34 @@ type Handler struct {
 	cache            *cache.Cache
 	sseManager       *sse.Manager
 	snapshotNotifier SnapshotNotifier // nil when persistence is disabled
+	refreshFetcher   cache.Fetcher    // nil disables demand revalidation
+	evictor          func(keyID string)
 	inst             *metrics.Instruments
 	counter          *telemetry.Counter
 	logger           *slog.Logger
 	tracer           trace.Tracer
 	sfGroup          singleflight.Group
+	revalGroup       singleflight.Group
 }
 
 // New constructs a Handler. cdnBaseDomain must be a bare hostname
 // (e.g. fm.dynatracelabs.com); the region and path are derived per request.
 // sseManager and snapshotNotifier may be nil; when non-nil, they are notified
-// after each successful cold fetch. inst and counter may be nil; metrics and
-// counting are silently skipped.
-func New(cdnBaseDomain string, client *http.Client, c *cache.Cache, sseManager *sse.Manager, snapshotNotifier SnapshotNotifier, inst *metrics.Instruments, counter *telemetry.Counter, logger *slog.Logger, t trace.Tracer) (*Handler, error) {
+// after each successful cold fetch. refreshFetcher may be nil; when non-nil,
+// snapshot-loaded entries are demand-revalidated on the first stale hit.
+// inst and counter may be nil; metrics and counting are silently skipped.
+func New(cdnBaseDomain string, client *http.Client, c *cache.Cache, sseManager *sse.Manager, snapshotNotifier SnapshotNotifier, refreshFetcher cache.Fetcher, inst *metrics.Instruments, counter *telemetry.Counter, logger *slog.Logger, t trace.Tracer) (*Handler, error) {
 	if cdnBaseDomain == "" || strings.Contains(cdnBaseDomain, "://") || strings.Contains(cdnBaseDomain, "/") {
 		return nil, fmt.Errorf("proxy: invalid CDN base domain %q: must be a bare hostname (e.g. fm.dynatracelabs.com)", cdnBaseDomain)
 	}
-	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, sseManager: sseManager, snapshotNotifier: snapshotNotifier, inst: inst, counter: counter, logger: logger, tracer: t}, nil
+	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, sseManager: sseManager, snapshotNotifier: snapshotNotifier, refreshFetcher: refreshFetcher, inst: inst, counter: counter, logger: logger, tracer: t}, nil
+}
+
+// SetEvictor wires a callback invoked after a cache entry is deleted due to a
+// 4xx response during demand revalidation. The callback should close the upstream
+// SSE connection and delete the persisted snapshot for keyID.
+func (h *Handler) SetEvictor(evict func(keyID string)) {
+	h.evictor = evict
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -131,9 +143,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if entry, ok := h.cache.Get(key); ok {
 		h.logger.Debug("proxy: cache hit", slog.String("key", key))
-		h.serveCacheHit(ctx, w, r, entry, sdkKey, key)
-		h.recordResult(ctx, "hit")
-		span.SetAttributes(attribute.String("result", "hit"))
+		result := h.serveCacheHit(ctx, w, r, entry, sdkKey, key)
+		h.recordResult(ctx, result)
+		span.SetAttributes(attribute.String("result", result))
 		return
 	}
 
@@ -145,7 +157,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // serveCacheHit starts a proxy.serve_cache_hit child span (with a Span Link to
 // the originating fetch when available) and delegates to serveFromCache.
-func (h *Handler) serveCacheHit(ctx context.Context, w http.ResponseWriter, r *http.Request, entry cache.Entry, sdkKey, key string) {
+// Returns a result label for RequestsTotal ("hit" or "upstream_error").
+func (h *Handler) serveCacheHit(ctx context.Context, w http.ResponseWriter, r *http.Request, entry cache.Entry, sdkKey, key string) string {
 	opts := []trace.SpanStartOption{
 		trace.WithAttributes(tracing.SDKKeyPublicID(key)),
 	}
@@ -154,7 +167,7 @@ func (h *Handler) serveCacheHit(ctx context.Context, w http.ResponseWriter, r *h
 	}
 	_, cacheSpan := h.tracer.Start(ctx, "proxy.serve_cache_hit", opts...)
 	defer cacheSpan.End()
-	h.serveFromCache(w, r, entry, sdkKey)
+	return h.serveFromCache(ctx, w, r, entry, sdkKey)
 }
 
 // serveFromCache writes a response from a cached entry. If the client's
@@ -164,19 +177,49 @@ func (h *Handler) serveCacheHit(ctx context.Context, w http.ResponseWriter, r *h
 //
 // When entry.FetchURL is empty (the entry was restored from a snapshot at
 // startup), it is repaired here so the background refresher can revalidate
-// it on the next TTL tick. This happens at most once per key per process.
-func (h *Handler) serveFromCache(w http.ResponseWriter, r *http.Request, entry cache.Entry, sdkKey string) {
-	if entry.FetchURL == "" {
+// it on the next TTL tick. If the entry is also stale and refreshFetcher is
+// wired, a synchronous conditional GET is performed before serving — the
+// response is intentionally delayed by one CDN round-trip on that first stale
+// hit so the SDK receives fresh (or confirmed-valid) config.
+//
+// Returns "hit" on success or "upstream_error" if the entry was evicted (503
+// already written).
+func (h *Handler) serveFromCache(ctx context.Context, w http.ResponseWriter, r *http.Request, entry cache.Entry, sdkKey string) string {
+	key := cache.PublicID(sdkKey)
+
+	wasSnapshotLoaded := entry.FetchURL == ""
+	if wasSnapshotLoaded {
 		if target, ok := h.buildTarget(sdkKey); ok {
 			entry.FetchURL = target
-			h.cache.Set(cache.PublicID(sdkKey), entry)
+			h.cache.Set(key, entry)
+		}
+	}
+
+	// Demand revalidation: snapshot-loaded entries whose FetchURL was just repaired
+	// and whose age exceeds the current refresh interval get a synchronous conditional
+	// GET before the response is served.
+	if wasSnapshotLoaded && entry.FetchURL != "" && h.refreshFetcher != nil {
+		interval := cache.RefreshIntervalDisconnected
+		if h.sseManager != nil {
+			interval = h.sseManager.RefreshInterval(key)
+		}
+		if entry.IsStale(time.Now(), interval) {
+			updated, ok := h.demandRevalidate(ctx, sdkKey, key, entry)
+			if !ok {
+				// Entry was evicted due to 4xx. Write 503; next request is a cold miss.
+				http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+				return resultUpstreamError
+			}
+			entry = updated
+		} else {
+			h.recordDemandReval(ctx, "hit")
 		}
 	}
 
 	if entry.ETag != "" && r.Header.Get("If-None-Match") == entry.ETag {
 		w.Header().Set("ETag", entry.ETag)
 		w.WriteHeader(http.StatusNotModified)
-		return
+		return resultHit
 	}
 	if entry.ETag != "" {
 		w.Header().Set("ETag", entry.ETag)
@@ -184,11 +227,129 @@ func (h *Handler) serveFromCache(w http.ResponseWriter, r *http.Request, entry c
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodHead {
+		return resultHit
+	}
+	payload, rewriteResult := sse.RewriteSSEURL(entry.Payload, h.proxySSEURL(r, key))
+	h.recordRewriteResult(rewriteResult, key)
+	_, _ = w.Write(payload)
+	return resultHit
+}
+
+// demandRevalEntry is the shared result of a singleflight demand revalidation call.
+type demandRevalEntry struct {
+	entry   cache.Entry
+	evicted bool // true when entry was deleted due to a 4xx response
+}
+
+// demandRevalidate performs a synchronous conditional GET for a snapshot-loaded
+// entry whose age exceeds the current refresh interval. It deduplicates concurrent
+// requests for the same key via singleflight so at most one CDN call is made.
+//
+// Returns the (potentially refreshed) entry and ok=true on success, or the zero
+// entry and ok=false when the entry was evicted due to an upstream 4xx response.
+// On network errors or 429/5xx, the original stale entry is returned with ok=true
+// so the SDK always receives a cached response.
+func (h *Handler) demandRevalidate(ctx context.Context, sdkKey, key string, entry cache.Entry) (cache.Entry, bool) {
+	// Detach cancellation so the fetch survives client disconnect while
+	// preserving trace lineage for the demand_revalidate span.
+	detachedCtx := trace.ContextWithSpanContext(context.Background(), trace.SpanContextFromContext(ctx))
+
+	v, _, _ := h.revalGroup.Do(key, func() (any, error) {
+		return h.doDemandRevalidate(detachedCtx, sdkKey, key, entry), nil
+	})
+	res := v.(demandRevalEntry)
+	if res.evicted {
+		return cache.Entry{}, false
+	}
+	return res.entry, true
+}
+
+func (h *Handler) doDemandRevalidate(ctx context.Context, sdkKey, key string, entry cache.Entry) demandRevalEntry {
+	ctx, span := h.tracer.Start(ctx, "proxy.demand_revalidate",
+		trace.WithAttributes(
+			tracing.SDKKeyPublicID(key),
+			attribute.Bool("if_none_match", entry.ETag != ""),
+		))
+	defer span.End()
+
+	result, err := h.refreshFetcher.Fetch(ctx, key, entry.FetchURL, entry.ETag)
+	if err != nil {
+		span.RecordError(err)
+		span.SetAttributes(attribute.String("result", "error"))
+		h.logger.Warn("proxy: demand revalidation fetch failed, serving stale entry",
+			slog.String("key", key),
+			slog.String("error", err.Error()),
+		)
+		h.recordDemandReval(ctx, "error")
+		return demandRevalEntry{entry: entry}
+	}
+
+	if result.NotModified {
+		span.SetAttributes(attribute.String("result", "not_modified"))
+		now := time.Now()
+		h.cache.ResetTTL(key, now)
+		entry.FetchedAt = now
+		h.logger.Debug("proxy: demand revalidation — upstream unchanged (304), TTL extended", slog.String("key", key))
+		if h.sseManager != nil {
+			sseCtx := trace.ContextWithSpanContext(context.Background(), span.SpanContext())
+			h.sseManager.OnConfigCached(sseCtx, sdkKey, entry.Payload)
+		}
+		h.recordDemandReval(ctx, "not_modified")
+		return demandRevalEntry{entry: entry}
+	}
+
+	if result.Entry != nil {
+		result.Entry.FetchURL = entry.FetchURL
+		result.Entry.OriginatingFetch = span.SpanContext()
+		span.SetAttributes(attribute.String("result", "ok"))
+		h.cache.Set(key, *result.Entry)
+		h.logger.Debug("proxy: demand revalidation — new content received (200), cache updated", slog.String("key", key))
+		if h.sseManager != nil {
+			sseCtx := trace.ContextWithSpanContext(context.Background(), span.SpanContext())
+			h.sseManager.OnConfigCached(sseCtx, sdkKey, result.Entry.Payload)
+		}
+		if h.snapshotNotifier != nil {
+			h.snapshotNotifier.OnConfigCached(key, result.Entry.ETag, result.Entry.Payload)
+		}
+		h.recordDemandReval(ctx, "refreshed")
+		return demandRevalEntry{entry: *result.Entry}
+	}
+
+	if result.StatusCode != 0 {
+		span.SetAttributes(
+			attribute.String("result", "upstream_error"),
+			attribute.Int("upstream.status_code", result.StatusCode),
+		)
+		if cache.ShouldEvict(result.StatusCode) {
+			h.cache.Delete(key)
+			h.logger.Warn("proxy: demand revalidation got evictable status, evicting entry",
+				slog.String("key", key),
+				slog.Int("upstream_status", result.StatusCode),
+			)
+			if h.evictor != nil {
+				h.evictor(key)
+			}
+			h.recordDemandReval(ctx, "evicted")
+			return demandRevalEntry{evicted: true}
+		}
+		h.logger.Warn("proxy: demand revalidation got upstream error, serving stale entry",
+			slog.String("key", key),
+			slog.Int("upstream_status", result.StatusCode),
+		)
+		h.recordDemandReval(ctx, "preserved_stale")
+		return demandRevalEntry{entry: entry}
+	}
+
+	span.SetAttributes(attribute.String("result", "unexpected_empty"))
+	return demandRevalEntry{entry: entry}
+}
+
+// recordDemandReval increments SnapshotDemandRevalidationTotal with the given result label.
+func (h *Handler) recordDemandReval(ctx context.Context, result string) {
+	if h.inst == nil {
 		return
 	}
-	payload, result := sse.RewriteSSEURL(entry.Payload, h.proxySSEURL(r, cache.PublicID(sdkKey)))
-	h.recordRewriteResult(result, cache.PublicID(sdkKey))
-	_, _ = w.Write(payload)
+	h.inst.SnapshotDemandRevalidationTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
 }
 
 // serveMiss deduplicates concurrent cold-miss fetches for the same SDK key via
@@ -206,7 +367,7 @@ func (h *Handler) serveMiss(ctx context.Context, w http.ResponseWriter, r *http.
 	result := v.(coldFetchResult)
 	switch result.resultLabel {
 	case resultMiss:
-		h.serveFromCache(w, r, *result.entry, sdkKey)
+		h.serveFromCache(ctx, w, r, *result.entry, sdkKey)
 		return resultMiss
 	case resultClientError:
 		copyHeader(w.Header(), result.headers)
