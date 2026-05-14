@@ -1,4 +1,4 @@
-# Contributing to sdk-proxy
+# Contributing to the SDK Proxy
 
 ## Requirements
 
