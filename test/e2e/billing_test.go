@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/dynatrace/sdk-proxy/internal/cache"
 )
 
 // TestBilling_CacheHit_IncrementsCounter verifies that a cache-hit request
@@ -75,7 +77,7 @@ func TestBilling_FlushDeliversCorrectSample(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("no Sample found for SDKKey=%q in billing calls", TestSDKKey)
+		t.Errorf("no Sample found for key_id=%s in billing calls", cache.PublicID(TestSDKKey))
 	}
 }
 
@@ -123,7 +125,7 @@ func TestBilling_RejectedSSE_NotCounted(t *testing.T) {
 	// Now assert the rejected SSE produced no sample for TestSDKKey.
 	for _, s := range h.Billing.Calls() {
 		if s.SDKKey == TestSDKKey {
-			t.Errorf("unexpected billing sample for rejected SSE request: %v", s)
+			t.Errorf("unexpected billing sample for rejected SSE request: key_id=%s count=%d", s.KeyID, s.Count)
 		}
 	}
 }
