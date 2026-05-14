@@ -204,11 +204,12 @@ func (h *Handler) serveFromCache(ctx context.Context, w http.ResponseWriter, r *
 			interval = h.sseManager.RefreshInterval(key)
 		}
 		if entry.IsStale(time.Now(), interval) {
-			updated, ok := h.demandRevalidate(ctx, sdkKey, key, entry)
-			if !ok {
-				// Entry was evicted due to 4xx. Write 503; next request is a cold miss.
-				http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
-				return resultUpstreamError
+			updated, evictedCode := h.demandRevalidate(ctx, sdkKey, key, entry)
+			if evictedCode != 0 {
+				// Entry was evicted due to a 4xx. Pass through the upstream status
+				// so providers can respond appropriately (e.g. 401 → re-authenticate).
+				http.Error(w, http.StatusText(evictedCode), evictedCode)
+				return resultClientError
 			}
 			entry = updated
 		} else {
@@ -237,19 +238,20 @@ func (h *Handler) serveFromCache(ctx context.Context, w http.ResponseWriter, r *
 
 // demandRevalEntry is the shared result of a singleflight demand revalidation call.
 type demandRevalEntry struct {
-	entry   cache.Entry
-	evicted bool // true when entry was deleted due to a 4xx response
+	entry       cache.Entry
+	evictedCode int // non-zero: entry was evicted; pass this status code to the client
 }
 
 // demandRevalidate performs a synchronous conditional GET for a snapshot-loaded
 // entry whose age exceeds the current refresh interval. It deduplicates concurrent
 // requests for the same key via singleflight so at most one CDN call is made.
 //
-// Returns the (potentially refreshed) entry and ok=true on success, or the zero
-// entry and ok=false when the entry was evicted due to an upstream 4xx response.
-// On network errors or 429/5xx, the original stale entry is returned with ok=true
+// Returns the (potentially refreshed) entry and evictedCode=0 on success.
+// When the entry was evicted due to a 4xx response, returns the zero entry and
+// the upstream status code so the caller can pass it through to the client.
+// On network errors or 429/5xx, the original stale entry is returned with evictedCode=0
 // so the SDK always receives a cached response.
-func (h *Handler) demandRevalidate(ctx context.Context, sdkKey, key string, entry cache.Entry) (cache.Entry, bool) {
+func (h *Handler) demandRevalidate(ctx context.Context, sdkKey, key string, entry cache.Entry) (cache.Entry, int) {
 	// Detach cancellation so the fetch survives client disconnect while
 	// preserving trace lineage for the demand_revalidate span.
 	detachedCtx := trace.ContextWithSpanContext(context.Background(), trace.SpanContextFromContext(ctx))
@@ -258,10 +260,7 @@ func (h *Handler) demandRevalidate(ctx context.Context, sdkKey, key string, entr
 		return h.doDemandRevalidate(detachedCtx, sdkKey, key, entry), nil
 	})
 	res := v.(demandRevalEntry)
-	if res.evicted {
-		return cache.Entry{}, false
-	}
-	return res.entry, true
+	return res.entry, res.evictedCode
 }
 
 func (h *Handler) doDemandRevalidate(ctx context.Context, sdkKey, key string, entry cache.Entry) demandRevalEntry {
@@ -330,7 +329,7 @@ func (h *Handler) doDemandRevalidate(ctx context.Context, sdkKey, key string, en
 				h.evictor(key)
 			}
 			h.recordDemandReval(ctx, "evicted")
-			return demandRevalEntry{evicted: true}
+			return demandRevalEntry{evictedCode: result.StatusCode}
 		}
 		h.logger.Warn("proxy: demand revalidation got upstream error, serving stale entry",
 			slog.String("key", key),

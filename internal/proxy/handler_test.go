@@ -1504,8 +1504,10 @@ func TestHandler_DemandReval_StaleSnapshot_4xx_Evicts(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
 			h.ServeHTTP(rec, req)
 
-			if rec.Code != http.StatusServiceUnavailable {
-				t.Errorf("status %d: expected 503 on demand reval eviction, got %d", code, rec.Code)
+			// The upstream status code is passed through so providers can respond
+			// appropriately (e.g. 401 → re-authenticate, 404 → stop polling).
+			if rec.Code != code {
+				t.Errorf("status %d: expected pass-through status %d, got %d", code, code, rec.Code)
 			}
 			if _, ok := c.Get(testKeyID); ok {
 				t.Errorf("status %d: entry must be evicted from cache", code)
