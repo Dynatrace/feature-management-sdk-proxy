@@ -20,7 +20,7 @@ func newHandlers(ready bool) *health.Handlers {
 func TestLiveHandler_AlwaysOK(t *testing.T) {
 	for _, ready := range []bool{true, false} {
 		h := newHandlers(ready)
-		r := httptest.NewRequest(http.MethodGet, "/live", nil)
+		r := httptest.NewRequest(http.MethodGet, "/livez", nil)
 		w := httptest.NewRecorder()
 		h.Live(w, r)
 		if w.Code != http.StatusOK {
@@ -31,7 +31,7 @@ func TestLiveHandler_AlwaysOK(t *testing.T) {
 
 func TestReadyHandler_TogglesWithReadyFunc(t *testing.T) {
 	h := newHandlers(false)
-	r := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	r := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	w := httptest.NewRecorder()
 	h.Ready(w, r)
 	if w.Code != http.StatusServiceUnavailable {
@@ -39,7 +39,7 @@ func TestReadyHandler_TogglesWithReadyFunc(t *testing.T) {
 	}
 
 	h = newHandlers(true)
-	r = httptest.NewRequest(http.MethodGet, "/ready", nil)
+	r = httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	w = httptest.NewRecorder()
 	h.Ready(w, r)
 	if w.Code != http.StatusOK {
@@ -49,7 +49,7 @@ func TestReadyHandler_TogglesWithReadyFunc(t *testing.T) {
 
 func TestHealthHandler_AggregatesLiveAndReady(t *testing.T) {
 	h := newHandlers(false)
-	r := httptest.NewRequest(http.MethodGet, "/health", nil)
+	r := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()
 	h.Health(w, r)
 	if w.Code != http.StatusServiceUnavailable {
@@ -57,7 +57,7 @@ func TestHealthHandler_AggregatesLiveAndReady(t *testing.T) {
 	}
 
 	h = newHandlers(true)
-	r = httptest.NewRequest(http.MethodGet, "/health", nil)
+	r = httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	w = httptest.NewRecorder()
 	h.Health(w, r)
 	if w.Code != http.StatusOK {
@@ -71,9 +71,9 @@ func TestProbeHandlers_MethodNotAllowed(t *testing.T) {
 		name    string
 		handler http.HandlerFunc
 	}{
-		{"live", h.Live},
-		{"ready", h.Ready},
-		{"health", h.Health},
+		{"livez", h.Live},
+		{"readyz", h.Ready},
+		{"healthz", h.Health},
 	}
 	for _, tc := range handlers {
 		r := httptest.NewRequest(http.MethodPost, "/"+tc.name, nil)
@@ -91,7 +91,7 @@ func TestReadyHandler_LogsTransitionOnce(t *testing.T) {
 	h := health.New(func() bool { return true }, logger)
 
 	for range 3 {
-		r := httptest.NewRequest(http.MethodGet, "/ready", nil)
+		r := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 		w := httptest.NewRecorder()
 		h.Ready(w, r)
 	}
@@ -106,11 +106,11 @@ func TestHealthHandler_LogsTransitionOnce(t *testing.T) {
 	h := health.New(func() bool { return true }, logger)
 
 	for range 3 {
-		r := httptest.NewRequest(http.MethodGet, "/health", nil)
+		r := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 		w := httptest.NewRecorder()
 		h.Health(w, r)
 	}
 	if got := strings.Count(buf.String(), "proxy is ready"); got != 1 {
-		t.Errorf("expected exactly 1 'proxy is ready' log entry via /health, got %d\nlog output:\n%s", got, buf.String())
+		t.Errorf("expected exactly 1 'proxy is ready' log entry via /healthz, got %d\nlog output:\n%s", got, buf.String())
 	}
 }

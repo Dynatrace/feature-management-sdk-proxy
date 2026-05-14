@@ -138,7 +138,7 @@ The inactivity sweeper is a GC path that mirrors lifecycle invalidation: **cache
 
 ### Health Probes
 
-`/live` always 200. `/ready` and `/health` return 200 after snapshot load completes (or immediately if no persistence), 503 otherwise. Never route traffic before `/ready` returns 200. See [`docs/monitoring.md`](docs/monitoring.md).
+`/livez` always 200. `/readyz` and `/healthz` return 200 after snapshot load completes (or immediately if no persistence), 503 otherwise. Never route traffic before `/readyz` returns 200. See [`docs/monitoring.md`](docs/monitoring.md).
 
 ### Shutdown
 

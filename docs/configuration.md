@@ -413,13 +413,13 @@ spec:
               memory: 256Mi
           livenessProbe:
             httpGet:
-              path: /live
+              path: /livez
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
           readinessProbe:
             httpGet:
-              path: /ready
+              path: /readyz
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
