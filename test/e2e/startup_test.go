@@ -169,3 +169,64 @@ func writeTestSnapshot(t *testing.T, dir, sdkKey string, payload []byte, capture
 		t.Fatalf("store.Put: %v", err)
 	}
 }
+
+// TestSnapshot_DemandRevalidation_StaleEntry verifies that when a stale
+// snapshot-loaded entry is served, the proxy performs a synchronous
+// conditional GET before writing the response.
+func TestSnapshot_DemandRevalidation_StaleEntry(t *testing.T) {
+	dir := t.TempDir()
+	// Snapshot captured 1 hour ago — stale against RefreshIntervalDisconnected (10 s).
+	writeTestSnapshot(t, dir, TestSDKKey, buildCDNPayload(h2sseURL), time.Now().Add(-1*time.Hour))
+
+	h := MustNew(t, Options{
+		SnapshotDir:              dir,
+		SnapshotMaxAge:           24 * time.Hour,
+		EnableDemandRevalidation: true,
+	})
+
+	// Discard any CDN calls made during harness startup.
+	h.CDN.ResetCalls()
+
+	// First request: stale snapshot entry → demand reval → one CDN call.
+	resp := h.GetConfig(t, TestSDKKey)
+	assertStatus(t, resp, http.StatusOK)
+	drainBody(t, resp)
+
+	if got := h.CDN.Calls(); got != 1 {
+		t.Errorf("CDN calls after stale snapshot hit = %d, want 1 (demand revalidation)", got)
+	}
+
+	// Second request: entry is no longer snapshot-loaded → no demand reval.
+	h.CDN.ResetCalls()
+	resp = h.GetConfig(t, TestSDKKey)
+	assertStatus(t, resp, http.StatusOK)
+	drainBody(t, resp)
+
+	if got := h.CDN.Calls(); got != 0 {
+		t.Errorf("CDN calls on second request = %d, want 0 (demand reval must not repeat)", got)
+	}
+}
+
+// TestSnapshot_DemandRevalidation_FreshEntry verifies that a snapshot-loaded
+// entry within the refresh interval is served from cache without a CDN call.
+func TestSnapshot_DemandRevalidation_FreshEntry(t *testing.T) {
+	dir := t.TempDir()
+	// Snapshot captured 1 second ago — within RefreshIntervalDisconnected (10 s).
+	writeTestSnapshot(t, dir, TestSDKKey, buildCDNPayload(h2sseURL), time.Now().Add(-1*time.Second))
+
+	h := MustNew(t, Options{
+		SnapshotDir:              dir,
+		SnapshotMaxAge:           24 * time.Hour,
+		EnableDemandRevalidation: true,
+	})
+
+	h.CDN.ResetCalls()
+
+	resp := h.GetConfig(t, TestSDKKey)
+	assertStatus(t, resp, http.StatusOK)
+	drainBody(t, resp)
+
+	if got := h.CDN.Calls(); got != 0 {
+		t.Errorf("CDN calls for fresh snapshot entry = %d, want 0", got)
+	}
+}

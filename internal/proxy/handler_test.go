@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -44,7 +45,7 @@ func newRedirectingClient(target *httptest.Server) *http.Client {
 
 func newTestHandler(t *testing.T, upstream *httptest.Server) *Handler {
 	t.Helper()
-	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, nil, nil, nil, slog.Default(), testTracer)
+	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, nil, nil, nil, nil, slog.Default(), testTracer)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -53,7 +54,7 @@ func newTestHandler(t *testing.T, upstream *httptest.Server) *Handler {
 
 func newTestHandlerWithCache(t *testing.T, upstream *httptest.Server, c *cache.Cache) *Handler {
 	t.Helper()
-	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, nil, nil, nil, slog.Default(), testTracer)
+	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, nil, nil, nil, nil, slog.Default(), testTracer)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -173,7 +174,7 @@ func TestHandler_CacheMiss_NetworkError_Returns503(t *testing.T) {
 	client := newRedirectingClient(upstream)
 	upstream.Close() // close after capturing the address in the client
 
-	h, err := New("fm.test", client, cache.New(), nil, nil, nil, nil, slog.Default(), testTracer)
+	h, err := New("fm.test", client, cache.New(), nil, nil, nil, nil, nil, slog.Default(), testTracer)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -460,7 +461,7 @@ func TestNew_InvalidCDNBaseDomain(t *testing.T) {
 		"http://fm.example.com/",
 	}
 	for _, tc := range cases {
-		_, err := New(tc, http.DefaultClient, cache.New(), nil, nil, nil, nil, slog.Default(), testTracer)
+		_, err := New(tc, http.DefaultClient, cache.New(), nil, nil, nil, nil, nil, slog.Default(), testTracer)
 		if err == nil {
 			t.Errorf("New(%q): expected error, got nil", tc)
 		}
@@ -810,7 +811,7 @@ func TestHandler_Rewrite_HTTPSSchemeFromXForwardedProto(t *testing.T) {
 
 func newTestHandlerWithCounter(t *testing.T, upstream *httptest.Server, counter *telemetry.Counter) *Handler {
 	t.Helper()
-	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, nil, nil, counter, slog.Default(), testTracer)
+	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, nil, nil, nil, counter, slog.Default(), testTracer)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -819,7 +820,7 @@ func newTestHandlerWithCounter(t *testing.T, upstream *httptest.Server, counter 
 
 func newTestHandlerWithCacheAndCounter(t *testing.T, upstream *httptest.Server, c *cache.Cache, counter *telemetry.Counter) *Handler {
 	t.Helper()
-	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, nil, nil, counter, slog.Default(), testTracer)
+	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, nil, nil, nil, counter, slog.Default(), testTracer)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1000,7 +1001,7 @@ func TestHandler_CacheMiss_InvokesSnapshotNotifier(t *testing.T) {
 	defer upstream.Close()
 
 	notifier := &mockSnapshotNotifier{}
-	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, notifier, nil, nil, slog.Default(), testTracer)
+	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, notifier, nil, nil, nil, slog.Default(), testTracer)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1190,7 +1191,7 @@ func TestHandler_ColdMiss_Singleflight_SideEffectsOnce(t *testing.T) {
 	defer upstream.Close()
 
 	notifier := &mockSnapshotNotifier{}
-	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, notifier, nil, nil, slog.Default(), testTracer)
+	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, notifier, nil, nil, nil, slog.Default(), testTracer)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1301,5 +1302,359 @@ func TestFetcher_5xx_ReturnsStatusCode(t *testing.T) {
 	}
 	if result.StatusCode != http.StatusInternalServerError {
 		t.Errorf("expected StatusCode=500, got %d", result.StatusCode)
+	}
+}
+
+// --- Demand revalidation tests ---
+
+// mockFetcher is a controllable implementation of cache.Fetcher for testing.
+type mockFetcher struct {
+	mu     sync.Mutex
+	calls  int
+	result cache.FetchResult
+	err    error
+	// block is an optional channel; if set, Fetch blocks until it is closed.
+	block chan struct{}
+}
+
+func (m *mockFetcher) Fetch(_ context.Context, _, _, _ string) (cache.FetchResult, error) {
+	if m.block != nil {
+		<-m.block
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	return m.result, m.err
+}
+
+func (m *mockFetcher) callCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
+const testSDKKey = "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
+const testKeyID = "dt01.server_us_ab3xy9kp2q"
+const testFetchURL = "https://cdn.us.fm.test/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json"
+
+// staleSnapshotEntry returns an entry with FetchURL="" and FetchedAt far enough
+// in the past to be stale under RefreshIntervalDisconnected (10s).
+func staleSnapshotEntry(payload []byte, etag string) cache.Entry {
+	return cache.Entry{
+		Payload:   payload,
+		ETag:      etag,
+		FetchedAt: time.Now().Add(-1 * time.Hour),
+		FetchURL:  "", // snapshot-loaded marker
+	}
+}
+
+func newHandlerWithFetcher(t *testing.T, c *cache.Cache, f cache.Fetcher) *Handler {
+	t.Helper()
+	// Upstream is not expected to be called for snapshot-loaded entries.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected call to proxy upstream (demand reval should use refreshFetcher)")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(upstream.Close)
+	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, nil, f, nil, nil, slog.Default(), testTracer)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return h
+}
+
+func newHandlerWithFetcherAndNotifier(t *testing.T, c *cache.Cache, f cache.Fetcher, notifier SnapshotNotifier) *Handler {
+	t.Helper()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected call to proxy upstream")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(upstream.Close)
+	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, notifier, f, nil, nil, slog.Default(), testTracer)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return h
+}
+
+func TestHandler_DemandReval_StaleSnapshot_304_ServesCachedPayload(t *testing.T) {
+	c := cache.New()
+	payload := []byte(`{"flags":{}}`)
+	c.Set(testKeyID, staleSnapshotEntry(payload, `"etag1"`))
+
+	f := &mockFetcher{result: cache.FetchResult{NotModified: true}}
+	h := newHandlerWithFetcher(t, c, f)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if f.callCount() != 1 {
+		t.Errorf("expected 1 fetcher call, got %d", f.callCount())
+	}
+	// Verify FetchedAt was reset (entry is no longer stale).
+	entry, ok := c.Get(testKeyID)
+	if !ok {
+		t.Fatal("entry should still be in cache after 304")
+	}
+	if entry.IsStale(time.Now(), 10*time.Second) {
+		t.Error("entry should not be stale after 304 demand reval")
+	}
+	if entry.FetchURL == "" {
+		t.Error("FetchURL should be repaired after first hit")
+	}
+}
+
+func TestHandler_DemandReval_StaleSnapshot_304_NoSnapshotWrite(t *testing.T) {
+	c := cache.New()
+	c.Set(testKeyID, staleSnapshotEntry([]byte(`{"flags":{}}`), `"etag1"`))
+
+	f := &mockFetcher{result: cache.FetchResult{NotModified: true}}
+	notifier := &mockSnapshotNotifier{}
+	h := newHandlerWithFetcherAndNotifier(t, c, f, notifier)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
+	h.ServeHTTP(rec, req)
+
+	notifier.mu.Lock()
+	defer notifier.mu.Unlock()
+	if len(notifier.calls) != 0 {
+		t.Errorf("snapshot notifier must NOT be called on 304, got %d calls", len(notifier.calls))
+	}
+}
+
+func TestHandler_DemandReval_StaleSnapshot_200_ServesFreshPayload(t *testing.T) {
+	c := cache.New()
+	c.Set(testKeyID, staleSnapshotEntry([]byte(`{"flags":{"old":true}}`), `"etag1"`))
+
+	freshPayload := []byte(`{"flags":{"new":true}}`)
+	f := &mockFetcher{result: cache.FetchResult{
+		Entry: &cache.Entry{
+			Payload:   freshPayload,
+			ETag:      `"etag2"`,
+			FetchedAt: time.Now(),
+		},
+	}}
+	notifier := &mockSnapshotNotifier{}
+	h := newHandlerWithFetcherAndNotifier(t, c, f, notifier)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	// Fresh payload is served (SSE URL rewrite may transform it; check for key content).
+	if !strings.Contains(rec.Body.String(), `"new":true`) {
+		t.Errorf("expected fresh payload in response, got: %q", rec.Body.String())
+	}
+	// Cache must hold the fresh entry.
+	entry, ok := c.Get(testKeyID)
+	if !ok {
+		t.Fatal("entry missing from cache after 200 demand reval")
+	}
+	if string(entry.Payload) != string(freshPayload) {
+		t.Errorf("cache has stale payload after 200: %q", string(entry.Payload))
+	}
+	// Snapshot notifier must be called once.
+	notifier.mu.Lock()
+	defer notifier.mu.Unlock()
+	if len(notifier.calls) != 1 {
+		t.Errorf("expected snapshot notifier called once after 200, got %d", len(notifier.calls))
+	}
+}
+
+func TestHandler_DemandReval_StaleSnapshot_NetworkError_ServesStale(t *testing.T) {
+	c := cache.New()
+	c.Set(testKeyID, staleSnapshotEntry([]byte(`{"flags":{}}`), `"etag1"`))
+
+	f := &mockFetcher{err: errors.New("dial tcp: connection refused")}
+	h := newHandlerWithFetcher(t, c, f)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected stale 200 on fetch error, got %d", rec.Code)
+	}
+	// Entry must still be present (not evicted).
+	if _, ok := c.Get(testKeyID); !ok {
+		t.Error("entry must not be evicted on fetch error")
+	}
+}
+
+func TestHandler_DemandReval_StaleSnapshot_4xx_Evicts(t *testing.T) {
+	for _, code := range []int{401, 403, 404, 410} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			c := cache.New()
+			c.Set(testKeyID, staleSnapshotEntry([]byte(`{"flags":{}}`), `"etag1"`))
+
+			f := &mockFetcher{result: cache.FetchResult{StatusCode: code}}
+			evictorCalled := false
+			h := newHandlerWithFetcher(t, c, f)
+			h.SetEvictor(func(string) { evictorCalled = true })
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Errorf("status %d: expected 503 on demand reval eviction, got %d", code, rec.Code)
+			}
+			if _, ok := c.Get(testKeyID); ok {
+				t.Errorf("status %d: entry must be evicted from cache", code)
+			}
+			if !evictorCalled {
+				t.Errorf("status %d: evictor callback must be called", code)
+			}
+		})
+	}
+}
+
+func TestHandler_DemandReval_StaleSnapshot_429And5xx_PreservesStale(t *testing.T) {
+	for _, code := range []int{429, 500, 502, 503, 504} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			c := cache.New()
+			c.Set(testKeyID, staleSnapshotEntry([]byte(`{"flags":{}}`), `"etag1"`))
+
+			f := &mockFetcher{result: cache.FetchResult{StatusCode: code}}
+			h := newHandlerWithFetcher(t, c, f)
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Errorf("status %d: expected stale 200, got %d", code, rec.Code)
+			}
+			if _, ok := c.Get(testKeyID); !ok {
+				t.Errorf("status %d: entry must not be evicted on %d", code, code)
+			}
+		})
+	}
+}
+
+func TestHandler_DemandReval_FreshSnapshotEntry_NoDemandReval(t *testing.T) {
+	c := cache.New()
+	// FetchURL is empty (snapshot-loaded) but FetchedAt is very recent — not stale.
+	c.Set(testKeyID, cache.Entry{
+		Payload:   []byte(`{"flags":{}}`),
+		ETag:      `"etag1"`,
+		FetchedAt: time.Now(), // fresh
+		FetchURL:  "",
+	})
+
+	f := &mockFetcher{result: cache.FetchResult{NotModified: true}}
+	h := newHandlerWithFetcher(t, c, f)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if f.callCount() != 0 {
+		t.Errorf("expected no fetcher call for fresh entry, got %d", f.callCount())
+	}
+}
+
+func TestHandler_DemandReval_NotFiredForNormalCacheEntry(t *testing.T) {
+	c := cache.New()
+	// FetchURL is set (normal cold-fetched entry, even if stale).
+	c.Set(testKeyID, cache.Entry{
+		Payload:   []byte(`{"flags":{}}`),
+		ETag:      `"etag1"`,
+		FetchedAt: time.Now().Add(-1 * time.Hour), // stale
+		FetchURL:  testFetchURL,                   // already set — NOT snapshot-loaded
+	})
+
+	f := &mockFetcher{result: cache.FetchResult{NotModified: true}}
+	h := newHandlerWithFetcher(t, c, f)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if f.callCount() != 0 {
+		t.Errorf("demand reval must not fire for entries with FetchURL set, got %d calls", f.callCount())
+	}
+}
+
+func TestHandler_DemandReval_SecondRequest_SkipsDemandReval(t *testing.T) {
+	c := cache.New()
+	c.Set(testKeyID, staleSnapshotEntry([]byte(`{"flags":{}}`), `"etag1"`))
+
+	f := &mockFetcher{result: cache.FetchResult{NotModified: true}}
+	h := newHandlerWithFetcher(t, c, f)
+
+	sendRequest := func() {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d", rec.Code)
+		}
+	}
+
+	// First request: stale snapshot entry → demand reval fires.
+	sendRequest()
+	if f.callCount() != 1 {
+		t.Fatalf("expected 1 fetcher call on first request, got %d", f.callCount())
+	}
+
+	// Second request: FetchURL is now set (repaired) → no demand reval.
+	sendRequest()
+	if f.callCount() != 1 {
+		t.Errorf("expected no additional fetcher calls on second request, got %d total", f.callCount())
+	}
+}
+
+func TestHandler_DemandReval_ConcurrentRequests_OneUpstreamCall(t *testing.T) {
+	c := cache.New()
+	c.Set(testKeyID, staleSnapshotEntry([]byte(`{"flags":{}}`), `"etag1"`))
+
+	block := make(chan struct{})
+	f := &mockFetcher{
+		result: cache.FetchResult{NotModified: true},
+		block:  block,
+	}
+	h := newHandlerWithFetcher(t, c, f)
+
+	const n = 10
+	var wg sync.WaitGroup
+	codes := make([]int, n)
+	wg.Add(n)
+	for i := range n {
+		go func(i int) {
+			defer wg.Done()
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
+			h.ServeHTTP(rec, req)
+			codes[i] = rec.Code
+		}(i)
+	}
+
+	// Let all goroutines reach the singleflight gate, then unblock.
+	time.Sleep(20 * time.Millisecond)
+	close(block)
+	wg.Wait()
+
+	for i, code := range codes {
+		if code != http.StatusOK {
+			t.Errorf("goroutine %d: expected 200, got %d", i, code)
+		}
+	}
+	if f.callCount() != 1 {
+		t.Errorf("expected exactly 1 fetcher call across %d concurrent requests, got %d", n, f.callCount())
 	}
 }

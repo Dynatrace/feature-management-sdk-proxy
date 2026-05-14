@@ -30,6 +30,7 @@ const (
 	CacheInactivityEvictionsTotal   = "proxy.cache.inactivity_evictions.total"
 	CacheRefreshEvictionsTotal      = "proxy.cache.refresh_evictions.total"
 	CacheRefreshPreservedStaleTotal = "proxy.cache.refresh_preserved_stale.total"
+	SnapshotDemandRevalidationTotal = "proxy.snapshot.demand_revalidation.total"
 )
 
 // Instruments holds every OTel instrument the proxy emits. Obtain one via Register.
@@ -119,6 +120,12 @@ type Instruments struct {
 	// non-200/non-304 but did NOT trigger eviction (e.g. 429, 5xx), labeled by
 	// status_code. Enables alerting on sustained upstream errors without eviction.
 	CacheRefreshPreservedStaleTotal metric.Int64Counter
+
+	// SnapshotDemandRevalidationTotal counts demand revalidations of snapshot-loaded
+	// entries triggered on the first stale hit, labeled by result:
+	// hit (not stale — no CDN call), not_modified (304), refreshed (200),
+	// evicted (4xx), preserved_stale (429/5xx), error (network).
+	SnapshotDemandRevalidationTotal metric.Int64Counter
 }
 
 // Register creates all metric instruments against meter. Call once at startup and
@@ -301,6 +308,14 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("metrics: register %s: %w", CacheRefreshPreservedStaleTotal, err)
 	}
 
+	snapshotDemandReval, err := meter.Int64Counter(SnapshotDemandRevalidationTotal,
+		metric.WithDescription("Demand revalidations of snapshot-loaded entries on first stale hit, labeled by result (hit/not_modified/refreshed/evicted/preserved_stale/error)"),
+		metric.WithUnit("{revalidation}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", SnapshotDemandRevalidationTotal, err)
+	}
+
 	return &Instruments{
 		RequestsTotal:                   reqTotal,
 		SSEConnections:                  sseConns,
@@ -324,5 +339,6 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		CacheInactivityEvictionsTotal:   cacheInactivityEvictions,
 		CacheRefreshEvictionsTotal:      cacheRefreshEvictions,
 		CacheRefreshPreservedStaleTotal: cacheRefreshPreservedStale,
+		SnapshotDemandRevalidationTotal: snapshotDemandReval,
 	}, nil
 }

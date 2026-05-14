@@ -26,8 +26,8 @@ At startup, the proxy classifies itself into one of five paths. The `proxy.start
 | Path | Condition | Behavior |
 |------|-----------|----------|
 | `cold` | No backend configured | Starts with an empty cache; fetches from CDN on first request per key |
-| `snapshot` | Backend configured, fresh snapshots present | Loads snapshots into cache; serves immediately without CDN fetches |
-| `snapshot_stale` | Backend configured, snapshots older than `SNAPSHOT_MAX_AGE` | Loads stale snapshots and serves them; schedules background refresh |
+| `snapshot` | Backend configured, fresh snapshots present | Loads snapshots into cache; serves immediately. On the first SDK request for each key, if the entry is older than the refresh interval, it is confirmed valid or refreshed against the CDN before responding (see [Demand Revalidation](cache.md#demand-revalidation-of-snapshot-loaded-entries)). |
+| `snapshot_stale` | Backend configured, snapshots older than `SNAPSHOT_MAX_AGE` | Loads stale snapshots. On the first SDK request for each key, the config is confirmed or updated against the CDN before the response is served. |
 | `empty_persistence_cold` | Backend configured and reachable, store is empty | Starts cold; warms cache from upstream on first request per key; snapshots are written normally after each fetch |
 | `backend_unreachable` | Backend configured but unreachable | Exits with code 1. The backend must be reachable before the proxy can start — check connectivity and credentials. |
 
