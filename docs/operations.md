@@ -1,6 +1,6 @@
 # Operations Guide
 
-Understanding sdk-proxy's runtime behavior separates a fast diagnosis from a long investigation. What follows covers requests, SSE fan-out, startup paths, and failure conditions: the behaviors that matter most in production.
+Understanding the SDK Proxy's runtime behavior separates a fast diagnosis from a long investigation. What follows covers requests, SSE fan-out, startup paths, and failure conditions: the behaviors that matter most in production.
 
 For metrics reference, see [telemetry.md](telemetry.md). For configuration, see [configuration.md](configuration.md).
 

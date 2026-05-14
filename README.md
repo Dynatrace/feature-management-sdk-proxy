@@ -1,6 +1,6 @@
 # Dynatrace Feature Management SDK Proxy
 
-The Feature Management SDK proxy reduces infrastructure overhead for teams running many instances of the Dynatrace Feature Management SDK. Without it, each SDK replica maintains its own connection to the Dynatrace CDN and its own upstream SSE subscription. With it, all replicas share one CDN connection and one SSE subscription per SDK key, regardless of fleet size.
+The Feature Management SDK Proxy reduces infrastructure overhead for teams running many instances of the Dynatrace Feature Management SDK. Without it, each SDK replica maintains its own connection to the Dynatrace CDN and its own upstream SSE subscription. With it, all replicas share one CDN connection and one SSE subscription per SDK key, regardless of fleet size.
 
 ## When to Use It
 
@@ -19,7 +19,7 @@ flowchart LR
         s3[SDK ...]
     end
 
-    proxy["sdk-proxy<br/>(cache + SSE fan-out)"]
+    proxy["SDK Proxy<br/>(cache + SSE fan-out)"]
 
     subgraph upstream ["Dynatrace Upstream"]
         cdn["CDN"]

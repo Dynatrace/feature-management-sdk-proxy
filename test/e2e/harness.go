@@ -2,7 +2,7 @@
 
 // docs: docs/operations.md — update that doc when adding or changing harness capabilities.
 
-// Package e2e provides an in-process integration test harness for the SDK proxy.
+// Package e2e provides an in-process integration test harness for the SDK Proxy.
 // Tests use the integration build tag and run via `make test-int`.
 package e2e
 

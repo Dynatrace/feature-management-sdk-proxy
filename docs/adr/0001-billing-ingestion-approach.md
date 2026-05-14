@@ -8,7 +8,7 @@
 
 ## Context and Problem Statement
 
-The SDK proxy is a caching layer: one upstream GET to the Cloudflare flagd config CDN can serve thousands of downstream SDK evaluation requests before the cache refreshes. Billing charges on downstream evaluations, but Cloudflare only sees the proxy's upstream requests, not the individual evaluations hidden behind the cache.
+The SDK Proxy is a caching layer: one upstream GET to the Cloudflare flagd config CDN can serve thousands of downstream SDK evaluation requests before the cache refreshes. Billing charges on downstream evaluations, but Cloudflare only sees the proxy's upstream requests, not the individual evaluations hidden behind the cache.
 
 The proxy's `internal/telemetry` package already accumulates per-SDK-key request counts. The open question is how those counts reach the billing system.
 
