@@ -108,7 +108,7 @@ The proxy shuts down gracefully on `SIGTERM` or `SIGINT`. In-flight requests are
 
 - In-flight requests complete before the proxy exits (`proxy.requests.total` count stops incrementing cleanly).
 - `proxy.sse.client.connections` drops to zero as SSE clients are disconnected.
-- Log line `"health: proxy is ready"` appears on the first successful `/ready` probe, confirming the proxy transitioned to ready.
+- Log line `"health: proxy is ready"` appears on the first successful `/readyz` probe, confirming the proxy transitioned to ready.
 
 **Exit codes:**
 - `0` — clean signal-driven shutdown. Expected behavior.
@@ -122,29 +122,29 @@ The proxy exposes three HTTP endpoints for Kubernetes liveness and readiness pro
 
 | Endpoint | Returns 200 when | Returns 503 when |
 |----------|-----------------|-----------------|
-| `GET /live` | Process is running | Never (liveness is always true) |
-| `GET /ready` | Proxy has a usable data source | Snapshot load is still in progress at startup |
-| `GET /health` | Same as `/ready` | Same as `/ready` |
+| `GET /livez` | Process is running | Never (liveness is always true) |
+| `GET /readyz` | Proxy has a usable data source | Snapshot load is still in progress at startup |
+| `GET /healthz` | Same as `/readyz` | Same as `/readyz` |
 
-The readiness check matters most during startup with snapshot persistence enabled: the proxy becomes ready after snapshots are loaded. Without persistence, `/ready` returns 200 as soon as the HTTP listener is up.
+The readiness check matters most during startup with snapshot persistence enabled: the proxy becomes ready after snapshots are loaded. Without persistence, `/readyz` returns 200 as soon as the HTTP listener is up.
 
 **Recommended Kubernetes probe configuration:**
 
 ```yaml
 livenessProbe:
   httpGet:
-    path: /live
+    path: /livez
     port: 8080
   initialDelaySeconds: 5
   periodSeconds: 10
 
 readinessProbe:
   httpGet:
-    path: /ready
+    path: /readyz
     port: 8080
   initialDelaySeconds: 2
   periodSeconds: 5
   failureThreshold: 3
 ```
 
-Do not route SDK traffic to a pod before `/ready` returns 200. An unready proxy may serve stale or empty responses.
+Do not route SDK traffic to a pod before `/readyz` returns 200. An unready proxy may serve stale or empty responses.

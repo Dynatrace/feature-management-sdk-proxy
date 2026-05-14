@@ -217,8 +217,9 @@ func New(t *testing.T, opts Options) (*Harness, error) {
 	probeHandlers := health.New(func() bool { return true }, logger)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/live", probeHandlers.Live)
-	mux.HandleFunc("/ready", probeHandlers.Ready)
+	mux.HandleFunc("/livez", probeHandlers.Live)
+	mux.HandleFunc("/readyz", probeHandlers.Ready)
+	mux.HandleFunc("/healthz", probeHandlers.Health)
 	mux.Handle(sse.HandlerPath, sseHandler)
 	mux.Handle(configHandlerPath, proxyHandler)
 	mux.HandleFunc("/", http.NotFound)

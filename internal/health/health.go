@@ -29,7 +29,7 @@ func New(ready ReadyFunc, logger *slog.Logger) *Handlers {
 	}
 }
 
-// Live handles GET /live. Returns 200 as long as the process is running.
+// Live handles GET /livez. Returns 200 as long as the process is running.
 func (h *Handlers) Live(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -38,7 +38,7 @@ func (h *Handlers) Live(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "ok")
 }
 
-// Ready handles GET /ready. Returns 200 when ReadyFunc reports true, 503 otherwise.
+// Ready handles GET /readyz. Returns 200 when ReadyFunc reports true, 503 otherwise.
 func (h *Handlers) Ready(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -52,8 +52,8 @@ func (h *Handlers) Ready(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "not ready", http.StatusServiceUnavailable)
 }
 
-// Health handles GET /health. Aggregates liveness and readiness: returns 200
-// only when both are healthy (liveness is always true, so this mirrors /ready).
+// Health handles GET /healthz. Aggregates liveness and readiness: returns 200
+// only when both are healthy (liveness is always true, so this mirrors /readyz).
 func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

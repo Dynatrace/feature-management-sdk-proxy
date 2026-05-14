@@ -60,11 +60,11 @@ containers:
             fieldPath: metadata.name
     livenessProbe:
       httpGet:
-        path: /live
+        path: /livez
         port: 8080
     readinessProbe:
       httpGet:
-        path: /ready
+        path: /readyz
         port: 8080
       initialDelaySeconds: 2
       periodSeconds: 5
@@ -123,9 +123,9 @@ See [docs/configuration.md](docs/configuration.md) for the full reference, inclu
 |---|---|
 | `GET /server/{sdk_key}.json` | Serve flagd config for an SDK key (cache hit or CDN fetch). |
 | `GET /sse` | SSE fan-out endpoint. SDK clients subscribe here for `refetchEvaluation` events. |
-| `GET /live` | Liveness probe — returns 200 while the process is running. |
-| `GET /ready` | Readiness probe — returns 200 when the proxy has a usable data source. |
-| `GET /health` | Health check — same semantics as `/ready`. |
+| `GET /livez` | Liveness probe — returns 200 while the process is running. |
+| `GET /readyz` | Readiness probe — returns 200 when the proxy has a usable data source. |
+| `GET /healthz` | Health check — same semantics as `/readyz`. |
 
 ## Documentation
 
