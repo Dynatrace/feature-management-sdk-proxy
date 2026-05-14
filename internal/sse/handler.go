@@ -34,10 +34,12 @@ type Subscriber interface {
 
 // Handler serves GET /sse. It authenticates the caller via the sdk_key query
 // parameter, gates on cache presence, and fans out upstream events to all
-// connected clients sharing the same SDK key.
+// connected clients sharing the same SDK key. When constructed with a nil
+// manager, disabled is set to true and all requests return 501 Not Implemented.
 type Handler struct {
 	cache             *cache.Cache
 	manager           Subscriber
+	disabled          bool
 	inst              *metrics.Instruments
 	counter           *telemetry.Counter
 	logger            *slog.Logger
@@ -55,6 +57,7 @@ func NewHandler(c *cache.Cache, m Subscriber, inst *metrics.Instruments, counter
 	return &Handler{
 		cache:             c,
 		manager:           m,
+		disabled:          m == nil,
 		inst:              inst,
 		counter:           counter,
 		logger:            logger,
@@ -74,6 +77,12 @@ func (h *Handler) SetTracer(t trace.Tracer) {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if h.disabled {
+		h.logger.Debug("sse: SSE disabled — rejecting client connection with 501")
+		http.Error(w, "SSE is disabled", http.StatusNotImplemented)
 		return
 	}
 
@@ -143,18 +152,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		attribute.String("sdk_key_public_id", keyID),
 	))
 
-	// When SSE is disabled (manager == nil), hold the connection open for
-	// heartbeats only — no upstream events will be forwarded. A nil channel
-	// in a select is permanently skipped, so the loop runs on heartbeat and
-	// context-cancel only.
-	var ch <-chan Event
-	if h.manager != nil {
-		var unsub func()
-		ch, unsub = h.manager.Subscribe(keyID)
-		defer unsub()
-	} else {
-		h.logger.Debug("sse: SSE disabled — holding connection for heartbeats only", slog.String("key", keyID))
-	}
+	ch, unsub := h.manager.Subscribe(keyID)
+	defer unsub()
 
 	h.logger.Debug("sse: client connected", slog.String("key", keyID))
 

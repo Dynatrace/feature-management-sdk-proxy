@@ -157,7 +157,7 @@ func New(t *testing.T, opts Options) (*Harness, error) {
 	}
 	var demandFetcher cache.Fetcher
 	if opts.EnableDemandRevalidation {
-		demandFetcher = proxy.NewFetcher(cdnMock.redirectingClient(), logger)
+		demandFetcher = proxy.NewFetcher(cdnMock.redirectingClient(), logger, 0)
 	}
 	proxyHandler, err := proxy.New(
 		"fm.test",
@@ -206,7 +206,7 @@ func New(t *testing.T, opts Options) (*Harness, error) {
 	}
 
 	// Use a dedicated 5s fetcher for background refresh (same reasoning as main.go).
-	refreshFetcher := proxy.NewFetcher(&http.Client{Timeout: 5 * time.Second}, logger)
+	refreshFetcher := proxy.NewFetcher(&http.Client{Timeout: 5 * time.Second}, logger, 0)
 	var refreshObservers []cache.RefreshObserver
 	refreshObservers = append(refreshObservers, sseManager)
 	if snapshotWriter != nil {
