@@ -37,6 +37,8 @@ The background CDN request has a **5-second timeout** — intentionally less tha
 
 A background refresh error is logged but never fails an SDK request. The stale entry stays in cache and continues to be served.
 
+When a background refresh fails with a network error or a non-evictable upstream status (429/5xx), the proxy also triggers an async snapshot-fallback check — but only when snapshot persistence is configured. This check reads the shared store for a newer entry written by a peer proxy. See [snapshot.md — Runtime Cross-Proxy Fallback](snapshot.md#runtime-cross-proxy-fallback).
+
 ## Demand Revalidation of Snapshot-Loaded Entries
 
 When the proxy starts from a snapshot, loaded entries may be hours old. The background `Refresher` eventually revalidates them, but that can take up to 10 minutes depending on SSE connection state. For the first SDK request after startup, serving potentially stale config without checking the CDN is the wrong trade-off.

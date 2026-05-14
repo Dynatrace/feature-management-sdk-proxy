@@ -104,6 +104,7 @@ func run() error {
 	// Build the store and load snapshots synchronously before starting the HTTP
 	// listener. The /ready probe returns true only after startup classification.
 	snapshotReady := false
+	var snapshotStore snapshot.Store
 	var snapshotWriter *snapshot.Writer
 	var snapshotLoaded int
 	var snapshotLoadErr error
@@ -121,6 +122,7 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("snapshot: %w", err)
 		}
+		snapshotStore = store
 		snapshotLoaded, snapshotWriter, snapshotLoadErr = initSnapshotWriter(ctx, store, flagCache, inst, logger, cfg.SnapshotWriteQueueSize,
 			slog.String("bucket", cfg.SnapshotS3Bucket),
 			slog.String("prefix", cfg.SnapshotS3Prefix),
@@ -130,6 +132,7 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("snapshot: %w", err)
 		}
+		snapshotStore = store
 		snapshotLoaded, snapshotWriter, snapshotLoadErr = initSnapshotWriter(ctx, store, flagCache, inst, logger, cfg.SnapshotWriteQueueSize,
 			slog.String("dir", cfg.SnapshotLocalDir),
 		)
@@ -277,6 +280,9 @@ func run() error {
 			snapshotWriter.OnInvalidated(keyID)
 		}
 	})
+	if snapshotStore != nil {
+		refresher.SetRefreshFailureObserver(snapshot.NewFallback(snapshotStore, flagCache, inst, logger))
+	}
 	go refresher.Run(ctx)
 
 	// Inactivity sweeper: evict cache entries (cache + SSE + snapshot) that have

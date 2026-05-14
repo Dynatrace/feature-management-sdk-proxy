@@ -31,6 +31,7 @@ const (
 	CacheRefreshEvictionsTotal      = "proxy.cache.refresh_evictions.total"
 	CacheRefreshPreservedStaleTotal = "proxy.cache.refresh_preserved_stale.total"
 	SnapshotDemandRevalidationTotal = "proxy.snapshot.demand_revalidation.total"
+	SnapshotOutageFallbackTotal     = "proxy.snapshot.outage_fallback.total"
 )
 
 // Instruments holds every OTel instrument the proxy emits. Obtain one via Register.
@@ -126,6 +127,11 @@ type Instruments struct {
 	// hit (not stale — no CDN call), not_modified (304), refreshed (200),
 	// evicted (4xx), preserved_stale (429/5xx), error (network).
 	SnapshotDemandRevalidationTotal metric.Int64Counter
+
+	// SnapshotOutageFallbackTotal counts async snapshot store reads triggered by
+	// background CDN refresh failures, labeled by result:
+	// loaded/no_newer/same_etag/debounced/backend_error/decode_error/superseded.
+	SnapshotOutageFallbackTotal metric.Int64Counter
 }
 
 // Register creates all metric instruments against meter. Call once at startup and
@@ -316,6 +322,14 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("metrics: register %s: %w", SnapshotDemandRevalidationTotal, err)
 	}
 
+	snapshotOutageFallback, err := meter.Int64Counter(SnapshotOutageFallbackTotal,
+		metric.WithDescription("Async snapshot store reads triggered by background CDN refresh failures, labeled by result (loaded/no_newer/same_etag/debounced/backend_error/decode_error/superseded)"),
+		metric.WithUnit("{check}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", SnapshotOutageFallbackTotal, err)
+	}
+
 	return &Instruments{
 		RequestsTotal:                   reqTotal,
 		SSEConnections:                  sseConns,
@@ -340,5 +354,6 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		CacheRefreshEvictionsTotal:      cacheRefreshEvictions,
 		CacheRefreshPreservedStaleTotal: cacheRefreshPreservedStale,
 		SnapshotDemandRevalidationTotal: snapshotDemandReval,
+		SnapshotOutageFallbackTotal:     snapshotOutageFallback,
 	}, nil
 }
