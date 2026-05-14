@@ -209,12 +209,13 @@ func run() error {
 		Timeout:   5 * time.Second,
 		Transport: tracing.NewTransport(nil, tracer),
 	}
-	refreshFetcher := proxy.NewFetcher(refreshClient, logger)
+	refreshFetcher := proxy.NewFetcher(refreshClient, logger, cfg.UpstreamMaxResponseBytes)
 
 	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, snapshotWriter, refreshFetcher, inst, counter, logger, tracer)
 	if err != nil {
 		return fmt.Errorf("proxy: %w", err)
 	}
+	proxyHandler.SetMaxResponseBytes(cfg.UpstreamMaxResponseBytes)
 	proxyHandler.SetEvictor(func(keyID string) {
 		if sseManager != nil {
 			sseManager.Close(keyID)

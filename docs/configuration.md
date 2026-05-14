@@ -213,6 +213,21 @@ Must be `0` (disabled) or a Go duration string of at least `1h` (e.g. `24h`, `72
 
 ---
 
+### `UPSTREAM_MAX_RESPONSE_BYTES`
+
+**Optional.** Default: `10485760` (10 MiB).
+
+Maximum number of bytes the proxy will read from a single upstream CDN response. If the response body exceeds this limit, the request is rejected with a `503` and the entry is not cached, preventing unbounded memory growth from a misbehaving or malicious upstream.
+
+```bash
+UPSTREAM_MAX_RESPONSE_BYTES=10485760   # 10 MiB (default)
+UPSTREAM_MAX_RESPONSE_BYTES=52428800   # 50 MiB
+```
+
+Must be a positive integer. Values below `1` are rejected at startup.
+
+---
+
 ### S3 Backend Variables
 
 Used when `SNAPSHOT_BACKEND=s3`.

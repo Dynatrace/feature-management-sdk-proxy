@@ -79,7 +79,10 @@ type Handler struct {
 	tracer           trace.Tracer
 	sfGroup          singleflight.Group
 	revalGroup       singleflight.Group
+	maxResponseBytes int64
 }
+
+const defaultMaxResponseBytes = 10 * 1024 * 1024 // 10 MiB
 
 // New constructs a Handler. cdnBaseDomain must be a bare hostname
 // (e.g. fm.dynatracelabs.com); the region and path are derived per request.
@@ -91,7 +94,7 @@ func New(cdnBaseDomain string, client *http.Client, c *cache.Cache, sseManager *
 	if cdnBaseDomain == "" || strings.Contains(cdnBaseDomain, "://") || strings.Contains(cdnBaseDomain, "/") {
 		return nil, fmt.Errorf("proxy: invalid CDN base domain %q: must be a bare hostname (e.g. fm.dynatracelabs.com)", cdnBaseDomain)
 	}
-	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, sseManager: sseManager, snapshotNotifier: snapshotNotifier, refreshFetcher: refreshFetcher, inst: inst, counter: counter, logger: logger, tracer: t}, nil
+	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, sseManager: sseManager, snapshotNotifier: snapshotNotifier, refreshFetcher: refreshFetcher, inst: inst, counter: counter, logger: logger, tracer: t, maxResponseBytes: defaultMaxResponseBytes}, nil
 }
 
 // SetEvictor wires a callback invoked after a cache entry is deleted due to a
@@ -99,6 +102,13 @@ func New(cdnBaseDomain string, client *http.Client, c *cache.Cache, sseManager *
 // SSE connection and delete the persisted snapshot for keyID.
 func (h *Handler) SetEvictor(evict func(keyID string)) {
 	h.evictor = evict
+}
+
+// SetMaxResponseBytes caps the body the proxy reads from the upstream CDN per
+// cold fetch. Bodies exceeding the limit are rejected with a 503 and not
+// cached. Must be called before the handler serves requests.
+func (h *Handler) SetMaxResponseBytes(n int64) {
+	h.maxResponseBytes = n
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -422,7 +432,7 @@ func (h *Handler) coldFetch(ctx context.Context, sdkKey, key, target string) col
 
 	span.SetAttributes(attribute.Int("upstream.status_code", resp.StatusCode))
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, h.maxResponseBytes+1))
 	if err != nil {
 		h.logger.Error("proxy: read upstream response failed", slog.String("error", err.Error()))
 		span.RecordError(err)
@@ -449,6 +459,14 @@ func (h *Handler) coldFetch(ctx context.Context, sdkKey, key, target string) col
 		return coldFetchResult{resultLabel: resultUpstreamError}
 
 	case resp.StatusCode == http.StatusOK:
+		if int64(len(body)) > h.maxResponseBytes {
+			h.logger.Warn("proxy: upstream response exceeds size limit",
+				slog.String("key", key),
+				slog.Int64("limit_bytes", h.maxResponseBytes),
+			)
+			span.SetAttributes(attribute.String("result", "upstream_error"))
+			return coldFetchResult{resultLabel: resultUpstreamError}
+		}
 		entry := cache.Entry{
 			Payload:   body,
 			ETag:      resp.Header.Get("ETag"),
@@ -488,13 +506,20 @@ func (h *Handler) coldFetch(ctx context.Context, sdkKey, key, target string) col
 // It uses its own http.Client so the background refresh timeout is independent
 // of the request-path client (5s vs 30s).
 type Fetcher struct {
-	client *http.Client
-	logger *slog.Logger
+	client           *http.Client
+	logger           *slog.Logger
+	maxResponseBytes int64
 }
 
 // NewFetcher constructs a Fetcher for use with cache.NewRefresherWithObservers.
-func NewFetcher(client *http.Client, logger *slog.Logger) *Fetcher {
-	return &Fetcher{client: client, logger: logger}
+// maxResponseBytes caps how much of the upstream response body is read; bodies
+// that exceed this limit produce an error and the stale cache entry is retained.
+// Pass 0 to use the default (10 MiB).
+func NewFetcher(client *http.Client, logger *slog.Logger, maxResponseBytes int64) *Fetcher {
+	if maxResponseBytes == 0 {
+		maxResponseBytes = defaultMaxResponseBytes
+	}
+	return &Fetcher{client: client, logger: logger, maxResponseBytes: maxResponseBytes}
 }
 
 // Fetch implements cache.Fetcher. It sends an If-None-Match revalidation
@@ -523,9 +548,12 @@ func (f *Fetcher) Fetch(ctx context.Context, _ string, fetchURL, etag string) (c
 		return cache.FetchResult{StatusCode: resp.StatusCode}, nil
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, f.maxResponseBytes+1))
 	if err != nil {
 		return cache.FetchResult{}, fmt.Errorf("proxy: read refresh response: %w", err)
+	}
+	if int64(len(body)) > f.maxResponseBytes {
+		return cache.FetchResult{}, fmt.Errorf("proxy: refresh response body exceeds %d-byte limit", f.maxResponseBytes)
 	}
 
 	return cache.FetchResult{

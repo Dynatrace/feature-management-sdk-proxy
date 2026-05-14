@@ -1228,7 +1228,7 @@ func TestFetcher_200_ReturnsEntry(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	f := NewFetcher(&http.Client{}, slog.Default())
+	f := NewFetcher(&http.Client{}, slog.Default(), 10*1024*1024)
 	result, err := f.Fetch(context.Background(), "keyhash", upstream.URL+"/config.json", "")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -1250,7 +1250,7 @@ func TestFetcher_304_ReturnsNotModified(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	f := NewFetcher(&http.Client{}, slog.Default())
+	f := NewFetcher(&http.Client{}, slog.Default(), 10*1024*1024)
 	result, err := f.Fetch(context.Background(), "keyhash", upstream.URL+"/config.json", `"v1"`)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -1271,7 +1271,7 @@ func TestFetcher_4xx_ReturnsStatusCode(t *testing.T) {
 			}))
 			defer upstream.Close()
 
-			f := NewFetcher(&http.Client{}, slog.Default())
+			f := NewFetcher(&http.Client{}, slog.Default(), 10*1024*1024)
 			result, err := f.Fetch(context.Background(), "keyhash", upstream.URL+"/config.json", "")
 			if err != nil {
 				t.Fatalf("status %d: expected no error, got %v", code, err)
@@ -1295,7 +1295,7 @@ func TestFetcher_5xx_ReturnsStatusCode(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	f := NewFetcher(&http.Client{}, slog.Default())
+	f := NewFetcher(&http.Client{}, slog.Default(), 10*1024*1024)
 	result, err := f.Fetch(context.Background(), "keyhash", upstream.URL+"/config.json", "")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -1658,5 +1658,57 @@ func TestHandler_DemandReval_ConcurrentRequests_OneUpstreamCall(t *testing.T) {
 	}
 	if f.callCount() != 1 {
 		t.Errorf("expected exactly 1 fetcher call across %d concurrent requests, got %d", n, f.callCount())
+	}
+}
+
+// --- LimitReader / max response size tests ---
+
+func TestHandler_ColdFetch_OversizeResponse_Returns503(t *testing.T) {
+	const limit = 100
+	oversized := strings.Repeat("x", limit+1)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"big"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, oversized)
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	h, err := New("fm.test", newRedirectingClient(upstream), c, nil, nil, nil, nil, nil, slog.Default(), testTracer)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	h.SetMaxResponseBytes(limit)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+
+	key := cache.PublicID(testSDKKey)
+	if _, ok := c.Get(key); ok {
+		t.Error("oversized response must not be stored in cache")
+	}
+}
+
+func TestFetcher_OversizeResponse_ReturnsError(t *testing.T) {
+	const limit = 50
+	oversized := strings.Repeat("y", limit+1)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"big"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, oversized)
+	}))
+	defer upstream.Close()
+
+	f := NewFetcher(&http.Client{Transport: newRedirectingClient(upstream).Transport}, slog.Default(), limit)
+	_, err := f.Fetch(context.Background(), "", upstream.URL+"/server/"+testSDKKey+".json", "")
+	if err == nil {
+		t.Error("expected error for oversized refresh response, got nil")
 	}
 }

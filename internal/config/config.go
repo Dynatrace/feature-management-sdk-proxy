@@ -77,6 +77,12 @@ type Config struct {
 	// invalidation). Set to 0 to disable the sweeper entirely.
 	// Env: CACHE_INACTIVITY_EVICT_AFTER, default 48h.
 	CacheInactivityEvictAfter time.Duration
+
+	// UpstreamMaxResponseBytes caps the body the proxy reads from the upstream
+	// CDN. A response that exceeds this limit is rejected with a 502 and never
+	// cached, preventing unbounded memory growth from a misbehaving upstream.
+	// Env: UPSTREAM_MAX_RESPONSE_BYTES, default 10485760 (10 MiB).
+	UpstreamMaxResponseBytes int64
 }
 
 // LogValue implements slog.LogValuer. Secrets emit [REDACTED] automatically
@@ -104,6 +110,7 @@ func (c Config) LogValue() slog.Value {
 		slog.Int("snapshot_write_queue_size", c.SnapshotWriteQueueSize),
 		slog.Duration("snapshot_max_age", c.SnapshotMaxAge),
 		slog.Duration("cache_inactivity_evict_after", c.CacheInactivityEvictAfter),
+		slog.Int64("upstream_max_response_bytes", c.UpstreamMaxResponseBytes),
 	}
 	if c.SnapshotBackend == snapshotBackendS3 {
 		attrs = append(attrs,
@@ -141,6 +148,7 @@ func FromEnv() (Config, error) {
 		SnapshotWriteQueueSize:    256,
 		SnapshotMaxAge:            24 * time.Hour,
 		CacheInactivityEvictAfter: 48 * time.Hour,
+		UpstreamMaxResponseBytes:  10 * 1024 * 1024,
 	}
 
 	if v := os.Getenv("PORT"); v != "" {
@@ -289,6 +297,14 @@ func FromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("invalid CACHE_INACTIVITY_EVICT_AFTER %q: minimum non-zero value is 1h (sweeper runs hourly); use 0 to disable", v)
 		}
 		cfg.CacheInactivityEvictAfter = d
+	}
+
+	if v := os.Getenv("UPSTREAM_MAX_RESPONSE_BYTES"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 1 {
+			return Config{}, fmt.Errorf("invalid UPSTREAM_MAX_RESPONSE_BYTES %q: must be a positive integer (bytes)", v)
+		}
+		cfg.UpstreamMaxResponseBytes = n
 	}
 
 	return cfg, nil
