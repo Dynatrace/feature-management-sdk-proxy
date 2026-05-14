@@ -216,6 +216,7 @@ func run() error {
 		return fmt.Errorf("proxy: %w", err)
 	}
 	proxyHandler.SetMaxResponseBytes(cfg.UpstreamMaxResponseBytes)
+	proxyHandler.SetRewriteSSEURLs(!cfg.SSEDisabled)
 	proxyHandler.SetEvictor(func(keyID string) {
 		if sseManager != nil {
 			sseManager.Close(keyID)

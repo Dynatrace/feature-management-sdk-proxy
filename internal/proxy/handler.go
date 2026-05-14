@@ -82,6 +82,7 @@ type Handler struct {
 	sfGroup          singleflight.Group
 	revalGroup       singleflight.Group
 	maxResponseBytes int64
+	rewriteSSEURLs   bool
 }
 
 const defaultMaxResponseBytes = 10 * 1024 * 1024 // 10 MiB
@@ -96,7 +97,7 @@ func New(cdnBaseDomain string, client *http.Client, c *cache.Cache, sseManager *
 	if cdnBaseDomain == "" || strings.Contains(cdnBaseDomain, "://") || strings.Contains(cdnBaseDomain, "/") {
 		return nil, fmt.Errorf("proxy: invalid CDN base domain %q: must be a bare hostname (e.g. fm.dynatracelabs.com)", cdnBaseDomain)
 	}
-	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, sseManager: sseManager, snapshotNotifier: snapshotNotifier, refreshFetcher: refreshFetcher, inst: inst, counter: counter, logger: logger, tracer: t, maxResponseBytes: defaultMaxResponseBytes}, nil
+	return &Handler{cdnBaseDomain: cdnBaseDomain, client: client, cache: c, sseManager: sseManager, snapshotNotifier: snapshotNotifier, refreshFetcher: refreshFetcher, inst: inst, counter: counter, logger: logger, tracer: t, maxResponseBytes: defaultMaxResponseBytes, rewriteSSEURLs: true}, nil
 }
 
 // SetEvictor wires a callback invoked after a cache entry is deleted due to a
@@ -111,6 +112,14 @@ func (h *Handler) SetEvictor(evict func(keyID string)) {
 // cached. Must be called before the handler serves requests.
 func (h *Handler) SetMaxResponseBytes(n int64) {
 	h.maxResponseBytes = n
+}
+
+// SetRewriteSSEURLs controls whether the SSE endpoint URL in the flagd config
+// payload is rewritten to point at this proxy on every GET response. Set to
+// false when SSE_DISABLED=true so SDK clients receive the upstream URL verbatim
+// (or no URL at all) rather than connecting to a non-functional /sse endpoint.
+func (h *Handler) SetRewriteSSEURLs(enabled bool) {
+	h.rewriteSSEURLs = enabled
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -242,8 +251,14 @@ func (h *Handler) serveFromCache(ctx context.Context, w http.ResponseWriter, r *
 	if r.Method == http.MethodHead {
 		return resultHit
 	}
-	payload, rewriteResult := sse.RewriteSSEURL(entry.Payload, h.proxySSEURL(r, key))
-	h.recordRewriteResult(rewriteResult, key)
+	var payload []byte
+	if h.rewriteSSEURLs {
+		var rewriteResult sse.RewriteResult
+		payload, rewriteResult = sse.RewriteSSEURL(entry.Payload, h.proxySSEURL(r, key))
+		h.recordRewriteResult(rewriteResult, key)
+	} else {
+		payload = entry.Payload
+	}
 	_, _ = w.Write(payload)
 	return resultHit
 }

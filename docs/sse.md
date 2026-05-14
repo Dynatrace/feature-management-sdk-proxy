@@ -10,10 +10,11 @@ SDK clients connect to `GET /sse?stream_id={stream_id}`. The `stream_id` is the 
 
 **Prerequisites before a connection is accepted:**
 
-1. `stream_id` must be present and a valid SDK key public identifier (`^dt[0-9]{2}\.(web|mobile|server)_[a-z]{2}_[a-zA-Z0-9]{10}$`). Invalid format returns 400.
-2. A flagd config entry for that `stream_id` must already be cached. If the config has not been fetched yet, the handler returns **412 Precondition Failed** with a message directing the client to fetch `/server/{sdk_key}.json` first.
+1. `SSE_DISABLED` must not be `true`. When SSE is disabled, the handler returns **501 Not Implemented** before any other validation. SDK clients must not retry; they should rely exclusively on polling.
+2. `stream_id` must be present and a valid SDK key public identifier (`^dt[0-9]{2}\.(web|mobile|server)_[a-z]{2}_[a-zA-Z0-9]{10}$`). Invalid format returns 400.
+3. A flagd config entry for that `stream_id` must already be cached. If the config has not been fetched yet, the handler returns **412 Precondition Failed** with a message directing the client to fetch `/server/{sdk_key}.json` first.
 
-Only connections that pass both gates are accepted and counted toward billing.
+Only connections that pass all gates are accepted and counted toward billing.
 
 **Authentication:** No Authorization header is required or accepted. The `stream_id` query parameter is the only identifier needed: it encodes which SDK key's events the client wants without exposing the private key segment.
 
@@ -108,7 +109,9 @@ While the upstream read loop is actively receiving events (after the initial 200
 - **Streaming** → poll every 10 minutes (SSE covers change notifications)
 - **Not streaming** (backoff, reconnecting, never connected) → poll every 10 seconds
 
-This means a healthy SSE connection reduces background CDN load by 60x. During reconnect backoff or after `SSE_DISABLED=true`, the proxy falls back to aggressive polling so flag changes are still delivered promptly.
+This means a healthy SSE connection reduces background CDN load by 60x. During reconnect backoff, the proxy falls back to aggressive polling so flag changes are still delivered promptly.
+
+When `SSE_DISABLED=true`, `GET /sse` returns **501 Not Implemented** and the `eventStreamEndpoint` URL is not rewritten in the flagd config: SDK clients receive the upstream URL verbatim (or no URL if the upstream omits it). Clients must rely exclusively on polling; they must not connect to `/sse`.
 
 ### SSE URL Changes
 

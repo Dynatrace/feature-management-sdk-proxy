@@ -668,6 +668,40 @@ func TestHandler_HEAD_NoSSERewrite(t *testing.T) {
 	}
 }
 
+func TestHandler_SSEDisabled_NoRewrite(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be called on cache hit")
+	}))
+	defer upstream.Close()
+
+	c := cache.New()
+	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	c.Set(key, cache.Entry{
+		Payload:   []byte(testPayloadWithSSE),
+		ETag:      `"v1"`,
+		FetchedAt: time.Now(),
+		FetchURL:  "https://cdn.us.fm.test/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json",
+	})
+
+	h := newTestHandlerWithCache(t, upstream, c)
+	h.SetRewriteSSEURLs(false)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
+	req.Host = "proxy.example.com"
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if rec.Body.String() != testPayloadWithSSE {
+		t.Errorf("payload rewritten when rewriteSSEURLs=false:\ngot:  %q\nwant: %q", rec.Body.String(), testPayloadWithSSE)
+	}
+	if strings.Contains(rec.Body.String(), "proxy.example.com") {
+		t.Errorf("proxy host must not appear in response when rewriteSSEURLs=false: %q", rec.Body.String())
+	}
+}
+
 // --- derivedScheme tests ---
 
 func TestDerivedScheme_XForwardedProto(t *testing.T) {

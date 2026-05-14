@@ -444,3 +444,40 @@ func TestSSEHandler_Counter_NoIncrementOn412(t *testing.T) {
 		t.Errorf("412 (no cached config) must not increment counter, got %v", samples)
 	}
 }
+
+func TestHandler_SSEDisabled_Returns501(t *testing.T) {
+	// nil Subscriber signals SSE is disabled; config is cached so the 412 gate
+	// would pass if SSE were enabled — the 501 must fire before that check.
+	h, c := newTestHandlerWithCache(t, nil)
+	c.Set(cache.PublicID(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.PublicID(testSDKKey), nil)
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotImplemented {
+		t.Errorf("got %d, want 501 when SSE is disabled", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "SSE is disabled") {
+		t.Errorf("body %q: missing 'SSE is disabled'", rr.Body.String())
+	}
+}
+
+func TestSSEHandler_Counter_NoIncrementOn501(t *testing.T) {
+	counter := telemetry.NewCounter()
+	c := cache.New()
+	streamID := cache.PublicID(testSDKKey)
+	c.Set(streamID, cache.Entry{Payload: []byte(`{}`)})
+	h := NewHandler(c, nil, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+streamID, nil)
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotImplemented {
+		t.Fatalf("expected 501, got %d", rr.Code)
+	}
+	if samples := counter.Drain(); len(samples) != 0 {
+		t.Errorf("501 (SSE disabled) must not increment counter, got %v", samples)
+	}
+}
