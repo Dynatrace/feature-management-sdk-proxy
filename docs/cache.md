@@ -49,7 +49,7 @@ When the proxy starts from a snapshot, loaded entries may be hours old. The back
 |---|---|
 | **304 Not Modified** | Config confirmed valid; served from cache |
 | **200 OK** | Fresh config received; cache updated; snapshot written asynchronously |
-| **401 / 403 / 404 / 410** | Entry evicted; SSE connection closed; 503 returned to client (next request triggers a fresh CDN fetch) |
+| **401 / 403 / 404 / 410** | Entry evicted; SSE connection closed; upstream status code returned to client so providers can respond appropriately |
 | **429 / 5xx** | Stale entry preserved; served from cache |
 | **Network error** | Stale entry preserved; served from cache |
 
