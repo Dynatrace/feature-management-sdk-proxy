@@ -32,6 +32,7 @@ const (
 	resultUpstreamError = "upstream_error"
 	resultInternalError = "internal_error"
 	resultBadGateway    = "bad_gateway"
+	resultServerError   = "server_error"
 )
 
 // hopByHopHeaders must not be forwarded between proxy hops (RFC 7230 §6.1).
@@ -379,13 +380,13 @@ func (h *Handler) serveMiss(ctx context.Context, w http.ResponseWriter, r *http.
 	case resultMiss:
 		h.serveFromCache(ctx, w, r, *result.entry, sdkKey)
 		return resultMiss
-	case resultClientError:
+	case resultClientError, resultServerError:
 		copyHeader(w.Header(), result.headers)
 		w.WriteHeader(result.statusCode)
 		_, _ = w.Write(result.body)
-		return resultClientError
+		return result.resultLabel
 	case resultBadGateway:
-		http.Error(w, "upstream response too large", http.StatusBadGateway)
+		http.Error(w, "bad gateway", http.StatusBadGateway)
 		return resultBadGateway
 	case resultInternalError:
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -447,20 +448,23 @@ func (h *Handler) coldFetch(ctx context.Context, sdkKey, key, target string) col
 	switch {
 	case resp.StatusCode == http.StatusNotModified:
 		// Upstream returned 304 on a cold fetch (no If-None-Match was sent).
-		// This is unexpected; refuse to return nothing to the SDK.
+		// This is a bug in the upstream — refuse to return nothing to the SDK.
 		h.logger.Error("proxy: upstream returned 304 on cold fetch",
 			slog.String("key", key),
 		)
 		span.SetAttributes(attribute.String("result", "unexpected_304"))
-		return coldFetchResult{resultLabel: resultUpstreamError}
+		return coldFetchResult{resultLabel: resultBadGateway}
 
 	case resp.StatusCode >= 500:
 		h.logger.Warn("proxy: upstream server error",
 			slog.String("key", key),
 			slog.Int("upstream_status", resp.StatusCode),
 		)
-		span.SetAttributes(attribute.String("result", "upstream_error"))
-		return coldFetchResult{resultLabel: resultUpstreamError}
+		span.SetAttributes(attribute.String("result", resultServerError),
+			attribute.Int("upstream.status_code", resp.StatusCode))
+		headers := make(http.Header)
+		copyHeader(headers, resp.Header)
+		return coldFetchResult{resultLabel: resultServerError, statusCode: resp.StatusCode, headers: headers, body: body}
 
 	case resp.StatusCode == http.StatusOK:
 		if int64(len(body)) > h.maxResponseBytes {

@@ -56,7 +56,7 @@ Every cache entry stores the CDN `ETag` alongside the payload. Background revali
 
 When a background TTL refresh fails (network error or 5xx from the CDN), the stale entry stays in cache and continues to be served. The proxy logs a warning and increments `proxy.requests.total{result="upstream_error"}`.
 
-Uncached keys during an outage return 503 Service Unavailable. The proxy never returns an empty body on a miss: an empty response is indistinguishable from a legitimately empty flag set and would silently disable all flags.
+The proxy never returns an empty body on a miss: an empty response is indistinguishable from a legitimately empty flag set and would silently disable all flags. For uncached keys the CDN's own 5xx status code is forwarded to the SDK client. When the CDN is unreachable entirely (network error), the proxy returns 503 Service Unavailable.
 
 When a background refresh fails with a network error or 429/5xx, the proxy also triggers an async snapshot-fallback check: it reads the shared store for a newer snapshot written by a peer proxy. This path is only active when snapshot persistence is configured. See [Runtime Cross-Proxy Fallback](snapshot.md#runtime-cross-proxy-fallback).
 

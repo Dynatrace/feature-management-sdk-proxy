@@ -148,6 +148,13 @@ When multiple SDK instances cold-start simultaneously, concurrent requests for t
 
 This eliminates the cold-start stampede: N×M upstream requests become 1×M, where M is the number of distinct SDK keys.
 
-## 503 on Uncached Miss During Outage
+## Error Responses on Uncached Miss
 
-When a request arrives for an SDK key with no cache entry and the upstream CDN is unreachable, the proxy returns **503**. It never returns an empty payload: an empty response is indistinguishable from a legitimately empty flag set and would disable all flags for connected SDKs.
+When a request arrives for an SDK key with no cache entry and the CDN cannot serve it, the proxy returns a non-empty error response. It never returns an empty payload: an empty response is indistinguishable from a legitimately empty flag set and would disable all flags for connected SDKs.
+
+| CDN outcome | Proxy response to SDK |
+|---|---|
+| CDN returns 5xx | CDN status code forwarded as-is (e.g. 500, 503, 504) |
+| CDN returns unexpected 304 | `502 Bad Gateway` (invalid upstream response) |
+| CDN response body too large | `502 Bad Gateway` |
+| CDN unreachable (network error) | `503 Service Unavailable` |

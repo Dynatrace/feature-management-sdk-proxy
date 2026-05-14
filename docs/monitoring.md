@@ -19,7 +19,7 @@ The proxy's primary job is serving flagd config from its in-memory cache. On a c
 | `proxy.requests.total{result="client_error"}` | Near zero | Malformed requests reaching the proxy |
 | `proxy.cache.size` | Stable, proportional to active SDK keys | Sudden drops indicate unexpected evictions |
 
-**CDN outage behavior:** When the CDN is unreachable, the proxy continues serving cached configs. Requests for uncached keys return `503`: an empty response would be indistinguishable from a legitimately empty flag set and could silently disable all flags.
+**CDN outage behavior:** When the CDN is unreachable, the proxy continues serving cached configs. Requests for uncached keys receive a non-empty error response: the CDN's own 5xx code is forwarded when available, or `503` when the CDN is entirely unreachable. An empty response would be indistinguishable from a legitimately empty flag set and could silently disable all flags.
 
 ---
 

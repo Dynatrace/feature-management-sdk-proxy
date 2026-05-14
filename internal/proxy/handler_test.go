@@ -136,8 +136,9 @@ func TestHandler_CacheMiss_PathForwardedToUpstream(t *testing.T) {
 	}
 }
 
-func TestHandler_CacheMiss_Upstream304_Returns503(t *testing.T) {
-	// A 304 on a cold fetch is unexpected and must not return empty config to the SDK.
+func TestHandler_CacheMiss_Upstream304_Returns502(t *testing.T) {
+	// A 304 on a cold fetch is a CDN bug — must not return empty config to the SDK.
+	// 502 Bad Gateway because the proxy received an invalid response from upstream.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotModified)
 	}))
@@ -148,12 +149,13 @@ func TestHandler_CacheMiss_Upstream304_Returns503(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503, got %d", rec.Code)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", rec.Code)
 	}
 }
 
-func TestHandler_CacheMiss_UpstreamServerError_Returns503(t *testing.T) {
+func TestHandler_CacheMiss_UpstreamServerError_PassedThrough(t *testing.T) {
+	// CDN 5xx codes are forwarded to the SDK client on a cold fetch.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -164,8 +166,8 @@ func TestHandler_CacheMiss_UpstreamServerError_Returns503(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503, got %d", rec.Code)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 (CDN code forwarded), got %d", rec.Code)
 	}
 }
 
@@ -885,8 +887,8 @@ func TestHandler_Counter_IncrementOnUpstreamError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503, got %d", rec.Code)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 (CDN code forwarded), got %d", rec.Code)
 	}
 	samples := counter.Drain()
 	if len(samples) != 1 || samples[0].Count != 1 {
@@ -1163,8 +1165,8 @@ func TestHandler_ColdMiss_Singleflight_ErrorShared(t *testing.T) {
 	wg.Wait()
 
 	for i, rec := range responses {
-		if rec.Code != http.StatusServiceUnavailable {
-			t.Errorf("response[%d]: expected 503, got %d", i, rec.Code)
+		if rec.Code != http.StatusInternalServerError {
+			t.Errorf("response[%d]: expected 500 (CDN code forwarded), got %d", i, rec.Code)
 		}
 	}
 }
