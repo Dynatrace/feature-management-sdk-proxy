@@ -1,5 +1,7 @@
 //go:build integration
 
+// docs: docs/operations.md — Usage Reporting (failure conditions, shutdown flush)
+
 package e2e
 
 import (

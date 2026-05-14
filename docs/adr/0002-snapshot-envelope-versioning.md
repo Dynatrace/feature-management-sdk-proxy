@@ -23,19 +23,19 @@ The snapshot persistence feature serializes cache entries (flagd config payload 
 
 ## Considered Options
 
-### Option A — Integer version field in the JSON envelope
+### Option A: Integer version field in the JSON envelope
 
-A `snapshot_version` integer field is embedded in the envelope JSON alongside the payload, ETag, and timestamp. The initial value is `1`. Readers that encounter a version number higher than they understand skip the object, log a structured warning, and increment a metric — they never fail startup.
+A `snapshot_version` integer field is embedded in the envelope JSON alongside the payload, ETag, and timestamp. The initial value is `1`. Readers that encounter a version number higher than they understand skip the object, log a structured warning, and increment a metric; they never fail startup.
 
 **Forward-compat rule:** unknown fields in a known version are ignored (standard `encoding/json` behaviour). An unknown version number is treated as unreadable.
 
-### Option B — Semantic version string (e.g. `"1.0.0"`)
+### Option B: Semantic version string (e.g. `"1.0.0"`)
 
 A `snapshot_version` string field follows semver conventions. Readers parse major/minor/patch and apply a compatibility matrix (same major → compatible; higher major → skip).
 
 **Rejected:** semver introduces a compatibility matrix with no practical benefit. The proxy has one writer and one reader (itself). Minor and patch increments carry no semantics here. Integer comparison is unambiguous and requires no parsing.
 
-### Option C — No version field; rely on JSON forward-compatibility
+### Option C: No version field; rely on JSON forward-compatibility
 
 Omit a version field. New envelope fields are added with `omitempty`; old readers ignore unknown fields.
 
@@ -45,7 +45,7 @@ Omit a version field. New envelope fields are added with `omitempty`; old reader
 
 ## Decision
 
-**Option A — integer `snapshot_version` embedded in the envelope JSON.**
+**Option A: integer `snapshot_version` embedded in the envelope JSON.**
 
 - Field name: `snapshot_version` (snake_case, consistent with `schema_version` in `internal/telemetry`).
 - Initial value: `1`.

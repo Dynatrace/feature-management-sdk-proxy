@@ -1,6 +1,6 @@
 //go:build integration
 
-// docs: docs/monitoring.md — Startup, Health Probes; docs/snapshot.md — Startup Behavior
+// docs: docs/monitoring.md — Startup, Health Probes; docs/snapshot.md — Startup Behavior; docs/operations.md — Failure Conditions
 
 package e2e
 

@@ -1,6 +1,8 @@
 # Snapshot Persistence
 
-Without persistence, every proxy restart starts cold: the first request for each SDK key triggers a CDN fetch before the cache is warm. With persistence enabled, the proxy saves its cache to durable storage and loads it back on startup — so it can serve requests immediately, even before the upstream CDN is reachable.
+> See also: [operations.md](operations.md) for a narrative walkthrough of snapshot startup paths and failure behavior.
+
+Without persistence, every proxy restart starts cold: the first request for each SDK key triggers a CDN fetch before the cache is warm. With persistence enabled, the proxy saves its cache to durable storage and loads it back on startup, allowing it to serve requests immediately even when the upstream CDN is unreachable.
 
 ## Why Use It
 
@@ -29,7 +31,7 @@ At startup, the proxy classifies itself into one of five paths. The `proxy.start
 | `snapshot` | Backend configured, fresh snapshots present | Loads snapshots into cache; serves immediately. On the first SDK request for each key, if the entry is older than the refresh interval, it is confirmed valid or refreshed against the CDN before responding (see [Demand Revalidation](cache.md#demand-revalidation-of-snapshot-loaded-entries)). |
 | `snapshot_stale` | Backend configured, snapshots older than `SNAPSHOT_MAX_AGE` | Loads stale snapshots. On the first SDK request for each key, the config is confirmed or updated against the CDN before the response is served. |
 | `empty_persistence_cold` | Backend configured and reachable, store is empty | Starts cold; warms cache from upstream on first request per key; snapshots are written normally after each fetch |
-| `backend_unreachable` | Backend configured but unreachable | Exits with code 1. The backend must be reachable before the proxy can start — check connectivity and credentials. |
+| `backend_unreachable` | Backend configured but unreachable | Exits with code 1. The backend must be reachable before the proxy can start; check connectivity and credentials. |
 
 > ⚠️ The `backend_unreachable` path exits with code 1 when the backend itself cannot be reached. An empty but reachable store is now handled gracefully via `empty_persistence_cold`.
 
@@ -60,10 +62,10 @@ SNAPSHOT_MAX_AGE=24h   # snapshots older than this are considered stale at start
 
 Snapshots are deleted in two cases:
 
-- **Lifecycle invalidation** — a `tokenRotated`, `stageDeleted`, or `projectDeleted` event arrives via the upstream SSE lifecycle stream for a key.
-- **Inactivity eviction** — the inactivity sweeper determines that a key has had no HTTP access and no active SSE subscribers for longer than `CACHE_INACTIVITY_EVICT_AFTER` (default 48h). See [cache.md](cache.md) for details.
+- **Lifecycle invalidation:** a `tokenRotated`, `stageDeleted`, or `projectDeleted` event arrives via the upstream SSE lifecycle stream for a key.
+- **Inactivity eviction:** the inactivity sweeper determines that a key has had no HTTP access and no active SSE subscribers for longer than `CACHE_INACTIVITY_EVICT_AFTER` (default 48h). See [cache.md](cache.md) for details.
 
-Both paths use the same delete operation: the in-memory cache entry is removed, the upstream SSE connection is closed, and the persisted snapshot is deleted. A subsequent request for the evicted key is treated as a cold miss — the proxy fetches fresh config from CDN and writes a new snapshot.
+Both paths use the same delete operation: the in-memory cache entry is removed, the upstream SSE connection is closed, and the persisted snapshot is deleted. A subsequent request for the evicted key is treated as a cold miss: the proxy fetches fresh config from CDN and writes a new snapshot.
 
 ## Write Behavior
 
@@ -75,7 +77,7 @@ If the write queue fills faster than the backend can drain it, excess writes are
 
 When multiple replicas share the same S3 backend:
 
-- Each replica writes independently. Writes are not coordinated — the last write for a key wins.
+- Each replica writes independently. Writes are not coordinated: the last write for a key wins.
 - Reads at startup are independent. Each replica loads the full set of stored snapshots.
 - There is no fencing or locking. A snapshot written by a replica running an older version may briefly coexist with a newer version's entry. The snapshot envelope format is versioned; unknown versions are skipped at load time with a `skipped_unknown_version` result on `proxy.snapshot.load.total`.
 
@@ -87,11 +89,11 @@ Snapshot reads are not limited to startup. When a background CDN refresh fails f
 
 **Key properties:**
 
-- The check is async — the CDN failure response path is never blocked.
+- The check is async: the CDN failure response path is never blocked.
 - Checks are debounced per key at 60-second intervals to limit S3 request rates during sustained outages.
 - A successful load updates `FetchedAt` to the snapshot's `captured_at` but does not write back to the store (only a proxy that independently verified with the CDN should write snapshots).
 - This path is only active when `SNAPSHOT_BACKEND` is set. Proxies without persistence are unaffected.
 
 **Known limitation:** if all proxies in a cluster lost CDN access before any of them wrote a newer snapshot, there is nothing newer in the store to fall back to. This is expected and acceptable.
 
-Metric: `proxy.snapshot.outage_fallback.total{result}` — see [telemetry.md](telemetry.md).
+Metric: `proxy.snapshot.outage_fallback.total{result}`. See [telemetry.md](telemetry.md).

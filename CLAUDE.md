@@ -122,7 +122,7 @@ These are load-bearing constraints — do not break them without an explicit des
 
 ### Startup Sequence
 
-Four paths: `cold` (no backend), `snapshot` (fresh), `snapshot_stale` (age > `SNAPSHOT_MAX_AGE`), `empty_persistence` (backend + no snapshots → **Exit 1**). Defined in `internal/snapshot`. See [`docs/snapshot.md`](docs/snapshot.md).
+Five paths: `cold` (no backend), `snapshot` (fresh), `snapshot_stale` (age > `SNAPSHOT_MAX_AGE`), `empty_persistence_cold` (backend reachable + no snapshots → starts cold), `backend_unreachable` (backend configured but unreachable → **Exit 1**). Defined in `internal/snapshot`. See [`docs/snapshot.md`](docs/snapshot.md).
 
 ### Lifecycle Event Invalidation
 

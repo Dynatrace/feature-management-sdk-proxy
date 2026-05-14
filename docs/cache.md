@@ -4,7 +4,7 @@ The proxy caches flagd config payloads in memory, keyed by the SDK key's public 
 
 ## Cache Key
 
-The cache is keyed by `cache.PublicID(sdk_key)` — the first two dot-segments of the SDK key: `{token}.{platform}_{geo}_{publicRandom}` (e.g. `dt01.server_us_ab3xy9kp2q`). The private segment (`{secret}_{sha1}`) is stripped and must never appear in files, logs, metric labels, or object storage. The raw SDK key is retained in memory only; it is needed for upstream request authentication.
+The cache is keyed by `cache.PublicID(sdk_key)`, i.e. the first two dot-segments of the SDK key: `{token}.{platform}_{geo}_{publicRandom}` (e.g. `dt01.server_us_ab3xy9kp2q`). The private segment (`{secret}_{sha1}`) is stripped and must never appear in files, logs, metric labels, or object storage. The raw SDK key is retained in memory only; it is needed for upstream request authentication.
 
 **Canonical redaction rule:** split on `.`, drop the last segment, rejoin on `.`. `cache.PublicID(sdkKey)` implements this rule.
 
@@ -13,10 +13,10 @@ The cache is keyed by `cache.PublicID(sdk_key)` — the first two dot-segments o
 
 Each entry holds:
 
-- **Payload** — the raw flagd config JSON bytes, treated as opaque
-- **ETag** — the upstream CDN ETag, used for conditional revalidation
-- **FetchedAt** — the timestamp used to determine staleness
-- **FetchURL** — the full upstream URL, retained in memory for background refresh
+- **Payload:** the raw flagd config JSON bytes, treated as opaque
+- **ETag:** the upstream CDN ETag, used for conditional revalidation
+- **FetchedAt:** the timestamp used to determine staleness
+- **FetchURL:** the full upstream URL, retained in memory for background refresh
 
 ## TTL and Revalidation
 
@@ -30,14 +30,14 @@ The background `Refresher` revalidates stale entries using `If-None-Match`. The 
 
 The `Refresher` ticks at 10 seconds (the shortest interval) and evaluates per-key staleness against the interval returned by `Manager.RefreshInterval`. This means a connected key won't be fetched more than once per 10 minutes even though the ticker fires every 10 seconds.
 
-The background CDN request has a **5-second timeout** — intentionally less than the minimum poll interval to prevent request overlap.
+The background CDN request has a **5-second timeout**, intentionally less than the minimum poll interval to prevent request overlap.
 
 - A **304** response resets `FetchedAt` without changing the payload or writing a snapshot.
 - A **200** response replaces the entry and triggers both snapshot persistence (if configured) and SSE URL change detection.
 
 A background refresh error is logged but never fails an SDK request. The stale entry stays in cache and continues to be served.
 
-When a background refresh fails with a network error or a non-evictable upstream status (429/5xx), the proxy also triggers an async snapshot-fallback check — but only when snapshot persistence is configured. This check reads the shared store for a newer entry written by a peer proxy. See [snapshot.md — Runtime Cross-Proxy Fallback](snapshot.md#runtime-cross-proxy-fallback).
+When a background refresh fails with a network error or a non-evictable upstream status (429/5xx), the proxy also triggers an async snapshot-fallback check, but only when snapshot persistence is configured. This check reads the shared store for a newer entry written by a peer proxy. See [Runtime Cross-Proxy Fallback](snapshot.md#runtime-cross-proxy-fallback).
 
 ## Demand Revalidation of Snapshot-Loaded Entries
 
@@ -63,7 +63,7 @@ Concurrent requests for the same stale snapshot-loaded key share a single CDN ca
 
 Demand revalidation fires once per snapshot-loaded entry after startup. Once confirmed or refreshed, the background `Refresher` handles normal TTL maintenance going forward.
 
-Metric: `proxy.snapshot.demand_revalidation.total{result}` — see [telemetry.md](telemetry.md).
+Metric: `proxy.snapshot.demand_revalidation.total{result}`. See [telemetry.md](telemetry.md).
 
 ## 4xx Eviction Policy
 
@@ -75,7 +75,7 @@ When the background refresher receives a 4xx response from the upstream CDN, the
 | `403 Forbidden` | Credentials revoked | Evict entry, close upstream SSE connection, delete snapshot |
 | `404 Not Found` | Flag set deleted | Evict entry, close upstream SSE connection, delete snapshot |
 | `410 Gone` | Flag set permanently deleted | Evict entry, close upstream SSE connection, delete snapshot |
-| `429 Too Many Requests` | Rate-limited | Preserve stale entry — evicting on rate-limit would amplify outages via cold-miss stampedes |
+| `429 Too Many Requests` | Rate-limited | Preserve stale entry: evicting on rate-limit would amplify outages via cold-miss stampedes |
 | All other 4xx | Unexpected client error | Preserve stale entry |
 
 Eviction is immediate and unconditional once the status code matches. The eviction is identical in effect to a lifecycle `tokenRotated` or `stageDeleted` event: the cache entry, upstream SSE connection, and persisted snapshot are all removed. The next SDK request for that key triggers a fresh CDN cold-miss fetch.
@@ -84,9 +84,9 @@ Metric: `proxy.cache.refresh_evictions_total{status_code="404"}` (see [telemetry
 
 ## Inactivity Eviction
 
-Long-running proxy instances can accumulate cache entries for SDK keys that are no longer in use — keys whose projects were deleted, tokens rotated, or clients disconnected without lifecycle events reaching the proxy. The background `Refresher` polls all cached keys unconditionally, so this builds up unnecessary CDN traffic over time.
+Long-running proxy instances can accumulate cache entries for SDK keys that are no longer in use, including those whose projects were deleted, tokens rotated, or clients disconnected without lifecycle events reaching the proxy. The background `Refresher` polls all cached keys unconditionally, so this builds up unnecessary CDN traffic over time.
 
-The inactivity sweeper is the fix. It runs on a 1-hour tick and evicts entries that have not been accessed for longer than `CACHE_INACTIVITY_EVICT_AFTER` (default 48h). Eviction is a full GC: the cache entry, the upstream SSE connection, and the persisted snapshot are all removed — the same operations as a lifecycle `tokenRotated` or `stageDeleted` event.
+The inactivity sweeper is the fix. It runs on a 1-hour tick and evicts entries that have not been accessed for longer than `CACHE_INACTIVITY_EVICT_AFTER` (default 48h). Eviction is a full GC: the cache entry, the upstream SSE connection, and the persisted snapshot are all removed, the same operations as a lifecycle `tokenRotated` or `stageDeleted` event.
 
 ### Liveness signal
 
@@ -108,11 +108,11 @@ There is a narrow window between the sweeper's liveness check and the atomic `De
 |---|---|---|
 | `CACHE_INACTIVITY_EVICT_AFTER` | `48h` | Idle window before eviction. Set to `0` to disable the sweeper entirely. |
 
-Setting `CACHE_INACTIVITY_EVICT_AFTER=0` disables the sweeper — no goroutine is started.
+Setting `CACHE_INACTIVITY_EVICT_AFTER=0` disables the sweeper; no goroutine is started.
 
 ## Config Passthrough and Token Auth
 
-The proxy applies **token passthrough** — every upstream request to the CDN uses the SDK token from the originating request. The proxy holds no separate CDN credential.
+The proxy applies **token passthrough**: every upstream request to the CDN uses the SDK token from the originating request. The proxy holds no separate CDN credential.
 
 The flagd config JSON payload is never parsed or modified except for one targeted operation: rewriting the SSE URL (see below). All other bytes pass through unchanged.
 
@@ -134,7 +134,7 @@ When the upstream URL is not found as a literal byte sequence, a structured warn
 
 ### Proxy SSE URL Construction
 
-The rewritten URL is derived from the incoming HTTP request — no static `PROXY_PUBLIC_URL` configuration is needed:
+The rewritten URL is derived from the incoming HTTP request; no static `PROXY_PUBLIC_URL` configuration is needed:
 
 ```
 {derived-scheme}://{r.Host}/sse?sdk_key={url-encoded-sdk-key}
@@ -150,4 +150,4 @@ This eliminates the cold-start stampede: N×M upstream requests become 1×M, whe
 
 ## 503 on Uncached Miss During Outage
 
-When a request arrives for an SDK key with no cache entry and the upstream CDN is unreachable, the proxy returns **503**. It never returns an empty payload — an empty response is indistinguishable from a legitimately empty flag set and would disable all flags for connected SDKs.
+When a request arrives for an SDK key with no cache entry and the upstream CDN is unreachable, the proxy returns **503**. It never returns an empty payload: an empty response is indistinguishable from a legitimately empty flag set and would disable all flags for connected SDKs.

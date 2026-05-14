@@ -1,6 +1,6 @@
 # Telemetry
 
-The proxy emits [OpenTelemetry](https://opentelemetry.io/) metrics and distributed traces via OTLP/HTTP. When no exporter is configured, both are sent to a no-op provider and discarded — the proxy runs without an OTel collector.
+The proxy emits [OpenTelemetry](https://opentelemetry.io/) metrics and distributed traces via OTLP/HTTP. When no exporter is configured, both are sent to a no-op provider and discarded; the proxy runs without an OTel collector.
 
 ## Configuring the Exporter
 
@@ -35,7 +35,7 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable export. Metrics push every **30 seco
 | `proxy.cache.inactivity_evictions.total` | Counter | `{entry}` | — | Cache entries evicted by the inactivity sweeper (idle for longer than `CACHE_INACTIVITY_EVICT_AFTER`) |
 | `proxy.cache.refresh_evictions.total` | Counter | `{entry}` | `status_code` | Cache entries evicted during background refresh due to a 4xx response from upstream. `status_code`: `401`, `403`, `404`, `410` |
 | `proxy.cache.refresh_preserved_stale.total` | Counter | `{response}` | `status_code` | Background refresh non-200/non-304 responses that preserved the stale entry (429 or 5xx). Enables alerting on sustained upstream errors without eviction. |
-| `proxy.snapshot.demand_revalidation.total` | Counter | `{revalidation}` | `result` | Demand revalidations of snapshot-loaded entries triggered on the first stale hit. `result`: `hit` (fresh — no CDN call), `not_modified` (304), `refreshed` (200), `evicted` (4xx), `preserved_stale` (429/5xx), `error` (network). See [cache.md](cache.md#demand-revalidation-of-snapshot-loaded-entries). |
+| `proxy.snapshot.demand_revalidation.total` | Counter | `{revalidation}` | `result` | Demand revalidations of snapshot-loaded entries triggered on the first stale hit. `result`: `hit` (fresh, no CDN call), `not_modified` (304), `refreshed` (200), `evicted` (4xx), `preserved_stale` (429/5xx), `error` (network). See [cache.md](cache.md#demand-revalidation-of-snapshot-loaded-entries). |
 | `proxy.snapshot.outage_fallback.total` | Counter | `{check}` | `result` | Async snapshot store reads triggered by background CDN refresh failures (network error or 429/5xx). Only emitted when `SNAPSHOT_BACKEND` is configured. `result`: `loaded` (newer snapshot applied), `no_newer` (snapshot not newer than current entry), `same_etag` (payload unchanged), `debounced` (suppressed by 60s per-key interval), `backend_error` (store read failed), `decode_error` (corrupt or unknown version envelope), `superseded` (concurrent refresh applied first). See [snapshot.md](snapshot.md#runtime-cross-proxy-fallback). |
 
 See [monitoring.md](monitoring.md) for guidance on interpreting these metrics by operator concern.
@@ -48,12 +48,12 @@ The proxy emits distributed traces via OTLP/HTTP (same `OTEL_EXPORTER_OTLP_ENDPO
 
 | Span name | Where | Key attributes |
 |-----------|-------|----------------|
-| `GET /server/{sdk_key}.json` | Proxy handler — every SDK config request (name follows OTel HTTP server semconv: `{method} {route}`) | `http.request.method`, `http.route`, `sdk_key_public_id`, `result` (`hit`, `miss`, `upstream_error`, `client_error`) |
-| `proxy.serve_cache_hit` | Serving a cached entry — child of `GET /server/` with a **Span Link** to the originating fetch when available | `sdk_key_public_id`, `result` |
-| `proxy.cold_fetch` | Upstream CDN fetch on a cache miss — child of `GET /server/` | `sdk_key_public_id`, `upstream.status_code`, `result` |
-| `GET` | CDN HTTP call — child of `proxy.cold_fetch` or `proxy.refresh_fetch`; `url.full` is intentionally omitted (URL contains raw SDK key) | `http.request.method`, `server.address`, `http.response.status_code` |
-| `proxy.refresh_fetch` | Background TTL revalidation fetch — standalone (not tied to any client request) | `sdk_key_public_id`, `if_none_match`, `result` |
-| `sse.upstream.connect` | One span per upstream SSE connect attempt — reconnects emit separate spans | `sdk_key_public_id`, `reconnect.reason`, `streaming` |
+| `GET /server/{sdk_key}.json` | Proxy handler: every SDK config request (name follows OTel HTTP server semconv: `{method} {route}`) | `http.request.method`, `http.route`, `sdk_key_public_id`, `result` (`hit`, `miss`, `upstream_error`, `client_error`) |
+| `proxy.serve_cache_hit` | Serving a cached entry, child of `GET /server/` with a **Span Link** to the originating fetch when available | `sdk_key_public_id`, `result` |
+| `proxy.cold_fetch` | Upstream CDN fetch on a cache miss, child of `GET /server/` | `sdk_key_public_id`, `upstream.status_code`, `result` |
+| `GET` | CDN HTTP call, child of `proxy.cold_fetch` or `proxy.refresh_fetch`; `url.full` is intentionally omitted (URL contains raw SDK key) | `http.request.method`, `server.address`, `http.response.status_code` |
+| `proxy.refresh_fetch` | Background TTL revalidation fetch, standalone (not tied to any client request) | `sdk_key_public_id`, `if_none_match`, `result` |
+| `sse.upstream.connect` | One span per upstream SSE connect attempt; reconnects emit separate spans | `sdk_key_public_id`, `reconnect.reason`, `streaming` |
 | `sse.client.subscribe` | SSE client connection setup phase (auth + cache gate + headers sent) | `sdk_key_public_id`, `outcome` (`200_connected`, `412_no_config`, `500_no_flusher`) |
 
 ### Span Link: cache hit → originating fetch

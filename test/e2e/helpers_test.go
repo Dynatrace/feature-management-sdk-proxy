@@ -1,5 +1,7 @@
 //go:build integration
 
+// Behavior tested here is documented in docs/operations.md — update that doc when adding or changing tests.
+
 package e2e
 
 import (

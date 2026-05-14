@@ -2,7 +2,7 @@
 
 This guide is organized by operator concern. Each section describes what normal behavior looks like, what to watch for, and which metrics to track. For the full metric reference, see [telemetry.md](telemetry.md).
 
-Configure your OTel exporter to collect metrics and traces — see [telemetry.md](telemetry.md) for setup.
+Configure your OTel exporter to collect metrics and traces. See [telemetry.md](telemetry.md) for setup.
 
 ---
 
@@ -14,12 +14,12 @@ The proxy's primary job is serving flagd config from its in-memory cache. On a c
 
 | Signal | Healthy | Investigate if |
 |--------|---------|----------------|
-| `proxy.requests.total{result="hit"}` rate | High relative to `miss` | Miss rate is consistently high — cache may be evicting or not warming |
+| `proxy.requests.total{result="hit"}` rate | High relative to `miss` | Miss rate is consistently high; cache may be evicting or not warming |
 | `proxy.requests.total{result="upstream_error"}` | Near zero | Sustained upstream errors indicate a CDN connectivity issue |
 | `proxy.requests.total{result="client_error"}` | Near zero | Malformed requests reaching the proxy |
 | `proxy.cache.size` | Stable, proportional to active SDK keys | Sudden drops indicate unexpected evictions |
 
-**CDN outage behavior:** When the CDN is unreachable, the proxy continues serving cached configs. Requests for uncached keys return `503` — an empty response would be indistinguishable from a legitimately empty flag set and could silently disable all flags.
+**CDN outage behavior:** When the CDN is unreachable, the proxy continues serving cached configs. Requests for uncached keys return `503`: an empty response would be indistinguishable from a legitimately empty flag set and could silently disable all flags.
 
 ---
 
@@ -31,12 +31,12 @@ The proxy maintains exactly one upstream SSE connection per SDK key, regardless 
 
 | Signal | Healthy | Investigate if |
 |--------|---------|----------------|
-| `proxy.sse.connections` | One per active SDK key | Exceeds number of distinct SDK keys — unexpected duplication |
+| `proxy.sse.connections` | One per active SDK key | Exceeds number of distinct SDK keys (unexpected duplication) |
 | `proxy.sse.client.connections` | Grows with connected SDK instances | Drops unexpectedly while traffic is steady |
 | `proxy.sse.upstream.reconnects` | Occasional `eof` or `inactivity` reconnects | Sustained high reconnect rate with `io_error` |
 | `proxy.sse.upstream.events{result="dropped_slow_subscriber"}` | Zero | Persistent drops indicate a slow client subscriber |
 
-**Connection lifecycle:** An upstream SSE connection is opened after a key's config is first cached. If a client subscribes before the config is cached, the request returns `412 Precondition Failed`. This is normal on cold start — the SDK retries automatically.
+**Connection lifecycle:** An upstream SSE connection is opened after a key's config is first cached. If a client subscribes before the config is cached, the request returns `412 Precondition Failed`. This is normal on cold start; the SDK retries automatically.
 
 ---
 
@@ -48,12 +48,12 @@ The proxy classifies each startup into one of five paths based on persistence co
 
 | Signal | Healthy | Investigate if |
 |--------|---------|----------------|
-| `proxy.startup.path{path="cold"}` | Expected when no persistence is configured | Unexpected cold starts in a fleet using persistence — check backend connectivity |
-| `proxy.startup.path{path="snapshot"}` | Expected in a steady-state fleet with persistence | Absent when persistence is configured — may indicate snapshot write failures |
+| `proxy.startup.path{path="cold"}` | Expected when no persistence is configured | Unexpected cold starts in a fleet using persistence; check backend connectivity |
+| `proxy.startup.path{path="snapshot"}` | Expected in a steady-state fleet with persistence | Absent when persistence is configured; may indicate snapshot write failures |
 | `proxy.startup.path{path="snapshot_stale"}` | Occasional during long outages | Frequent stale starts suggest `SNAPSHOT_MAX_AGE` may be too short or writes are failing |
-| `proxy.startup.path{path="empty_persistence_cold"}` | Expected on first deploy or after a store wipe when upstream is reachable | Recurring in a steady-state fleet — snapshots may not be persisting correctly |
-| `proxy.startup.path{path="backend_unreachable"}` | Should never occur in production | Backend is unreachable at startup — check connectivity and credentials |
-| `proxy.snapshot.load.total{result="loaded"}` | Increases proportionally to active SDK keys | Unexpectedly low — snapshot writes may be failing |
+| `proxy.startup.path{path="empty_persistence_cold"}` | Expected on first deploy or after a store wipe when upstream is reachable | Recurring in a steady-state fleet; snapshots may not be persisting correctly |
+| `proxy.startup.path{path="backend_unreachable"}` | Should never occur in production | Backend is unreachable at startup; check connectivity and credentials |
+| `proxy.snapshot.load.total{result="loaded"}` | Increases proportionally to active SDK keys | Unexpectedly low; snapshot writes may be failing |
 | `proxy.snapshot.load.total{result!="loaded"}` | Near zero | `skipped_corrupt` or `backend_error` results indicate storage issues |
 
 ---
@@ -86,7 +86,7 @@ The upstream SSE service emits lifecycle events when SDK keys are rotated or the
 | `stageDeleted` | Cache entry removed; upstream SSE connection closed |
 | `projectDeleted` | Cache entry removed; upstream SSE connection closed |
 
-After invalidation, the next SDK request for that key triggers a fresh CDN fetch. If the key was rotated, the SDK must be reconfigured with the new key — the proxy has no knowledge of the new key until an SDK instance requests it.
+After invalidation, the next SDK request for that key triggers a fresh CDN fetch. If the key was rotated, the SDK must be reconfigured with the new key; the proxy has no knowledge of the new key until an SDK instance requests it.
 
 **Key array cap:** Lifecycle events with more than `LIFECYCLE_KEYS_CAP` combined `sdkKeyHashes` + `sdkKeys` entries (default 10,000) are rejected as malformed (`result="malformed"`) before any hashing work is performed. This prevents a compromised upstream from triggering unbounded SHA-256 work on the SSE receive goroutine. See [`LIFECYCLE_KEYS_CAP`](configuration.md#lifecycle_keys_cap) in the configuration reference.
 
@@ -94,9 +94,9 @@ After invalidation, the next SDK request for that key triggers a fresh CDN fetch
 
 | Signal | Healthy | Investigate if |
 |--------|---------|----------------|
-| `proxy.lifecycle.events_total{result="handled"}` | Matches expected rotation/deletion activity | Low compared to known rotation events — lifecycle channel may be disconnected |
-| `proxy.lifecycle.events_total{result="malformed"}` | Zero | Non-zero — upstream is sending unrecognized or oversized events (see cap description above) |
-| `proxy.lifecycle.invalidated_keys_total` | Proportional to events handled | Zero when events are received — invalidation may be silently failing |
+| `proxy.lifecycle.events_total{result="handled"}` | Matches expected rotation/deletion activity | Low compared to known rotation events; lifecycle channel may be disconnected |
+| `proxy.lifecycle.events_total{result="malformed"}` | Zero | Non-zero: upstream is sending unrecognized or oversized events (see cap description above) |
+| `proxy.lifecycle.invalidated_keys_total` | Proportional to events handled | Zero when events are received; invalidation may be silently failing |
 
 ---
 
@@ -111,8 +111,8 @@ The proxy shuts down gracefully on `SIGTERM` or `SIGINT`. In-flight requests are
 - Log line `"health: proxy is ready"` appears on the first successful `/readyz` probe, confirming the proxy transitioned to ready.
 
 **Exit codes:**
-- `0` — clean signal-driven shutdown. Expected behavior.
-- `1` — startup failure or unexpected listener error. Investigate logs.
+- `0`: clean signal-driven shutdown. Expected behavior.
+- `1`: startup failure or unexpected listener error. Investigate logs.
 
 ---
 

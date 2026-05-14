@@ -1,6 +1,6 @@
 # ADR-0001: Billing Ingestion Approach
 
-**Status:** Proposed — pending platform team sync
+**Status:** Proposed, pending platform team sync
 **Date:** 2026-05-03
 **Deciders:** Michael Beemer, platform/flag management service team
 
@@ -8,7 +8,7 @@
 
 ## Context and Problem Statement
 
-The SDK proxy is a caching layer: one upstream GET to the Cloudflare flagd config CDN can serve thousands of downstream SDK evaluation requests before the cache refreshes. Billing charges on downstream evaluations, but Cloudflare only sees the proxy's upstream requests — not the individual evaluations hidden behind the cache.
+The SDK proxy is a caching layer: one upstream GET to the Cloudflare flagd config CDN can serve thousands of downstream SDK evaluation requests before the cache refreshes. Billing charges on downstream evaluations, but Cloudflare only sees the proxy's upstream requests, not the individual evaluations hidden behind the cache.
 
 The proxy's `internal/telemetry` package already accumulates per-SDK-key request counts. The open question is how those counts reach the billing system.
 
@@ -25,16 +25,16 @@ The proxy's `internal/telemetry` package already accumulates per-SDK-key request
 
 ## Considered Options
 
-### Option A — Worker on the CDN Route
+### Option A: Worker on the CDN Route
 
 Deploy a Cloudflare Worker in front of the existing flagd config CDN path. The proxy adds an `X-Downstream-Request-Count` header on every upstream GET (cache misses and TTL revalidations). The Worker reads the header and writes the count to Cloudflare Analytics Engine.
 
-Workers bound to a CDN route run on **every request, including edge-cached responses** — so the header is visible even when the CDN serves from cache without hitting origin.
+Workers bound to a CDN route run on **every request, including edge-cached responses**, so the header is visible even when the CDN serves from cache without hitting origin.
 
 **Pros:**
 - One transport, one auth surface (SDK token already on the upstream GET).
 - Eliminates the separate billing endpoint, flush goroutine, and retry buffer entirely.
-- Token passthrough preserved trivially — no new credential surface.
+- Token passthrough preserved trivially: no new credential surface.
 - Billing data flows on a connection that already exists.
 
 **Cons:**
@@ -49,7 +49,7 @@ Workers bound to a CDN route run on **every request, including edge-cached respo
 3. Is up to ~5 minutes of count loss on proxy crash acceptable?
 4. Does Cloudflare forward `X-*` headers to the Worker on every request (including edge-cache hits)?
 
-### Option C — Separate Billing Endpoint
+### Option C: Separate Billing Endpoint
 
 Build a Cloudflare Worker at a dedicated billing URL. The proxy POSTs accumulated counts on a configurable flush interval (default 60 seconds, independent of cache TTL). The Worker writes to Analytics Engine.
 
@@ -64,7 +64,7 @@ The proxy-side design is already implemented in `internal/telemetry/billing.go`.
 **Cons:**
 - Requires a second HTTP endpoint, retry loop, and back-pressure contract.
 - The Worker team must build and operate the billing endpoint.
-- Auth: proxy sends `Authorization: Api-Token <sdk_key>`. If the Worker requires a separate service credential, it violates the token passthrough invariant — escalate before accepting.
+- Auth: proxy sends `Authorization: Api-Token <sdk_key>`. If the Worker requires a separate service credential, it violates the token passthrough invariant; escalate before accepting.
 
 **Open questions:**
 1. Does the billing Worker endpoint exist today, or must it be built? Who owns it?
@@ -72,7 +72,7 @@ The proxy-side design is already implemented in `internal/telemetry/billing.go`.
 3. What are the Worker team's expectations around guaranteed delivery? The proxy has a bounded in-memory retry buffer; counts are dropped after the buffer fills.
 4. Is `sdk_key_id = cache.PublicID(sdk_key)` sufficient as the billing identifier, or does the Worker need additional context?
 
-### Option B — Count on SSE Connection
+### Option B: Count on SSE Connection
 
 Send counts as custom headers on the ongoing upstream SSE connection. **Ruled out.** SSE is server-to-client; the proxy is the client and cannot push data back through an open SSE stream. A periodic count would require a separate POST, which collapses into Option C.
 
@@ -82,13 +82,13 @@ Send counts as custom headers on the ongoing upstream SSE connection. **Ruled ou
 
 **Pending.** Option A is preferred if the platform team can deploy a Worker on the CDN config route. Option C is the default if that is not feasible or the timeline is uncertain.
 
-**Do not implement either option until the approach is agreed.** Do not send `X-Downstream-Request-Count` speculatively — on cache hits (the majority of requests), the header is discarded silently without a Worker reading it.
+**Do not implement either option until the approach is agreed.** Do not send `X-Downstream-Request-Count` speculatively: on cache hits (the majority of requests), the header is discarded silently without a Worker reading it.
 
 ---
 
 ## Shared Questions (Both Options)
 
-- **Downstream consumer:** Where does billing data land — Grail, a dedicated billing store, Analytics Engine? This affects retention, replay, and late-arrival handling.
+- **Downstream consumer:** Where does billing data land: Grail, a dedicated billing store, Analytics Engine? This affects retention, replay, and late-arrival handling.
 - **Billing unit:** The proxy reports proxy-level fetches, not individual flag evaluation calls. Does the billing model account for the multiplier (N SDK evaluations per proxy fetch)?
 - **Multi-replica aggregation:** Two proxy replicas serving the same SDK key emit independent counts. The billing backend aggregates by `sdk_key_id` across replicas. Confirm this is expected.
 

@@ -16,7 +16,7 @@ The bare hostname for the upstream Dynatrace Feature Management CDN. The proxy d
 https://cdn.{region}.{CDN_BASE_DOMAIN}/server/{sdk_key}.json
 ```
 
-Valid value: letters, digits, dots, and hyphens only — no scheme (`https://`), no path, no port.
+Valid value: letters, digits, dots, and hyphens only (no scheme (`https://`), no path, no port).
 
 Override this to target a custom CDN environment.
 
@@ -125,6 +125,36 @@ SSE_DISABLED=false
 
 ---
 
+## Billing Variables
+
+### `BILLING_FLUSH_INTERVAL`
+
+**Optional.** Default: `60s`. Minimum: `10s`.
+
+How often the proxy flushes SDK usage counters to the Dynatrace billing endpoint. Each flush sends a batch record of per-token request counts accumulated since the last flush. Must be a Go duration string of at least `10s`.
+
+Reduce this value to shorten the window during which usage is buffered in memory (relevant if you restart proxies frequently). The default of 60 seconds is suitable for most deployments.
+
+```bash
+BILLING_FLUSH_INTERVAL=60s
+```
+
+---
+
+### `BILLING_RETRY_BUFFER_SIZE`
+
+**Optional.** Default: `1000`. Range: 1–100000.
+
+Maximum number of failed billing samples held in the in-memory retry buffer. When the flush to the billing endpoint fails, the sample is placed in the retry buffer and re-attempted on the next flush cycle. When the buffer is full, the oldest sample is dropped.
+
+Under normal conditions this counter should be zero. Increase it if your billing endpoint is occasionally unavailable for longer than a few flush cycles.
+
+```bash
+BILLING_RETRY_BUFFER_SIZE=1000
+```
+
+---
+
 ## Snapshot Persistence Variables
 
 Snapshot persistence is **optional**. When disabled (the default), the proxy starts cold on every restart. When enabled, cache entries are written asynchronously to the configured backend and loaded back on startup to reduce cold-start latency.
@@ -142,7 +172,7 @@ Selects the persistence backend.
 | Value | Backend |
 |---|---|
 | `s3` | Any S3-compatible object store (AWS S3, MinIO, Ceph, GCS S3-compat) |
-| `local` | Local filesystem directory — suitable for single-node or air-gapped deployments |
+| `local` | Local filesystem directory, suitable for single-node or air-gapped deployments |
 
 ```bash
 SNAPSHOT_BACKEND=local
@@ -170,7 +200,7 @@ SNAPSHOT_MAX_AGE=24h
 
 **Optional.** Default: `48h`.
 
-How long an SDK key must be idle before the inactivity sweeper evicts it. A key is considered idle when it has had no HTTP config requests **and** no active SSE subscribers for longer than this window. Eviction removes the in-memory entry, closes the upstream SSE connection, and deletes the persisted snapshot — identical to a lifecycle invalidation event.
+How long an SDK key must be idle before the inactivity sweeper evicts it. A key is considered idle when it has had no HTTP config requests **and** no active SSE subscribers for longer than this window. Eviction removes the in-memory entry, closes the upstream SSE connection, and deletes the persisted snapshot, identical to a lifecycle invalidation event.
 
 Set to `0` to disable the sweeper entirely. The sweeper checks all cached keys every hour.
 
@@ -179,7 +209,7 @@ CACHE_INACTIVITY_EVICT_AFTER=48h  # default
 CACHE_INACTIVITY_EVICT_AFTER=0    # disable
 ```
 
-Must be `0` (disabled) or a Go duration string of at least `1h` (e.g. `24h`, `72h`). Values shorter than `1h` are rejected at startup — the sweeper runs every hour, so shorter values would never fire.
+Must be `0` (disabled) or a Go duration string of at least `1h` (e.g. `24h`, `72h`). Values shorter than `1h` are rejected at startup: the sweeper runs every hour, so shorter values would never fire.
 
 ---
 

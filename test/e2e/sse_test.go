@@ -1,6 +1,6 @@
 //go:build integration
 
-// docs: docs/monitoring.md — SSE Connections
+// docs: docs/monitoring.md — SSE Connections; docs/operations.md — SSE Fan-Out Lifecycle
 
 package e2e
 

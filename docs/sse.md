@@ -1,10 +1,12 @@
 # SSE Fan-Out
 
+> See also: [operations.md](operations.md) for a narrative walkthrough of SSE behavior in production.
+
 The proxy maintains exactly one upstream SSE connection per SDK key and fans events out to all connected SDK clients sharing that key. This is the core multiplexing guarantee: N SDK client instances → 1 upstream connection, never N.
 
 ## Client Endpoint: `GET /sse`
 
-SDK clients connect to `GET /sse?stream_id={stream_id}`. The `stream_id` is the SDK key public identifier — `cache.PublicID(sdkKey)`, i.e. `{token}.{platform}_{geo}_{publicRandom}` (e.g. `dt01.server_us_ab3xy9kp2q`). It is embedded in the flagd config's `eventStreamEndpoint` URL by the proxy rewrite step, so clients receive it automatically.
+SDK clients connect to `GET /sse?stream_id={stream_id}`. The `stream_id` is the SDK key public identifier: `cache.PublicID(sdkKey)`, i.e. `{token}.{platform}_{geo}_{publicRandom}` (e.g. `dt01.server_us_ab3xy9kp2q`). It is embedded in the flagd config's `eventStreamEndpoint` URL by the proxy rewrite step, so clients receive it automatically.
 
 **Prerequisites before a connection is accepted:**
 
@@ -13,9 +15,11 @@ SDK clients connect to `GET /sse?stream_id={stream_id}`. The `stream_id` is the 
 
 Only connections that pass both gates are accepted and counted toward billing.
 
+**Authentication:** No Authorization header is required or accepted. The `stream_id` query parameter is the only identifier needed: it encodes which SDK key's events the client wants without exposing the private key segment.
+
 ### Cold-start behavior
 
-On a fresh proxy — before any SDK client has fetched the flagd config for a given SDK key — `GET /sse` returns **412 Precondition Failed** with a body directing the client to fetch the config first:
+Before any SDK client has fetched the flagd config for a given SDK key, `GET /sse` returns **412 Precondition Failed** with a body directing the client to fetch the config first:
 
 ```
 config not cached; fetch /server/{sdk_key}.json first
@@ -25,7 +29,7 @@ This is intentional. The 412 signals a precondition failure, not a server error:
 
 **Expected provider behavior:**
 
-A provider that receives 412 at cold start should retry the SSE connection after fetching the config. Providers using the `proxyUrl` configuration option retrieve the config (which includes the rewritten SSE URL) before opening the SSE connection, so they naturally follow the correct sequence. A provider that opens the SSE connection before the config fetch will receive 412 and should back off briefly before retrying — the proxy will be ready as soon as one flag evaluation triggers a config fetch.
+A provider that receives 412 at cold start should retry the SSE connection after fetching the config. Providers using the `proxyUrl` configuration option retrieve the config (which includes the rewritten SSE URL) before opening the SSE connection, so they naturally follow the correct sequence. A provider that opens the SSE connection before the config fetch will receive 412 and should back off briefly before retrying; the proxy will be ready as soon as one flag evaluation triggers a config fetch.
 
 **Response headers** set on acceptance:
 
@@ -44,15 +48,31 @@ The handler sends an SSE comment (`: ping`) every **15 seconds** on idle connect
 
 Events are dispatched to subscriber channels (buffered at 16). If a client's buffer is full at dispatch time, the event is dropped and a structured warning is logged. The metric `proxy.sse.upstream.events{result="dropped_slow_subscriber"}` is incremented.
 
+## Two-Leg Connection Model
+
+The proxy separates the SSE connection into two independent legs.
+
+**Leg 1: Provider to Proxy** (`GET /sse?stream_id={public_id}`)
+
+SDK providers connect to the proxy's `/sse` endpoint using the `stream_id` embedded in the flagd config they received from `GET /server/{sdk_key}.json`. The proxy rewrites the `eventStreamEndpoint` URL in the flagd config payload to point at itself, replacing the original upstream URL with `{proxy_base}/sse?stream_id={public_id}`. Providers that use the `proxyUrl` option follow this URL automatically.
+
+**Leg 2: Proxy to Upstream** (one connection per SDK key)
+
+The proxy opens exactly one upstream SSE connection per distinct SDK key. It uses the original `eventStreamEndpoint` URL from the flagd config (scheme, path, and query parameters preserved verbatim). The raw SDK key is passed as-is in requests to the upstream service for authentication; it is never exposed to providers or embedded in client-facing URLs.
+
+**How `stream_id` maps to the upstream connection**
+
+The `stream_id` is `cache.PublicID(sdkKey)`, i.e. the first two dot-segments of the SDK key (`{token}.{platform}_{geo}_{publicRandom}`). The proxy uses this as its cache key: when a client subscribes with a given `stream_id`, the proxy looks up the matching upstream connection by that same key and routes events from it to the subscriber. The private segment of the SDK key never appears in URLs, logs, or responses.
+
 ## Upstream SSE Client
 
 The `Manager` owns all upstream connections. A connection is started (or confirmed) for a given SDK key in three situations:
 
-1. **Cold fetch** — the proxy fetches config from CDN for the first time for this key.
-2. **Demand revalidation** — a snapshot-loaded entry is confirmed or refreshed on the first SDK request after startup (see [cache.md](cache.md#demand-revalidation-of-snapshot-loaded-entries)). SSE opens at this point for snapshot-loaded keys.
-3. **Background refresh** — the background TTL refresher receives a new payload and detects an SSE URL change.
+1. **Cold fetch:** the proxy fetches config from CDN for the first time for this key.
+2. **Demand revalidation:** a snapshot-loaded entry is confirmed or refreshed on the first SDK request after startup (see [cache.md](cache.md#demand-revalidation-of-snapshot-loaded-entries)). SSE opens at this point for snapshot-loaded keys.
+3. **Background refresh:** the background TTL refresher receives a new payload and detects an SSE URL change.
 
-The proxy never opens an upstream SSE connection during snapshot loading — SSE starts only after the proxy has confirmed upstream reachability via a live HTTP response. If multiple requests trigger the same key simultaneously, the operation is idempotent.
+The proxy never opens an upstream SSE connection during snapshot loading; SSE starts only after the proxy has confirmed upstream reachability via a live HTTP response. If multiple requests trigger the same key simultaneously, the operation is idempotent.
 
 ### Connection Lifecycle
 

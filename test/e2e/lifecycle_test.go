@@ -1,6 +1,6 @@
 //go:build integration
 
-// docs: docs/monitoring.md — Lifecycle Events
+// docs: docs/monitoring.md — Lifecycle Events; docs/operations.md — Lifecycle Events
 
 package e2e
 

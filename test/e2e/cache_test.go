@@ -1,6 +1,6 @@
 //go:build integration
 
-// docs: docs/monitoring.md — Cache Health
+// docs: docs/monitoring.md — Cache Health; docs/operations.md — Request Lifecycle, ETag Revalidation
 
 package e2e
 

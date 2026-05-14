@@ -1,6 +1,6 @@
 //go:build integration
 
-// docs: docs/monitoring.md — Shutdown; docs/shutdown.md
+// docs: docs/monitoring.md — Shutdown; docs/shutdown.md; docs/operations.md — Graceful Shutdown
 
 package e2e
 

@@ -1,6 +1,6 @@
 //go:build integration
 
-// docs: docs/monitoring.md — Cache Health (CDN outage behavior)
+// docs: docs/monitoring.md — Cache Health (CDN outage behavior); docs/operations.md — Failure Conditions
 
 package e2e
 

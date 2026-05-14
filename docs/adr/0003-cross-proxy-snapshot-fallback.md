@@ -8,7 +8,7 @@
 
 ## Context and Problem Statement
 
-During a CDN outage, a proxy that missed the last config update before the outage will serve a stale flag set for the entire duration. When multiple proxies share a common snapshot backend — whether S3-compatible object storage or a shared local filesystem — a proxy that fetched and persisted the latest config before the outage wrote a newer snapshot. Its peers just never read it after startup.
+During a CDN outage, a proxy that missed the last config update before the outage will serve a stale flag set for the entire duration. When multiple proxies share a common snapshot backend (whether S3-compatible object storage or a shared local filesystem), a proxy that fetched and persisted the latest config before the outage wrote a newer snapshot. Its peers just never read it after startup.
 
 Today the snapshot store is read-at-startup-only. A newer snapshot written by one proxy is invisible to its peers until they restart. In a prolonged outage, this means different proxies in the same cluster diverge on the flag set they serve, with no self-healing path short of a restart.
 
@@ -26,17 +26,17 @@ Today the snapshot store is read-at-startup-only. A newer snapshot written by on
 
 ## Considered Options
 
-### Option A — Passive read on CDN failure (selected)
+### Option A: Passive read on CDN failure (selected)
 
 Extend the snapshot read path from startup-only to on-CDN-failure. When a background refresh fails (network error or non-evictable upstream status), the proxy asynchronously checks the shared store for a newer snapshot for that key.
 
-### Option B — Active publish/subscribe channel
+### Option B: Active publish/subscribe channel
 
 Proxies publish a notification (e.g. to a Redis channel or a storage event) when they write a snapshot. Peers subscribe and pull the snapshot on notification.
 
-**Rejected:** adds a new infrastructure dependency (pub/sub system) for an optimisation path. Option A achieves the same result using the snapshot store that is already required for snapshot persistence — no new dependencies.
+**Rejected:** adds a new infrastructure dependency (pub/sub system) for an optimisation path. Option A achieves the same result using the snapshot store that is already required for snapshot persistence: no new dependencies.
 
-### Option C — Periodic cross-proxy sync loop
+### Option C: Periodic cross-proxy sync loop
 
 A background goroutine periodically scans the store for keys with a newer `captured_at` than the in-memory entry.
 
@@ -46,7 +46,7 @@ A background goroutine periodically scans the store for keys with a newer `captu
 
 ## Decision
 
-**Option A — passive read on CDN failure.**
+**Option A: passive read on CDN failure.**
 
 Implementation details:
 
@@ -54,17 +54,17 @@ Implementation details:
 
 The fallback activates when `Refresher.refresh` encounters either of two failure branches for a given key:
 
-1. **Network error** — `fetcher.Fetch` returns a non-nil error.
-2. **Non-evictable upstream status** — the upstream returns 429 or 5xx (the entry is preserved, not evicted).
+1. **Network error:** `fetcher.Fetch` returns a non-nil error.
+2. **Non-evictable upstream status:** the upstream returns 429 or 5xx (the entry is preserved, not evicted).
 
-It does NOT activate on 304 (no change), 200 (successful refresh), or evictable 4xx (401/403/404/410 — the entry is already being deleted).
+It does NOT activate on 304 (no change), 200 (successful refresh), or evictable 4xx (401/403/404/410: the entry is already being deleted).
 
 ### Update condition
 
 The snapshot is applied only when both conditions hold:
 
 - `snapshot.captured_at > current.FetchedAt` (the snapshot is more recent than what this proxy last fetched)
-- `snapshot.etag != current.ETag` (the content actually changed — no-op if payload is identical)
+- `snapshot.etag != current.ETag` (the content actually changed; no-op if payload is identical)
 
 The flag set payload is never parsed. ETags and `captured_at` are the sole freshness signals.
 
@@ -99,7 +99,7 @@ The snapshot envelope does not persist `FetchURL`. The fallback reads the curren
 
 ### Backend compatibility
 
-The `Fallback` component depends on `snapshot.Store` — the same interface implemented by both the S3-compatible and local-file backends. The fallback activates for either backend when `SNAPSHOT_BACKEND` is set.
+The `Fallback` component depends on `snapshot.Store`, the same interface implemented by both the S3-compatible and local-file backends. The fallback activates for either backend when `SNAPSHOT_BACKEND` is set.
 
 **When the fallback is useful:** cross-proxy benefit requires multiple proxies sharing the same store. This is the typical S3 multi-replica deployment. A single-node `local` deployment shares no store with any peer, so the fallback check will always return `no_newer` (the only snapshot present is the one this proxy wrote) and have no effect on cache state.
 
@@ -113,7 +113,7 @@ The fallback does not trigger an SSE reconnect or fan-out notification. SDK clie
 
 ## Metric
 
-`proxy.snapshot.outage_fallback.total` — `Int64Counter` with attribute `result`:
+`proxy.snapshot.outage_fallback.total`: `Int64Counter` with attribute `result`:
 
 | Value | Meaning |
 |-------|---------|

@@ -1,5 +1,7 @@
 //go:build integration
 
+// docs: docs/operations.md — CDN failure modes (outage behavior, 4xx eviction)
+
 package e2e
 
 import (

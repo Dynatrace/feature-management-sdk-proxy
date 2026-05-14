@@ -1,5 +1,7 @@
 //go:build integration
 
+// docs: docs/operations.md — SSE fan-out lifecycle, lifecycle events
+
 package e2e
 
 import (

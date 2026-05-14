@@ -11,13 +11,13 @@
 ```bash
 make build       # compile the binary (outputs ./sdk-proxy)
 make test        # unit tests
-make test-int    # integration tests (requires no external services — mocks are in-process)
+make test-int    # integration tests (requires no external services; mocks are in-process)
 make vet         # go vet
 make lint        # golangci-lint (must pass before merge)
 make docker      # build the OCI image
 ```
 
-All integration tests are tagged `//go:build integration` and live under `test/e2e/`. They use in-process mocks for the CDN, SSE service, and health endpoints — no network access required.
+All integration tests are tagged `//go:build integration` and live under `test/e2e/`. They use in-process mocks for the CDN, SSE service, and health endpoints; no network access required.
 
 ## Commit Conventions
 
@@ -29,7 +29,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 **Types:** `feat`, `fix`, `refactor`, `test`, `chore`, `ci`, `docs`, `perf`
 
-**Scope:** the affected package or component — `cache`, `sse`, `telemetry`, `snapshot`, `server`, `health`, `config`, `metrics`
+**Scope:** the affected package or component: `cache`, `sse`, `telemetry`, `snapshot`, `server`, `health`, `config`, `metrics`
 
 **Examples:**
 ```
@@ -62,8 +62,8 @@ bd close <id>         # close when done
 
 ## Code Conventions
 
-- No `init()` functions — wire all dependencies explicitly in `cmd/proxy/main.go`
+- No `init()` functions: wire all dependencies explicitly in `cmd/proxy/main.go`
 - New OTel metrics go in `internal/metrics/metrics.go`, never inline
-- SDK keys must never appear in logs, metrics, or storage — use `cache.Key(sdkKey)` (SHA-256 truncated to 16 hex chars)
-- Snapshot writes must be async — a failed write must never fail an SDK request
+- SDK keys must never appear in logs, metrics, or storage: use `cache.Key(sdkKey)` (SHA-256 truncated to 16 hex chars)
+- Snapshot writes must be async: a failed write must never fail an SDK request
 - `golangci-lint` must pass before merge
