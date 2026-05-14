@@ -80,3 +80,18 @@ When multiple replicas share the same S3 backend:
 - There is no fencing or locking. A snapshot written by a replica running an older version may briefly coexist with a newer version's entry. The snapshot envelope format is versioned; unknown versions are skipped at load time with a `skipped_unknown_version` result on `proxy.snapshot.load.total`.
 
 During a rolling deploy, replicas on different versions may read each other's snapshots. Stale but valid snapshots are loaded and served; the background TTL refresh will replace them within the cache TTL window.
+
+## Runtime Cross-Proxy Fallback
+
+Snapshot reads are not limited to startup. When a background CDN refresh fails for a key (network error or 429/5xx), the proxy asynchronously checks the shared store for a newer snapshot written by a peer. If the store has a snapshot with a `captured_at` more recent than the current entry's `FetchedAt` and a different ETag, the proxy applies it to the in-memory cache. See [ADR-0003](adr/0003-cross-proxy-snapshot-fallback.md) for the full design.
+
+**Key properties:**
+
+- The check is async — the CDN failure response path is never blocked.
+- Checks are debounced per key at 60-second intervals to limit S3 request rates during sustained outages.
+- A successful load updates `FetchedAt` to the snapshot's `captured_at` but does not write back to the store (only a proxy that independently verified with the CDN should write snapshots).
+- This path is only active when `SNAPSHOT_BACKEND` is set. Proxies without persistence are unaffected.
+
+**Known limitation:** if all proxies in a cluster lost CDN access before any of them wrote a newer snapshot, there is nothing newer in the store to fall back to. This is expected and acceptable.
+
+Metric: `proxy.snapshot.outage_fallback.total{result}` — see [telemetry.md](telemetry.md).

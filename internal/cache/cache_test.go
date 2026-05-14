@@ -704,6 +704,235 @@ func TestCache_DeleteIfInactiveSince_NoopForMissingKey(t *testing.T) {
 	}
 }
 
+func TestCache_SetIfNewer_ReplacesWhenExpectationMatches(t *testing.T) {
+	c := New()
+	fetchedAt := time.Now().Add(-5 * time.Minute)
+	c.Set("k1", Entry{Payload: []byte("old"), ETag: `"v1"`, FetchedAt: fetchedAt})
+
+	newer := Entry{Payload: []byte("new"), ETag: `"v2"`, FetchedAt: fetchedAt.Add(time.Minute)}
+	replaced := c.SetIfNewer("k1", newer, fetchedAt, `"v1"`)
+	if !replaced {
+		t.Fatal("SetIfNewer should replace when expectation matches")
+	}
+	got, _ := c.Get("k1")
+	if string(got.Payload) != "new" || got.ETag != `"v2"` {
+		t.Errorf("unexpected entry after SetIfNewer: payload=%q etag=%q", string(got.Payload), got.ETag)
+	}
+}
+
+func TestCache_SetIfNewer_NoopWhenFetchedAtMismatch(t *testing.T) {
+	c := New()
+	fetchedAt := time.Now().Add(-5 * time.Minute)
+	c.Set("k1", Entry{Payload: []byte("old"), ETag: `"v1"`, FetchedAt: fetchedAt})
+
+	stale := Entry{Payload: []byte("new"), ETag: `"v2"`}
+	replaced := c.SetIfNewer("k1", stale, fetchedAt.Add(time.Second), `"v1"`) // wrong FetchedAt
+	if replaced {
+		t.Fatal("SetIfNewer should not replace when FetchedAt does not match")
+	}
+	got, _ := c.Get("k1")
+	if string(got.Payload) != "old" {
+		t.Error("entry should be unchanged")
+	}
+}
+
+func TestCache_SetIfNewer_NoopWhenETagMismatch(t *testing.T) {
+	c := New()
+	fetchedAt := time.Now().Add(-5 * time.Minute)
+	c.Set("k1", Entry{Payload: []byte("old"), ETag: `"v1"`, FetchedAt: fetchedAt})
+
+	replaced := c.SetIfNewer("k1", Entry{Payload: []byte("new"), ETag: `"v2"`}, fetchedAt, `"wrong"`)
+	if replaced {
+		t.Fatal("SetIfNewer should not replace when ETag does not match")
+	}
+}
+
+func TestCache_SetIfNewer_NoopForMissingKey(t *testing.T) {
+	c := New()
+	replaced := c.SetIfNewer("absent", Entry{Payload: []byte("x")}, time.Now(), `"v1"`)
+	if replaced {
+		t.Fatal("SetIfNewer should return false for absent key")
+	}
+}
+
+// mockFailureObserver records calls to OnRefreshFailure.
+type mockFailureObserver struct {
+	mu    sync.Mutex
+	calls []struct {
+		keyID     string
+		etag      string
+		fetchedAt time.Time
+	}
+}
+
+func (m *mockFailureObserver) OnRefreshFailure(_ context.Context, keyID, etag string, fetchedAt time.Time) {
+	m.mu.Lock()
+	m.calls = append(m.calls, struct {
+		keyID     string
+		etag      string
+		fetchedAt time.Time
+	}{keyID, etag, fetchedAt})
+	m.mu.Unlock()
+}
+
+func (m *mockFailureObserver) callCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.calls)
+}
+
+func TestRefresher_FailureObserver_NetworkError(t *testing.T) {
+	c := New()
+	c.Set("k1", Entry{
+		Payload:   []byte("data"),
+		ETag:      `"v1"`,
+		FetchedAt: time.Now().Add(-10 * time.Minute),
+		FetchURL:  "https://example.com/k1.json",
+	})
+
+	obs := &mockFailureObserver{}
+	fetcher := &mockFetcher{err: errors.New("network error")}
+	r := NewRefresher(c, fetcher, noopLogger())
+	r.SetRefreshFailureObserver(obs)
+	r.refresh(context.Background())
+
+	// The observer is invoked as a goroutine; give it a moment to run.
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for time.Now().Before(deadline) && obs.callCount() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	if obs.callCount() != 1 {
+		t.Errorf("expected 1 observer call on network error, got %d", obs.callCount())
+	}
+}
+
+func TestRefresher_FailureObserver_NonEvictableStatus(t *testing.T) {
+	for _, code := range []int{429, 500, 503} {
+		t.Run(fmt.Sprintf("status_%d", code), func(t *testing.T) {
+			c := New()
+			c.Set("k1", Entry{
+				Payload:   []byte("data"),
+				FetchedAt: time.Now().Add(-10 * time.Minute),
+				FetchURL:  "https://example.com/k1.json",
+			})
+
+			obs := &mockFailureObserver{}
+			fetcher := &mockFetcher{
+				results: map[string]FetchResult{
+					"https://example.com/k1.json": {StatusCode: code},
+				},
+			}
+			r := NewRefresher(c, fetcher, noopLogger())
+			r.SetRefreshFailureObserver(obs)
+			r.refresh(context.Background())
+
+			deadline := time.Now().Add(100 * time.Millisecond)
+			for time.Now().Before(deadline) && obs.callCount() == 0 {
+				time.Sleep(time.Millisecond)
+			}
+			if obs.callCount() != 1 {
+				t.Errorf("status %d: expected 1 observer call, got %d", code, obs.callCount())
+			}
+		})
+	}
+}
+
+func TestRefresher_FailureObserver_NotCalledOnSuccess(t *testing.T) {
+	c := New()
+	fetchedAt := time.Now().Add(-10 * time.Minute)
+	c.Set("k1", Entry{
+		Payload:   []byte("old"),
+		ETag:      `"v1"`,
+		FetchedAt: fetchedAt,
+		FetchURL:  "https://example.com/k1.json",
+	})
+
+	obs := &mockFailureObserver{}
+	newEntry := Entry{Payload: []byte("new"), ETag: `"v2"`, FetchedAt: time.Now()}
+	fetcher := &mockFetcher{
+		results: map[string]FetchResult{
+			"https://example.com/k1.json": {Entry: &newEntry},
+		},
+	}
+	r := NewRefresherWithObservers(c, fetcher, noopLogger())
+	r.SetRefreshFailureObserver(obs)
+	r.refresh(context.Background())
+
+	// Small sleep so any spurious goroutine would have time to fire.
+	time.Sleep(10 * time.Millisecond)
+	if obs.callCount() != 0 {
+		t.Errorf("observer must not be called on successful 200 refresh, got %d calls", obs.callCount())
+	}
+}
+
+func TestRefresher_FailureObserver_NotCalledOn304(t *testing.T) {
+	c := New()
+	c.Set("k1", Entry{
+		Payload:   []byte("data"),
+		ETag:      `"v1"`,
+		FetchedAt: time.Now().Add(-10 * time.Minute),
+		FetchURL:  "https://example.com/k1.json",
+	})
+
+	obs := &mockFailureObserver{}
+	fetcher := &mockFetcher{
+		results: map[string]FetchResult{
+			"https://example.com/k1.json": {NotModified: true},
+		},
+	}
+	r := NewRefresher(c, fetcher, noopLogger())
+	r.SetRefreshFailureObserver(obs)
+	r.refresh(context.Background())
+
+	time.Sleep(10 * time.Millisecond)
+	if obs.callCount() != 0 {
+		t.Errorf("observer must not be called on 304, got %d calls", obs.callCount())
+	}
+}
+
+func TestRefresher_FailureObserver_NotCalledOnEvictable4xx(t *testing.T) {
+	for _, code := range []int{401, 403, 404, 410} {
+		t.Run(fmt.Sprintf("status_%d", code), func(t *testing.T) {
+			c := New()
+			c.Set("k1", Entry{
+				Payload:   []byte("data"),
+				FetchedAt: time.Now().Add(-10 * time.Minute),
+				FetchURL:  "https://example.com/k1.json",
+			})
+
+			obs := &mockFailureObserver{}
+			fetcher := &mockFetcher{
+				results: map[string]FetchResult{
+					"https://example.com/k1.json": {StatusCode: code},
+				},
+			}
+			r := NewRefresher(c, fetcher, noopLogger())
+			r.SetEvictor(func(string) {})
+			r.SetRefreshFailureObserver(obs)
+			r.refresh(context.Background())
+
+			time.Sleep(10 * time.Millisecond)
+			if obs.callCount() != 0 {
+				t.Errorf("status %d: observer must not be called on evictable 4xx, got %d calls", code, obs.callCount())
+			}
+		})
+	}
+}
+
+func TestRefresher_NilFailureObserver_DoesNotPanic(t *testing.T) {
+	c := New()
+	c.Set("k1", Entry{
+		Payload:   []byte("data"),
+		FetchedAt: time.Now().Add(-10 * time.Minute),
+		FetchURL:  "https://example.com/k1.json",
+	})
+
+	fetcher := &mockFetcher{err: errors.New("network error")}
+	r := NewRefresher(c, fetcher, noopLogger())
+	// No SetRefreshFailureObserver — must not panic.
+	r.refresh(context.Background())
+}
+
 func TestCache_LastAccess_ConcurrentGet_Race(t *testing.T) {
 	c := New()
 	c.Set("k1", Entry{Payload: []byte("v")})

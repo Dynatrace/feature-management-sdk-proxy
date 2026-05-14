@@ -38,4 +38,5 @@ func TestRegister_NoopMeter(t *testing.T) {
 	inst.SnapshotWritesTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "success")))
 	inst.ConfigSSERewriteTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "rewritten"), keyHash))
 	inst.SnapshotDemandRevalidationTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "not_modified")))
+	inst.SnapshotOutageFallbackTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "loaded")))
 }

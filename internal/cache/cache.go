@@ -181,6 +181,27 @@ func (c *Cache) ResetTTL(key string, now time.Time) {
 	}
 }
 
+// SetIfNewer atomically replaces the entry for key only when the current entry
+// still has the given expectedFetchedAt and expectedETag (compare-and-set).
+// Returns true when the replacement was applied, false when the entry was absent
+// or had already been updated by a concurrent refresh or another fallback call.
+func (c *Cache) SetIfNewer(key string, newEntry Entry, expectedFetchedAt time.Time, expectedETag string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cur, ok := c.entries[key]
+	if !ok {
+		return false
+	}
+	if !cur.FetchedAt.Equal(expectedFetchedAt) || cur.ETag != expectedETag {
+		return false
+	}
+	// Intentionally does NOT update lastAccess: this is an internal maintenance
+	// write, not a client request. Updating lastAccess would keep an idle key
+	// alive past the inactivity eviction threshold.
+	c.entries[key] = newEntry
+	return true
+}
+
 // Snapshot returns a stable copy of all current entries for iteration.
 func (c *Cache) Snapshot() map[string]Entry {
 	c.mu.RLock()
@@ -222,11 +243,20 @@ type RefreshObserver interface {
 	OnRefreshed(keyID string, payload []byte)
 }
 
+// RefreshFailureObserver is notified when the background refresher fails to
+// fetch a new payload due to a network error or a non-evictable upstream status
+// (429, 5xx). It is never called for successful fetches, 304 responses, or
+// evictable 4xx responses. keyID is the SDK key public identifier.
+type RefreshFailureObserver interface {
+	OnRefreshFailure(ctx context.Context, keyID, currentETag string, currentFetchedAt time.Time)
+}
+
 // Refresher drives background TTL refresh using a Fetcher.
 type Refresher struct {
 	cache            *Cache
 	fetcher          Fetcher
 	observers        []RefreshObserver
+	failureObserver  RefreshFailureObserver  // nil → no failure notification
 	intervalProvider RefreshIntervalProvider // nil → always use RefreshIntervalDisconnected
 	evictor          func(keyID string)      // nil → no side-effect eviction
 	inst             *metrics.Instruments    // nil → metrics skipped
@@ -284,6 +314,13 @@ func (r *Refresher) SetIntervalProvider(p RefreshIntervalProvider) {
 	r.intervalProvider = p
 }
 
+// SetRefreshFailureObserver wires an observer that is notified when a background
+// refresh fails with a network error or a non-evictable upstream status (429/5xx).
+// Must be called before Run.
+func (r *Refresher) SetRefreshFailureObserver(o RefreshFailureObserver) {
+	r.failureObserver = o
+}
+
 // Run ticks at RefreshIntervalDisconnected (the shortest possible interval)
 // so no key is ever checked less often than needed. Per-key staleness is
 // evaluated against the interval returned by intervalProvider.
@@ -331,6 +368,9 @@ func (r *Refresher) refresh(ctx context.Context) {
 				slog.String("key", keyID),
 				slog.String("error", err.Error()),
 			)
+			if r.failureObserver != nil {
+				go r.failureObserver.OnRefreshFailure(ctx, keyID, entry.ETag, entry.FetchedAt)
+			}
 			continue
 		}
 		if result.NotModified {
@@ -386,6 +426,9 @@ func (r *Refresher) refresh(ctx context.Context) {
 				if r.inst != nil {
 					r.inst.CacheRefreshPreservedStaleTotal.Add(ctx, 1,
 						metric.WithAttributes(attribute.String("status_code", statusStr)))
+				}
+				if r.failureObserver != nil {
+					go r.failureObserver.OnRefreshFailure(ctx, keyID, entry.ETag, entry.FetchedAt)
 				}
 			}
 			continue
