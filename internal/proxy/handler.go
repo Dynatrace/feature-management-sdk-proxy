@@ -31,6 +31,7 @@ const (
 	resultClientError   = "client_error"
 	resultUpstreamError = "upstream_error"
 	resultInternalError = "internal_error"
+	resultBadGateway    = "bad_gateway"
 )
 
 // hopByHopHeaders must not be forwarded between proxy hops (RFC 7230 §6.1).
@@ -383,6 +384,9 @@ func (h *Handler) serveMiss(ctx context.Context, w http.ResponseWriter, r *http.
 		w.WriteHeader(result.statusCode)
 		_, _ = w.Write(result.body)
 		return resultClientError
+	case resultBadGateway:
+		http.Error(w, "upstream response too large", http.StatusBadGateway)
+		return resultBadGateway
 	case resultInternalError:
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return resultUpstreamError
@@ -464,8 +468,8 @@ func (h *Handler) coldFetch(ctx context.Context, sdkKey, key, target string) col
 				slog.String("key", key),
 				slog.Int64("limit_bytes", h.maxResponseBytes),
 			)
-			span.SetAttributes(attribute.String("result", "upstream_error"))
-			return coldFetchResult{resultLabel: resultUpstreamError}
+			span.SetAttributes(attribute.String("result", resultBadGateway))
+			return coldFetchResult{resultLabel: resultBadGateway}
 		}
 		entry := cache.Entry{
 			Payload:   body,

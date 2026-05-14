@@ -1663,7 +1663,7 @@ func TestHandler_DemandReval_ConcurrentRequests_OneUpstreamCall(t *testing.T) {
 
 // --- LimitReader / max response size tests ---
 
-func TestHandler_ColdFetch_OversizeResponse_Returns503(t *testing.T) {
+func TestHandler_ColdFetch_OversizeResponse_Returns502(t *testing.T) {
 	const limit = 100
 	oversized := strings.Repeat("x", limit+1)
 
@@ -1685,8 +1685,8 @@ func TestHandler_ColdFetch_OversizeResponse_Returns503(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
 	h.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("expected 503, got %d", rec.Code)
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("expected 502, got %d", rec.Code)
 	}
 
 	key := cache.PublicID(testSDKKey)
