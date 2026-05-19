@@ -103,8 +103,8 @@ be reconfigured with the new key; the proxy has no knowledge of the new key unti
 
 **Key array cap:** Lifecycle events with more than `LIFECYCLE_KEYS_CAP` combined `sdkKeyHashes` + `sdkKeys` entries (
 default 10,000) are rejected as malformed (`result="malformed"`) before any hashing work is performed. This prevents a
-compromised upstream from triggering unbounded SHA-256 work on the SSE receive goroutine. See [
-`LIFECYCLE_KEYS_CAP`](configuration.md#lifecycle_keys_cap) in the configuration reference.
+compromised upstream from triggering unbounded SHA-256 work on the SSE receive goroutine. See
+[`LIFECYCLE_KEYS_CAP`](configuration.md#lifecycle_keys_cap) in the configuration reference.
 
 **What to watch:**
 

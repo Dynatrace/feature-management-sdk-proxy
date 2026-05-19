@@ -57,3 +57,13 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.1
+
+  lint-markdown:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint Markdown (table formatting & style)
+        uses: DavidAnson/markdownlint-cli2-action@v19
+        with:
+          globs: "**/*.md"
