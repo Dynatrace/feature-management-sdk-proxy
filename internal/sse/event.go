@@ -20,6 +20,6 @@ type publishableEvent struct {
 // Compile-time check that publishableEvent satisfies eventsource.Event.
 var _ eventsource.Event = publishableEvent{}
 
-func (e publishableEvent) Id() string    { return e.evt.ID }
+func (e publishableEvent) Id() string    { return e.evt.ID } //nolint:revive // method name required by eventsource.Event interface
 func (e publishableEvent) Event() string { return e.evt.EventType }
 func (e publishableEvent) Data() string  { return string(e.evt.Data) }

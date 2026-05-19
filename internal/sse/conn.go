@@ -2,6 +2,7 @@ package sse
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sync/atomic"
@@ -61,7 +62,7 @@ func (c *conn) run(ctx context.Context) {
 		readTimeout = defaultInactivityTimeout
 	}
 
-	req, err := http.NewRequest(http.MethodGet, c.sseURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.sseURL, nil)
 	if err != nil {
 		c.logger.Error("sse: failed to build request", slog.String("key", c.keyID), slog.String("error", err.Error()))
 		setupSpan.RecordError(err)
@@ -159,10 +160,11 @@ func classifyError(err error) string {
 		return "unknown"
 	}
 	switch {
-	case err == eventsource.ErrReadTimeout:
+	case errors.Is(err, eventsource.ErrReadTimeout):
 		return "inactivity"
 	default:
-		if se, ok := err.(eventsource.SubscriptionError); ok {
+		var se eventsource.SubscriptionError
+		if errors.As(err, &se) {
 			if se.Code >= 400 {
 				return "http_error"
 			}

@@ -186,7 +186,7 @@ func TestManager_Publish_DeliversEvent(t *testing.T) {
 	defer downstreamSrv.Close()
 
 	// Start a downstream SSE client connection.
-	downstreamResp, err := http.Get(downstreamSrv.URL)
+	downstreamResp, err := http.Get(downstreamSrv.URL) //nolint:bodyclose // closed via defer below
 	if err != nil {
 		t.Fatalf("downstream connect: %v", err)
 	}
