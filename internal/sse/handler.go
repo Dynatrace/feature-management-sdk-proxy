@@ -6,11 +6,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/launchdarkly/eventsource"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
@@ -54,7 +53,7 @@ type Handler struct {
 // keepalive comments sent on idle connections (15s is typical for production).
 // configPath is the HTTP path prefix at which the proxy serves flagd config
 // (e.g. "/server/"); used in the 412 error hint so it stays in sync with the
-// mux registration. counter may be nil; counting is silently skipped.
+// router registration. counter may be nil; counting is silently skipped.
 func NewHandler(c *cache.Cache, esServer *eventsource.Server, tracker SubscriberTracker, inst *metrics.Instruments, counter *telemetry.Counter, logger *slog.Logger, heartbeatInterval time.Duration, configPath string) *Handler {
 	return &Handler{
 		cache:             c,
@@ -77,21 +76,21 @@ func (h *Handler) SetTracer(t trace.Tracer) {
 	h.tracer = t
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+// Handle is the native Gin handler for the SSE endpoint. It validates the
+// stream_id query parameter, gates on cache presence, and delegates to the
+// eventsource.Server for downstream SSE streaming.
+//
+// Route registration should use: router.GET(sse.HandlerPath, sseHandler.Handle)
+func (h *Handler) Handle(c *gin.Context) {
 	if h.disabled {
 		h.logger.Debug("sse: SSE disabled — rejecting client connection with 501")
-		http.Error(w, "SSE is disabled", http.StatusNotImplemented)
+		c.String(http.StatusNotImplemented, "SSE is disabled\n")
 		return
 	}
 
-	streamID := r.URL.Query().Get("stream_id")
+	streamID := c.Query("stream_id")
 	if streamID == "" {
-		http.Error(w, "missing stream_id query parameter", http.StatusBadRequest)
+		c.String(http.StatusBadRequest, "missing stream_id query parameter\n")
 		return
 	}
 
@@ -99,17 +98,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("sse: invalid stream_id format",
 			slog.Int("len", len(streamID)),
 		)
-		http.Error(w, "invalid stream_id: must be a valid SDK key public prefix", http.StatusBadRequest)
+		c.String(http.StatusBadRequest, "invalid stream_id: must be a valid SDK key public prefix\n")
 		return
 	}
 
 	keyID := streamID
 
-	// Extract W3C trace context and span the setup phase only — SSE connections
-	// can last hours and Dynatrace bins spans by completion time. Active connection
-	// duration is covered by the SSEClientConnections gauge metric.
-	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-	_, setupSpan := h.tracer.Start(ctx, "sse.client.subscribe",
+	// Create the setup span. W3C trace context was already extracted by the
+	// TracePropagation middleware, so c.Request.Context() has the parent trace.
+	_, setupSpan := h.tracer.Start(c.Request.Context(), "sse.client.subscribe",
 		trace.WithAttributes(tracing.SDKKeyPublicID(keyID)))
 
 	if _, ok := h.cache.Get(keyID); !ok {
@@ -118,7 +115,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		)
 		setupSpan.SetAttributes(attribute.String("outcome", "412_no_config"))
 		setupSpan.End()
-		http.Error(w, "config not cached; fetch "+h.configPath+"{sdk_key}.json first", http.StatusPreconditionFailed)
+		c.String(http.StatusPreconditionFailed, "config not cached; fetch "+h.configPath+"{sdk_key}.json first\n")
 		return
 	}
 
@@ -128,8 +125,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set additional headers before the eventsource handler writes the response.
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
 
 	// Setup complete — end the span here so it doesn't span the full connection.
 	setupSpan.SetAttributes(attribute.String("outcome", "200_connected"))
@@ -154,13 +151,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Start a heartbeat goroutine that publishes comments to this channel.
 	// The eventsource.Server delivers the comment to all subscribers of keyID.
-	heartbeatCtx, heartbeatCancel := context.WithCancel(r.Context())
+	heartbeatCtx, heartbeatCancel := context.WithCancel(c.Request.Context())
 	defer heartbeatCancel()
 	go h.heartbeatLoop(heartbeatCtx, keyID)
 
 	// Delegate to the eventsource.Server handler. This blocks until the client
 	// disconnects or the channel is unregistered with forceDisconnect.
-	h.esServer.Handler(keyID)(w, r)
+	h.esServer.Handler(keyID)(c.Writer, c.Request)
 
 	h.logger.Debug("sse: client disconnected", slog.String("key", keyID))
 }

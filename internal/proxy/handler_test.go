@@ -14,11 +14,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
 	"github.com/dynatrace/sdk-proxy/internal/telemetry"
 )
+
+func init() {
+	gin.SetMode(gin.TestMode)
+}
+
+// ginContext creates a *gin.Context backed by the given recorder and request,
+// with the :file route parameter extracted from the URL path.
+func ginContext(w *httptest.ResponseRecorder, r *http.Request) *gin.Context {
+	c, _ := gin.CreateTestContext(w)
+	c.Request = r
+	if file, ok := strings.CutPrefix(r.URL.Path, "/server/"); ok {
+		c.Params = gin.Params{{Key: "file", Value: file}}
+	}
+	return c
+}
 
 var testTracer = tracenoop.NewTracerProvider().Tracer("test")
 
@@ -77,7 +93,7 @@ func TestHandler_CacheMiss_FetchesUpstream(t *testing.T) {
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -103,7 +119,7 @@ func TestHandler_CacheMiss_PopulatesCache(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	entry, ok := c.Get(key)
@@ -129,7 +145,7 @@ func TestHandler_CacheMiss_PathForwardedToUpstream(t *testing.T) {
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if gotPath != "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json" {
 		t.Errorf("upstream received path %q, want /server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", gotPath)
@@ -147,7 +163,7 @@ func TestHandler_CacheMiss_Upstream304_Returns502(t *testing.T) {
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", rec.Code)
@@ -164,7 +180,7 @@ func TestHandler_CacheMiss_UpstreamServerError_PassedThrough(t *testing.T) {
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500 (CDN code forwarded), got %d", rec.Code)
@@ -182,7 +198,7 @@ func TestHandler_CacheMiss_NetworkError_Returns503(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", rec.Code)
@@ -199,7 +215,7 @@ func TestHandler_CacheMiss_UpstreamClientError_PassedThrough(t *testing.T) {
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d", rec.Code)
@@ -223,7 +239,7 @@ func TestHandler_CacheMiss_IfNoneMatch_NotForwardedToUpstream(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Header.Set("If-None-Match", `"abc123"`)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if gotIfNoneMatch != "" {
 		t.Errorf("upstream should not receive If-None-Match on cold fetch, got %q", gotIfNoneMatch)
@@ -250,7 +266,7 @@ func TestHandler_CacheHit_ServesFromCache_NoUpstreamCall(t *testing.T) {
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -282,7 +298,7 @@ func TestHandler_CacheHit_ETagMatch_Returns304(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Header.Set("If-None-Match", `"abc123"`)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusNotModified {
 		t.Fatalf("expected 304, got %d", rec.Code)
@@ -314,7 +330,7 @@ func TestHandler_CacheHit_ETagMismatch_Returns200WithPayload(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Header.Set("If-None-Match", `"v1"`) // stale client version
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -343,7 +359,7 @@ func TestHandler_CacheHit_NoETag_Returns200(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Header.Set("If-None-Match", `"anything"`)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	// Without a cached ETag we cannot confirm the client has the current version.
 	if rec.Code != http.StatusOK {
@@ -360,10 +376,18 @@ func TestHandler_NonGetMethod_Returns405(t *testing.T) {
 	defer upstream.Close()
 
 	h := newTestHandler(t, upstream)
+
+	// Method filtering is a router-level concern. Test via a Gin router with
+	// HandleMethodNotAllowed enabled so POST/PUT/DELETE return 405.
+	router := gin.New()
+	router.HandleMethodNotAllowed = true
+	router.GET("/server/:file", h.Handle)
+	router.HEAD("/server/:file", h.Handle)
+
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(method, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-		h.ServeHTTP(rec, req)
+		router.ServeHTTP(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s: expected 405, got %d", method, rec.Code)
 		}
@@ -379,7 +403,7 @@ func TestHandler_MissingJsonSuffix_Returns400(t *testing.T) {
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
@@ -395,7 +419,7 @@ func TestHandler_EmptyKeySegment_Returns400(t *testing.T) {
 	h := newTestHandler(t, upstream)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/.json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
@@ -417,7 +441,7 @@ func TestHandler_UnrecognizedSDKKeyFormat_Returns400(t *testing.T) {
 	} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
-		h.ServeHTTP(rec, req)
+		h.Handle(ginContext(rec, req))
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("path %q: expected 400, got %d", path, rec.Code)
 		}
@@ -442,7 +466,7 @@ func TestHandler_HEAD_CacheHit_NoBody(t *testing.T) {
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodHead, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -470,24 +494,22 @@ func TestNew_InvalidCDNBaseDomain(t *testing.T) {
 	}
 }
 
-func TestExtractSDKKey(t *testing.T) {
+func TestExtractSDKKeyFromFile(t *testing.T) {
 	cases := []struct {
-		path    string
+		file    string
 		wantKey string
 		wantOK  bool
 	}{
-		{"/server/abc123.json", "abc123", true},
-		{"/abc123.json", "abc123", true},
-		{"noslash.json", "noslash", true},
-		{"/.json", "", false},
-		{"/config/noextension", "", false},
-		{"/config/", "", false},
-		{"/", "", false},
+		{"abc123.json", "abc123", true},
+		{"dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", true},
+		{".json", "", false},
+		{"noextension", "", false},
+		{"", "", false},
 	}
 	for _, tc := range cases {
-		key, ok := extractSDKKey(tc.path)
+		key, ok := extractSDKKeyFromFile(tc.file)
 		if ok != tc.wantOK || key != tc.wantKey {
-			t.Errorf("extractSDKKey(%q) = (%q, %v), want (%q, %v)", tc.path, key, ok, tc.wantKey, tc.wantOK)
+			t.Errorf("extractSDKKeyFromFile(%q) = (%q, %v), want (%q, %v)", tc.file, key, ok, tc.wantKey, tc.wantOK)
 		}
 	}
 }
@@ -549,7 +571,7 @@ func TestHandler_CacheHit_RewritesSSEURL(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Host = "proxy.example.com"
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -580,7 +602,7 @@ func TestHandler_CacheMiss_RewritesSSEURLInResponse_StoresRawInCache(t *testing.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Host = "proxy.example.com"
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -629,7 +651,7 @@ func TestHandler_NoSSEEntry_PayloadServedByteIdentical(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Host = "proxy.example.com"
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -658,7 +680,7 @@ func TestHandler_HEAD_NoSSERewrite(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodHead, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Host = "proxy.example.com"
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -689,7 +711,7 @@ func TestHandler_SSEDisabled_NoRewrite(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Host = "proxy.example.com"
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -764,7 +786,7 @@ func TestHandler_MalformedHostHeader_FallsBackToUnknown(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Host = "proxy.example.com\r\nX-Injected: bad"
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -801,7 +823,7 @@ func TestHandler_Rewrite_StreamIDFormat(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/"+sdkKey+".json", nil)
 	req.Host = "proxy.example.com"
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -834,7 +856,7 @@ func TestHandler_Rewrite_HTTPSSchemeFromXForwardedProto(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	req.Host = "proxy.example.com"
 	req.Header.Set("X-Forwarded-Proto", "https")
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	body := rec.Body.String()
 	wantStreamID := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
@@ -875,7 +897,7 @@ func TestHandler_Counter_IncrementOnCacheMiss(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	samples := counter.Drain()
 	if len(samples) != 1 || samples[0].Count != 1 {
@@ -900,7 +922,7 @@ func TestHandler_Counter_IncrementOnCacheHit(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	samples := counter.Drain()
 	if len(samples) != 1 || samples[0].Count != 1 {
@@ -919,7 +941,7 @@ func TestHandler_Counter_IncrementOnUpstreamError(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500 (CDN code forwarded), got %d", rec.Code)
@@ -947,7 +969,7 @@ func TestHandler_Counter_IncrementOnHEAD(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodHead, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	samples := counter.Drain()
 	if len(samples) != 1 || samples[0].Count != 1 {
@@ -962,10 +984,16 @@ func TestHandler_Counter_NoIncrementOn405(t *testing.T) {
 	counter := telemetry.NewCounter()
 	h := newTestHandlerWithCounter(t, upstream, counter)
 
+	// Method filtering is a router-level concern. Test via a Gin router.
+	router := gin.New()
+	router.HandleMethodNotAllowed = true
+	router.GET("/server/:file", h.Handle)
+	router.HEAD("/server/:file", h.Handle)
+
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(method, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-		h.ServeHTTP(rec, req)
+		router.ServeHTTP(rec, req)
 	}
 
 	if samples := counter.Drain(); len(samples) != 0 {
@@ -982,7 +1010,7 @@ func TestHandler_Counter_NoIncrementOnMalformedPath(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/notjson", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if samples := counter.Drain(); len(samples) != 0 {
 		t.Errorf("malformed path must not increment counter, got %v", samples)
@@ -999,7 +1027,7 @@ func TestHandler_Counter_NoIncrementOnUnrecognizedKeyFormat(t *testing.T) {
 	for _, path := range []string{"/server/bogus.json", "/server/dt01.server_us_ab3xy9kp2q.json"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
-		h.ServeHTTP(rec, req)
+		h.Handle(ginContext(rec, req))
 	}
 
 	if samples := counter.Drain(); len(samples) != 0 {
@@ -1044,7 +1072,7 @@ func TestHandler_CacheMiss_InvokesSnapshotNotifier(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -1082,7 +1110,7 @@ func TestHandler_SnapshotRestoredEntry_HydratesFetchURL(t *testing.T) {
 	h := newTestHandlerWithCache(t, upstream, c)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/"+sdkKey+".json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -1133,7 +1161,7 @@ func TestHandler_ColdMiss_Singleflight_OneUpstreamCall(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-			h.ServeHTTP(rec, req)
+			h.Handle(ginContext(rec, req))
 		}()
 	}
 
@@ -1189,7 +1217,7 @@ func TestHandler_ColdMiss_Singleflight_ErrorShared(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-			h.ServeHTTP(rec, req)
+			h.Handle(ginContext(rec, req))
 		}()
 	}
 
@@ -1238,7 +1266,7 @@ func TestHandler_ColdMiss_Singleflight_SideEffectsOnce(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
-			h.ServeHTTP(httptest.NewRecorder(), req)
+			h.Handle(ginContext(httptest.NewRecorder(), req))
 		}()
 	}
 
@@ -1423,7 +1451,7 @@ func TestHandler_DemandReval_StaleSnapshot_304_ServesCachedPayload(t *testing.T)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -1454,7 +1482,7 @@ func TestHandler_DemandReval_StaleSnapshot_304_NoSnapshotWrite(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	notifier.mu.Lock()
 	defer notifier.mu.Unlock()
@@ -1480,7 +1508,7 @@ func TestHandler_DemandReval_StaleSnapshot_200_ServesFreshPayload(t *testing.T) 
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -1514,7 +1542,7 @@ func TestHandler_DemandReval_StaleSnapshot_NetworkError_ServesStale(t *testing.T
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected stale 200 on fetch error, got %d", rec.Code)
@@ -1538,7 +1566,7 @@ func TestHandler_DemandReval_StaleSnapshot_4xx_Evicts(t *testing.T) {
 
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
-			h.ServeHTTP(rec, req)
+			h.Handle(ginContext(rec, req))
 
 			// The upstream status code is passed through so providers can respond
 			// appropriately (e.g. 401 → re-authenticate, 404 → stop polling).
@@ -1566,7 +1594,7 @@ func TestHandler_DemandReval_StaleSnapshot_429And5xx_PreservesStale(t *testing.T
 
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
-			h.ServeHTTP(rec, req)
+			h.Handle(ginContext(rec, req))
 
 			if rec.Code != http.StatusOK {
 				t.Errorf("status %d: expected stale 200, got %d", code, rec.Code)
@@ -1593,7 +1621,7 @@ func TestHandler_DemandReval_FreshSnapshotEntry_NoDemandReval(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -1618,7 +1646,7 @@ func TestHandler_DemandReval_NotFiredForNormalCacheEntry(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -1638,7 +1666,7 @@ func TestHandler_DemandReval_SecondRequest_SkipsDemandReval(t *testing.T) {
 	sendRequest := func() {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
-		h.ServeHTTP(rec, req)
+		h.Handle(ginContext(rec, req))
 		if rec.Code != http.StatusOK {
 			t.Errorf("expected 200, got %d", rec.Code)
 		}
@@ -1677,7 +1705,7 @@ func TestHandler_DemandReval_ConcurrentRequests_OneUpstreamCall(t *testing.T) {
 			defer wg.Done()
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
-			h.ServeHTTP(rec, req)
+			h.Handle(ginContext(rec, req))
 			codes[i] = rec.Code
 		}(i)
 	}
@@ -1719,7 +1747,7 @@ func TestHandler_ColdFetch_OversizeResponse_Returns502(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/server/"+testSDKKey+".json", nil)
-	h.ServeHTTP(rec, req)
+	h.Handle(ginContext(rec, req))
 
 	if rec.Code != http.StatusBadGateway {
 		t.Errorf("expected 502, got %d", rec.Code)
