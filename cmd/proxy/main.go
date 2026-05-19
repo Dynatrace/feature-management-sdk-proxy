@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/launchdarkly/eventsource"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -24,6 +25,7 @@ import (
 	"github.com/dynatrace/sdk-proxy/internal/config"
 	"github.com/dynatrace/sdk-proxy/internal/health"
 	"github.com/dynatrace/sdk-proxy/internal/metrics"
+	"github.com/dynatrace/sdk-proxy/internal/middleware"
 	"github.com/dynatrace/sdk-proxy/internal/proxy"
 	"github.com/dynatrace/sdk-proxy/internal/server"
 	"github.com/dynatrace/sdk-proxy/internal/snapshot"
@@ -241,17 +243,37 @@ func run() error {
 	// ReadyFunc gates /ready on snapshot load completion.
 	probeHandlers := health.New(func() bool { return snapshotReady }, logger)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/livez", probeHandlers.Live)
-	mux.HandleFunc("/readyz", probeHandlers.Ready)
-	mux.HandleFunc("/healthz", probeHandlers.Health)
-	mux.Handle(sse.HandlerPath, sseHandler)
-	mux.Handle(configHandlerPath, proxyHandler)
-	mux.HandleFunc("/", http.NotFound)
+	// Gin engine with recovery middleware (panic → 500 instead of crash).
+	// Release mode suppresses Gin's debug-level route registration logs.
+	gin.SetMode(gin.ReleaseMode)
+	router := gin.New()
+	router.Use(gin.Recovery())
+
+	// Health/probe endpoints — lightweight, no tracing overhead.
+	router.GET("/livez", probeHandlers.Live)
+	router.GET("/readyz", probeHandlers.Ready)
+	router.GET("/healthz", probeHandlers.Health)
+
+	// API route group with W3C trace context propagation middleware.
+	// Handlers in this group receive extracted trace context via c.Request.Context().
+	api := router.Group("/", middleware.TracePropagation())
+
+	// SSE streaming endpoint — native Gin handler.
+	api.GET(sse.HandlerPath, sseHandler.Handle)
+
+	// Proxy config endpoint — accepts GET and HEAD; uses :file param to match
+	// the /server/{sdk_key}.json path structure.
+	api.GET(configHandlerPath+":file", proxyHandler.Handle)
+	api.HEAD(configHandlerPath+":file", proxyHandler.Handle)
+
+	// Catch-all: return 404 for unmatched routes.
+	router.NoRoute(func(c *gin.Context) {
+		c.String(http.StatusNotFound, "404 page not found\n")
+	})
 
 	srv, err := server.New(
 		fmt.Sprintf(":%d", cfg.Port),
-		mux,
+		router,
 		cfg.ShutdownTimeout,
 		logger,
 	)

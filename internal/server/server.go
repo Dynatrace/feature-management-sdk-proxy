@@ -8,9 +8,12 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
-// Server wraps an http.Server and exposes Start/Shutdown lifecycle methods.
+// Server wraps a Gin engine with lifecycle management: TCP listener binding,
+// graceful shutdown with drain timeout, and ReadHeaderTimeout protection.
 type Server struct {
 	http     *http.Server
 	listener net.Listener
@@ -18,10 +21,12 @@ type Server struct {
 	drainFor time.Duration
 }
 
-// New creates a Server and opens the TCP listener immediately.
-// Callers can call Addr() before Start() to discover the bound port (useful
-// when addr uses ":0" for an ephemeral port).
-func New(addr string, mux http.Handler, drainTimeout time.Duration, logger *slog.Logger) (*Server, error) {
+// New creates a Server bound to addr using the provided Gin engine.
+// The TCP listener is opened immediately; callers can call Addr() before
+// Start() to discover the bound port (useful when addr is ":0" for ephemeral).
+//
+// ReadHeaderTimeout is set to 10s to mitigate slowloris attacks.
+func New(addr string, engine *gin.Engine, drainTimeout time.Duration, logger *slog.Logger) (*Server, error) {
 	var lc net.ListenConfig
 	l, err := lc.Listen(context.Background(), "tcp", addr)
 	if err != nil {
@@ -29,7 +34,7 @@ func New(addr string, mux http.Handler, drainTimeout time.Duration, logger *slog
 	}
 	return &Server{
 		http: &http.Server{
-			Handler:           mux,
+			Handler:           engine,
 			ReadHeaderTimeout: 10 * time.Second,
 		},
 		listener: l,

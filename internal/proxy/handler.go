@@ -11,10 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"go.opentelemetry.io/otel"
+	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/singleflight"
 
@@ -122,34 +121,40 @@ func (h *Handler) SetRewriteSSEURLs(enabled bool) {
 	h.rewriteSSEURLs = enabled
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	sdkKey, ok := extractSDKKey(r.URL.Path)
+// Handle is the native Gin handler for the proxy config endpoint.
+// It extracts the SDK key from the :file path parameter, serves from cache
+// on hit, or fetches from upstream CDN on miss.
+//
+// Route registration should use:
+//
+//	router.GET("/server/:file", proxyHandler.Handle)
+//	router.HEAD("/server/:file", proxyHandler.Handle)
+//
+// The TracePropagation middleware must be applied upstream so
+// c.Request.Context() already contains the extracted W3C trace context.
+func (h *Handler) Handle(c *gin.Context) {
+	file := c.Param("file")
+	sdkKey, ok := extractSDKKeyFromFile(file)
 	if !ok {
-		http.Error(w, "path must end with /<sdk_key>.json", http.StatusBadRequest)
+		c.String(http.StatusBadRequest, "path must end with /<sdk_key>.json\n")
 		return
 	}
 
 	target, ok := h.buildTarget(sdkKey)
 	if !ok {
 		h.logger.Warn("proxy: unrecognized SDK key format", slog.String("key", cache.PublicID(sdkKey)))
-		http.Error(w, "unrecognized SDK key format: must be {token}.{platform}_{geo}_{publicRandom}.{secret}_{sha1}", http.StatusBadRequest)
+		c.String(http.StatusBadRequest, "unrecognized SDK key format: must be {token}.{platform}_{geo}_{publicRandom}.{secret}_{sha1}\n")
 		return
 	}
 
 	key := cache.PublicID(sdkKey)
 
-	// Extract W3C trace context from the incoming request so upstream tracestate
-	// is honoured when the SDK has its own tracer configured.
-	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-	ctx, span := h.tracer.Start(ctx, r.Method+" /server/{sdk_key}.json",
+	// Create the request span. W3C trace context was already extracted by the
+	// TracePropagation middleware, so c.Request.Context() has the parent trace.
+	ctx, span := h.tracer.Start(c.Request.Context(), c.Request.Method+" /server/{sdk_key}.json",
 		trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithAttributes(
-			attribute.String("http.request.method", r.Method),
+			attribute.String("http.request.method", c.Request.Method),
 			attribute.String("http.route", "/server/{sdk_key}.json"),
 			tracing.SDKKeyPublicID(key),
 		))
@@ -164,14 +169,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if entry, ok := h.cache.Get(key); ok {
 		h.logger.Debug("proxy: cache hit", slog.String("key", key))
-		result := h.serveCacheHit(ctx, w, r, entry, sdkKey, key)
+		result := h.serveCacheHit(ctx, c, entry, sdkKey, key)
 		h.recordResult(ctx, result)
 		span.SetAttributes(attribute.String("result", result))
 		return
 	}
 
 	h.logger.Debug("proxy: cache miss — fetching upstream", slog.String("key", key))
-	result := h.serveMiss(ctx, w, r, sdkKey, key, target)
+	result := h.serveMiss(ctx, c, sdkKey, key, target)
 	h.recordResult(ctx, result)
 	span.SetAttributes(attribute.String("result", result))
 }
@@ -179,7 +184,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // serveCacheHit starts a proxy.serve_cache_hit child span (with a Span Link to
 // the originating fetch when available) and delegates to serveFromCache.
 // Returns a result label for RequestsTotal ("hit" or "upstream_error").
-func (h *Handler) serveCacheHit(ctx context.Context, w http.ResponseWriter, r *http.Request, entry cache.Entry, sdkKey, key string) string {
+func (h *Handler) serveCacheHit(ctx context.Context, c *gin.Context, entry cache.Entry, sdkKey, key string) string {
 	opts := []trace.SpanStartOption{
 		trace.WithAttributes(tracing.SDKKeyPublicID(key)),
 	}
@@ -188,7 +193,7 @@ func (h *Handler) serveCacheHit(ctx context.Context, w http.ResponseWriter, r *h
 	}
 	_, cacheSpan := h.tracer.Start(ctx, "proxy.serve_cache_hit", opts...)
 	defer cacheSpan.End()
-	return h.serveFromCache(ctx, w, r, entry, sdkKey)
+	return h.serveFromCache(ctx, c, entry, sdkKey)
 }
 
 // serveFromCache writes a response from a cached entry. If the client's
@@ -205,7 +210,7 @@ func (h *Handler) serveCacheHit(ctx context.Context, w http.ResponseWriter, r *h
 //
 // Returns "hit" on success or "upstream_error" if the entry was evicted (503
 // already written).
-func (h *Handler) serveFromCache(ctx context.Context, w http.ResponseWriter, r *http.Request, entry cache.Entry, sdkKey string) string {
+func (h *Handler) serveFromCache(ctx context.Context, c *gin.Context, entry cache.Entry, sdkKey string) string {
 	key := cache.PublicID(sdkKey)
 
 	wasSnapshotLoaded := entry.FetchURL == ""
@@ -229,7 +234,7 @@ func (h *Handler) serveFromCache(ctx context.Context, w http.ResponseWriter, r *
 			if evictedCode != 0 {
 				// Entry was evicted due to a 4xx. Pass through the upstream status
 				// so providers can respond appropriately (e.g. 401 → re-authenticate).
-				http.Error(w, http.StatusText(evictedCode), evictedCode)
+				c.String(evictedCode, http.StatusText(evictedCode)+"\n")
 				return resultClientError
 			}
 			entry = updated
@@ -238,28 +243,30 @@ func (h *Handler) serveFromCache(ctx context.Context, w http.ResponseWriter, r *
 		}
 	}
 
-	if entry.ETag != "" && r.Header.Get("If-None-Match") == entry.ETag {
-		w.Header().Set("ETag", entry.ETag)
-		w.WriteHeader(http.StatusNotModified)
+	if entry.ETag != "" && c.GetHeader("If-None-Match") == entry.ETag {
+		c.Header("ETag", entry.ETag)
+		c.Status(http.StatusNotModified)
+		c.Writer.WriteHeaderNow()
 		return resultHit
 	}
 	if entry.ETag != "" {
-		w.Header().Set("ETag", entry.ETag)
+		c.Header("ETag", entry.ETag)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if r.Method == http.MethodHead {
+	c.Header("Content-Type", "application/json")
+	if c.Request.Method == http.MethodHead {
+		c.Status(http.StatusOK)
+		c.Writer.WriteHeaderNow()
 		return resultHit
 	}
 	var payload []byte
 	if h.rewriteSSEURLs {
 		var rewriteResult sse.RewriteResult
-		payload, rewriteResult = sse.RewriteSSEURL(entry.Payload, h.proxySSEURL(r, key))
+		payload, rewriteResult = sse.RewriteSSEURL(entry.Payload, h.proxySSEURL(c.Request, key))
 		h.recordRewriteResult(rewriteResult, key)
 	} else {
 		payload = entry.Payload
 	}
-	_, _ = w.Write(payload)
+	c.Data(http.StatusOK, "application/json", payload)
 	return resultHit
 }
 
@@ -383,7 +390,7 @@ func (h *Handler) recordDemandReval(ctx context.Context, result string) {
 // The first caller's trace context is used for the cold fetch span; singleflight
 // waiters receive the same result and serve from cache without a cold_fetch span.
 // Returns a result label for RequestsTotal ("miss", "upstream_error", or "client_error").
-func (h *Handler) serveMiss(ctx context.Context, w http.ResponseWriter, r *http.Request, sdkKey, key, target string) string {
+func (h *Handler) serveMiss(ctx context.Context, c *gin.Context, sdkKey, key, target string) string {
 	// Detach cancellation so the fetch survives the originating client disconnecting,
 	// while preserving the trace lineage so the cold_fetch span links back correctly.
 	detachedCtx := trace.ContextWithSpanContext(context.Background(), trace.SpanContextFromContext(ctx))
@@ -393,21 +400,21 @@ func (h *Handler) serveMiss(ctx context.Context, w http.ResponseWriter, r *http.
 	result := v.(coldFetchResult)
 	switch result.resultLabel {
 	case resultMiss:
-		h.serveFromCache(ctx, w, r, *result.entry, sdkKey)
+		h.serveFromCache(ctx, c, *result.entry, sdkKey)
 		return resultMiss
 	case resultClientError, resultServerError:
-		copyHeader(w.Header(), result.headers)
-		w.WriteHeader(result.statusCode)
-		_, _ = w.Write(result.body)
+		copyHeader(c.Writer.Header(), result.headers)
+		c.Writer.WriteHeader(result.statusCode)
+		_, _ = c.Writer.Write(result.body)
 		return result.resultLabel
 	case resultBadGateway:
-		http.Error(w, "bad gateway", http.StatusBadGateway)
+		c.String(http.StatusBadGateway, "bad gateway\n")
 		return resultBadGateway
 	case resultInternalError:
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		c.String(http.StatusInternalServerError, "internal error\n")
 		return resultUpstreamError
 	default: // resultUpstreamError
-		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+		c.String(http.StatusServiceUnavailable, "upstream unavailable\n")
 		return resultUpstreamError
 	}
 }
@@ -624,14 +631,14 @@ func sanitizeErr(err error) error {
 	return err
 }
 
-// extractSDKKey returns the SDK key embedded in path as the final segment
-// minus its ".json" suffix. Returns ("", false) if the path is malformed.
-func extractSDKKey(path string) (string, bool) {
-	segment := path[strings.LastIndex(path, "/")+1:]
-	if !strings.HasSuffix(segment, ".json") {
+// extractSDKKeyFromFile returns the SDK key from a route parameter value
+// (e.g. "dt01.server_us_...json" → the key without ".json").
+// Returns ("", false) if the parameter is malformed.
+func extractSDKKeyFromFile(file string) (string, bool) {
+	if !strings.HasSuffix(file, ".json") {
 		return "", false
 	}
-	key := strings.TrimSuffix(segment, ".json")
+	key := strings.TrimSuffix(file, ".json")
 	if key == "" {
 		return "", false
 	}

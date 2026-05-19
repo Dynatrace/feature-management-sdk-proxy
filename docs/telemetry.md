@@ -62,4 +62,4 @@ The `proxy.serve_cache_hit` span includes a Span Link pointing to the `proxy.col
 
 ### W3C Trace Context propagation
 
-The proxy extracts W3C `traceparent` / `tracestate` headers from incoming SDK requests. If the SDK has its own tracer configured, the proxy spans will appear as children of the SDK's trace in Dynatrace.
+The proxy extracts W3C `traceparent` / `tracestate` headers from incoming SDK requests via centralized Gin middleware (`internal/middleware.TracePropagation`). The middleware is applied to API routes (`/server/*`, `/sse`) as a route group; health probes are excluded. If the SDK has its own tracer configured, the proxy spans will appear as children of the SDK's trace in Dynatrace.

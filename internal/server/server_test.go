@@ -8,7 +8,13 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
+
+func init() {
+	gin.SetMode(gin.TestMode)
+}
 
 // waitListening polls until addr accepts TCP connections or the timeout expires.
 func waitListening(addr string, timeout time.Duration) error {
@@ -25,12 +31,12 @@ func waitListening(addr string, timeout time.Duration) error {
 }
 
 func TestServer_StartAndShutdown(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
+	router := gin.New()
+	router.GET("/ping", func(c *gin.Context) {
+		c.Status(http.StatusOK)
 	})
 
-	srv, err := New(":0", mux, 5*time.Second, slog.Default())
+	srv, err := New(":0", router, 5*time.Second, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -61,15 +67,15 @@ func TestServer_StartAndShutdown(t *testing.T) {
 }
 
 func TestServer_ShutdownDrainsRequests(t *testing.T) {
-	mux := http.NewServeMux()
 	started := make(chan struct{})
-	mux.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {
+	router := gin.New()
+	router.GET("/slow", func(c *gin.Context) {
 		close(started)
 		time.Sleep(50 * time.Millisecond)
-		w.WriteHeader(http.StatusOK)
+		c.Status(http.StatusOK)
 	})
 
-	srv, err := New(":0", mux, 5*time.Second, slog.Default())
+	srv, err := New(":0", router, 5*time.Second, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

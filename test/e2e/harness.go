@@ -15,12 +15,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
 	"github.com/dynatrace/sdk-proxy/internal/health"
 	"github.com/dynatrace/sdk-proxy/internal/metrics"
+	"github.com/dynatrace/sdk-proxy/internal/middleware"
 	"github.com/dynatrace/sdk-proxy/internal/proxy"
 	"github.com/dynatrace/sdk-proxy/internal/server"
 	"github.com/dynatrace/sdk-proxy/internal/snapshot"
@@ -218,15 +220,25 @@ func New(t *testing.T, opts Options) (*Harness, error) {
 
 	probeHandlers := health.New(func() bool { return true }, logger)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/livez", probeHandlers.Live)
-	mux.HandleFunc("/readyz", probeHandlers.Ready)
-	mux.HandleFunc("/healthz", probeHandlers.Health)
-	mux.Handle(sse.HandlerPath, sseHandler)
-	mux.Handle(configHandlerPath, proxyHandler)
-	mux.HandleFunc("/", http.NotFound)
+	gin.SetMode(gin.ReleaseMode)
+	router := gin.New()
+	router.Use(gin.Recovery())
 
-	srv, err := server.New(":0", mux, 5*time.Second, logger)
+	// Health probes — no tracing.
+	router.GET("/livez", probeHandlers.Live)
+	router.GET("/readyz", probeHandlers.Ready)
+	router.GET("/healthz", probeHandlers.Health)
+
+	// API routes with trace propagation middleware.
+	api := router.Group("/", middleware.TracePropagation())
+	api.GET(sse.HandlerPath, sseHandler.Handle)
+	api.GET(configHandlerPath+":file", proxyHandler.Handle)
+	api.HEAD(configHandlerPath+":file", proxyHandler.Handle)
+	router.NoRoute(func(c *gin.Context) {
+		c.String(http.StatusNotFound, "404 page not found\n")
+	})
+
+	srv, err := server.New(":0", router, 5*time.Second, logger)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("server.New: %w", err)

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/launchdarkly/eventsource"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
@@ -26,6 +27,17 @@ func (m *mockTracker) DecrementSubscribers(_ string) { m.count.Add(-1) }
 
 const testSDKKey = "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
 
+func init() {
+	gin.SetMode(gin.TestMode)
+}
+
+// ginContext creates a *gin.Context backed by the given recorder and request.
+func ginContext(w *httptest.ResponseRecorder, r *http.Request) *gin.Context {
+	c, _ := gin.CreateTestContext(w)
+	c.Request = r
+	return c
+}
+
 func newTestHandlerWithCache(t *testing.T, esServer *eventsource.Server) (*Handler, *cache.Cache) {
 	t.Helper()
 	c := cache.New()
@@ -34,22 +46,7 @@ func newTestHandlerWithCache(t *testing.T, esServer *eventsource.Server) (*Handl
 	return h, c
 }
 
-// --- simple error cases (ServeHTTP returns before streaming) ---
-
-func TestHandler_NonGet_Returns405(t *testing.T) {
-	srv := eventsource.NewServer()
-	defer srv.Close()
-	h, _ := newTestHandlerWithCache(t, srv)
-	streamID := cache.PublicID(testSDKKey)
-	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
-		rr := httptest.NewRecorder()
-		req := httptest.NewRequest(method, "/sse?stream_id="+streamID, nil)
-		h.ServeHTTP(rr, req)
-		if rr.Code != http.StatusMethodNotAllowed {
-			t.Errorf("method %s: got %d, want 405", method, rr.Code)
-		}
-	}
-}
+// --- simple error cases (Handle returns before streaming) ---
 
 func TestHandler_MissingStreamID_Returns400(t *testing.T) {
 	srv := eventsource.NewServer()
@@ -57,7 +54,7 @@ func TestHandler_MissingStreamID_Returns400(t *testing.T) {
 	h, _ := newTestHandlerWithCache(t, srv)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
-	h.ServeHTTP(rr, req)
+	h.Handle(ginContext(rr, req))
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("got %d, want 400", rr.Code)
 	}
@@ -79,7 +76,7 @@ func TestHandler_InvalidStreamID_Returns400(t *testing.T) {
 		t.Run(id, func(t *testing.T) {
 			rr := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+id, nil)
-			h.ServeHTTP(rr, req)
+			h.Handle(ginContext(rr, req))
 			if rr.Code != http.StatusBadRequest {
 				t.Errorf("got %d, want 400", rr.Code)
 			}
@@ -93,7 +90,7 @@ func TestHandler_ConfigNotCached_Returns412(t *testing.T) {
 	h, _ := newTestHandlerWithCache(t, srv)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.PublicID(testSDKKey), nil)
-	h.ServeHTTP(rr, req)
+	h.Handle(ginContext(rr, req))
 	if rr.Code != http.StatusPreconditionFailed {
 		t.Errorf("got %d, want 412", rr.Code)
 	}
@@ -119,7 +116,7 @@ func TestHandler_HappyPath_StreamsEvent(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.ServeHTTP(rr, req)
+		h.Handle(ginContext(rr, req))
 	}()
 
 	// Give the handler time to connect to the eventsource server.
@@ -166,7 +163,7 @@ func TestHandler_MultipleSubscribers_AllReceiveEvent(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.PublicID(testSDKKey), nil).WithContext(ctx)
 		go func(rr *httptest.ResponseRecorder, req *http.Request, d chan struct{}) {
 			defer close(d)
-			h.ServeHTTP(rr, req)
+			h.Handle(ginContext(rr, req))
 		}(rrs[i], req, done[i])
 	}
 
@@ -205,7 +202,7 @@ func TestHandler_ClientDisconnect_Decrements(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.ServeHTTP(rr, req)
+		h.Handle(ginContext(rr, req))
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -239,7 +236,7 @@ func TestHandler_Heartbeat_EmitsPing(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.ServeHTTP(rr, req)
+		h.Handle(ginContext(rr, req))
 	}()
 
 	time.Sleep(200 * time.Millisecond)
@@ -273,7 +270,7 @@ func TestHandler_RawSDKKeyNeverLogged(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.ServeHTTP(rr, req)
+		h.Handle(ginContext(rr, req))
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -310,7 +307,7 @@ func TestHandler_Unregister_HandlerReturnsCleanly(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.ServeHTTP(rr, req)
+		h.Handle(ginContext(rr, req))
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -349,7 +346,7 @@ func TestSSEHandler_Counter_IncrementOnAcceptedSubscription(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.ServeHTTP(rr, req)
+		h.Handle(ginContext(rr, req))
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -368,27 +365,6 @@ func TestSSEHandler_Counter_IncrementOnAcceptedSubscription(t *testing.T) {
 	}
 }
 
-func TestSSEHandler_Counter_NoIncrementOn405(t *testing.T) {
-	esSrv := eventsource.NewServer()
-	defer esSrv.Close()
-
-	tracker := &mockTracker{}
-	counter := telemetry.NewCounter()
-	c := cache.New()
-	h := NewHandler(c, esSrv, tracker, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
-
-	streamID := cache.PublicID(testSDKKey)
-	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
-		rr := httptest.NewRecorder()
-		req := httptest.NewRequest(method, "/sse?stream_id="+streamID, nil)
-		h.ServeHTTP(rr, req)
-	}
-
-	if samples := counter.Drain(); len(samples) != 0 {
-		t.Errorf("405 requests must not increment counter, got %v", samples)
-	}
-}
-
 func TestSSEHandler_Counter_NoIncrementOnMissingStreamID(t *testing.T) {
 	esSrv := eventsource.NewServer()
 	defer esSrv.Close()
@@ -400,7 +376,7 @@ func TestSSEHandler_Counter_NoIncrementOnMissingStreamID(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
-	h.ServeHTTP(rr, req)
+	h.Handle(ginContext(rr, req))
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)
@@ -421,7 +397,7 @@ func TestSSEHandler_Counter_NoIncrementOn412(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.PublicID(testSDKKey), nil)
-	h.ServeHTTP(rr, req)
+	h.Handle(ginContext(rr, req))
 
 	if rr.Code != http.StatusPreconditionFailed {
 		t.Fatalf("expected 412, got %d", rr.Code)
@@ -439,7 +415,7 @@ func TestHandler_SSEDisabled_Returns501(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.PublicID(testSDKKey), nil)
-	h.ServeHTTP(rr, req)
+	h.Handle(ginContext(rr, req))
 
 	if rr.Code != http.StatusNotImplemented {
 		t.Errorf("got %d, want 501 when SSE is disabled", rr.Code)
@@ -458,7 +434,7 @@ func TestSSEHandler_Counter_NoIncrementOn501(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+streamID, nil)
-	h.ServeHTTP(rr, req)
+	h.Handle(ginContext(rr, req))
 
 	if rr.Code != http.StatusNotImplemented {
 		t.Fatalf("expected 501, got %d", rr.Code)
