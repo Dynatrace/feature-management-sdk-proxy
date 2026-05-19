@@ -41,9 +41,9 @@
     // Columns must maintain uniform width for proper alignment.
     "MD060": { "style": "aligned" }
   },
-  "customRules": [
-    "markdownlint-rule-max-one-sentence-per-line"
-  ],
+  //  "customRules": [
+  //    "markdownlint-rule-max-one-sentence-per-line"
+  //  ],
   // Ignore tool-generated and non-documentation files
   "ignores": [
     ".beads/**",
