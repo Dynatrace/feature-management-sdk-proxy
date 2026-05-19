@@ -6,83 +6,40 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/launchdarkly/eventsource"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
 	"github.com/dynatrace/sdk-proxy/internal/telemetry"
 )
 
-// mockSubscriber implements Subscriber for testing.
-type mockSubscriber struct {
-	mu   sync.Mutex
-	subs []*mockSub
+// mockTracker implements SubscriberTracker for testing.
+type mockTracker struct {
+	count atomic.Int64
 }
 
-type mockSub struct {
-	ch chan Event
-}
-
-func (m *mockSubscriber) Subscribe(_ string) (<-chan Event, func()) {
-	ch := make(chan Event, 16)
-	s := &mockSub{ch: ch}
-	m.mu.Lock()
-	m.subs = append(m.subs, s)
-	m.mu.Unlock()
-	return ch, func() {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		for i, sub := range m.subs {
-			if sub == s {
-				m.subs = append(m.subs[:i], m.subs[i+1:]...)
-				return
-			}
-		}
-	}
-}
-
-func (m *mockSubscriber) dispatch(evt Event) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, s := range m.subs {
-		select {
-		case s.ch <- evt:
-		default:
-		}
-	}
-}
-
-func (m *mockSubscriber) count() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.subs)
-}
+func (m *mockTracker) IncrementSubscribers(_ string) { m.count.Add(1) }
+func (m *mockTracker) DecrementSubscribers(_ string) { m.count.Add(-1) }
 
 const testSDKKey = "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
 
-func newTestHandlerWithCache(t *testing.T, sub Subscriber) (*Handler, *cache.Cache) {
+func newTestHandlerWithCache(t *testing.T, esServer *eventsource.Server) (*Handler, *cache.Cache) {
 	t.Helper()
 	c := cache.New()
-	h := NewHandler(c, sub, newTestInstruments(t), nil, slog.Default(), 15*time.Second, "/server/")
+	tracker := &mockTracker{}
+	h := NewHandler(c, esServer, tracker, newTestInstruments(t), nil, slog.Default(), 15*time.Second, "/server/")
 	return h, c
-}
-
-// waitForSubs polls until the subscriber count reaches n or the timeout elapses.
-func waitForSubs(sub *mockSubscriber, n int) bool {
-	for range 100 {
-		if sub.count() >= n {
-			return true
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	return false
 }
 
 // --- simple error cases (ServeHTTP returns before streaming) ---
 
 func TestHandler_NonGet_Returns405(t *testing.T) {
-	h, _ := newTestHandlerWithCache(t, &mockSubscriber{})
+	srv := eventsource.NewServer()
+	defer srv.Close()
+	h, _ := newTestHandlerWithCache(t, srv)
 	streamID := cache.PublicID(testSDKKey)
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		rr := httptest.NewRecorder()
@@ -95,7 +52,9 @@ func TestHandler_NonGet_Returns405(t *testing.T) {
 }
 
 func TestHandler_MissingStreamID_Returns400(t *testing.T) {
-	h, _ := newTestHandlerWithCache(t, &mockSubscriber{})
+	srv := eventsource.NewServer()
+	defer srv.Close()
+	h, _ := newTestHandlerWithCache(t, srv)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
 	h.ServeHTTP(rr, req)
@@ -105,7 +64,9 @@ func TestHandler_MissingStreamID_Returns400(t *testing.T) {
 }
 
 func TestHandler_InvalidStreamID_Returns400(t *testing.T) {
-	h, _ := newTestHandlerWithCache(t, &mockSubscriber{})
+	srv := eventsource.NewServer()
+	defer srv.Close()
+	h, _ := newTestHandlerWithCache(t, srv)
 	// invalid: not a valid public key prefix
 	for _, id := range []string{
 		"bogus",
@@ -127,7 +88,9 @@ func TestHandler_InvalidStreamID_Returns400(t *testing.T) {
 }
 
 func TestHandler_ConfigNotCached_Returns412(t *testing.T) {
-	h, _ := newTestHandlerWithCache(t, &mockSubscriber{})
+	srv := eventsource.NewServer()
+	defer srv.Close()
+	h, _ := newTestHandlerWithCache(t, srv)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.PublicID(testSDKKey), nil)
 	h.ServeHTTP(rr, req)
@@ -139,9 +102,13 @@ func TestHandler_ConfigNotCached_Returns412(t *testing.T) {
 // --- streaming tests ---
 
 func TestHandler_HappyPath_StreamsEvent(t *testing.T) {
-	sub := &mockSubscriber{}
-	h, c := newTestHandlerWithCache(t, sub)
+	esSrv := eventsource.NewServer()
+	defer esSrv.Close()
+
+	tracker := &mockTracker{}
+	c := cache.New()
 	c.Set(cache.PublicID(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
+	h := NewHandler(c, esSrv, tracker, newTestInstruments(t), nil, slog.Default(), 15*time.Second, "/server/")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -155,20 +122,19 @@ func TestHandler_HappyPath_StreamsEvent(t *testing.T) {
 		h.ServeHTTP(rr, req)
 	}()
 
-	if !waitForSubs(sub, 1) {
-		t.Fatal("timed out waiting for subscriber to register")
-	}
+	// Give the handler time to connect to the eventsource server.
+	time.Sleep(100 * time.Millisecond)
 
-	sub.dispatch(Event{EventType: "message", Data: []byte(`{"type":"refetchEvaluation"}`)})
+	// Publish an event to the channel.
+	keyID := cache.PublicID(testSDKKey)
+	esSrv.Publish([]string{keyID}, publishableEvent{evt: Event{EventType: "message", Data: []byte(`{"type":"refetchEvaluation"}`)}})
 
-	// Give the handler goroutine time to write the event before cancelling.
-	// Reading rr.Body while the handler goroutine is still writing is a data race,
-	// so we cancel after the sleep and read only after <-done.
-	time.Sleep(50 * time.Millisecond)
+	// Give time for event delivery.
+	time.Sleep(100 * time.Millisecond)
 	cancel()
 	<-done
 
-	const want = `data: {"type":"refetchEvaluation"}`
+	const want = `{"type":"refetchEvaluation"}`
 	body := rr.Body.String()
 	if !strings.Contains(body, "event: message") {
 		t.Errorf("body %q: missing 'event: message'", body)
@@ -180,10 +146,13 @@ func TestHandler_HappyPath_StreamsEvent(t *testing.T) {
 
 func TestHandler_MultipleSubscribers_AllReceiveEvent(t *testing.T) {
 	const n = 3
-	sub := &mockSubscriber{}
+	esSrv := eventsource.NewServer()
+	defer esSrv.Close()
+
+	tracker := &mockTracker{}
 	c := cache.New()
 	c.Set(cache.PublicID(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
-	h := NewHandler(c, sub, newTestInstruments(t), nil, slog.Default(), time.Minute, "/server/")
+	h := NewHandler(c, esSrv, tracker, newTestInstruments(t), nil, slog.Default(), time.Minute, "/server/")
 
 	cancels := make([]context.CancelFunc, n)
 	rrs := make([]*httptest.ResponseRecorder, n)
@@ -201,12 +170,12 @@ func TestHandler_MultipleSubscribers_AllReceiveEvent(t *testing.T) {
 		}(rrs[i], req, done[i])
 	}
 
-	if !waitForSubs(sub, n) {
-		t.Fatalf("timed out waiting for %d subscribers; got %d", n, sub.count())
-	}
+	// Wait for all subscribers to connect.
+	time.Sleep(200 * time.Millisecond)
 
-	sub.dispatch(Event{EventType: "message", Data: []byte(`{"type":"refetchEvaluation"}`)})
-	time.Sleep(50 * time.Millisecond)
+	keyID := cache.PublicID(testSDKKey)
+	esSrv.Publish([]string{keyID}, publishableEvent{evt: Event{EventType: "message", Data: []byte(`{"type":"refetchEvaluation"}`)}})
+	time.Sleep(100 * time.Millisecond)
 
 	for i, cancel := range cancels {
 		cancel()
@@ -220,10 +189,14 @@ func TestHandler_MultipleSubscribers_AllReceiveEvent(t *testing.T) {
 	}
 }
 
-func TestHandler_ClientDisconnect_Unsubscribes(t *testing.T) {
-	sub := &mockSubscriber{}
-	h, c := newTestHandlerWithCache(t, sub)
+func TestHandler_ClientDisconnect_Decrements(t *testing.T) {
+	esSrv := eventsource.NewServer()
+	defer esSrv.Close()
+
+	tracker := &mockTracker{}
+	c := cache.New()
 	c.Set(cache.PublicID(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
+	h := NewHandler(c, esSrv, tracker, newTestInstruments(t), nil, slog.Default(), 15*time.Second, "/server/")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rr := httptest.NewRecorder()
@@ -235,23 +208,27 @@ func TestHandler_ClientDisconnect_Unsubscribes(t *testing.T) {
 		h.ServeHTTP(rr, req)
 	}()
 
-	if !waitForSubs(sub, 1) {
-		t.Fatal("timed out waiting for subscriber to register")
+	time.Sleep(100 * time.Millisecond)
+	if tracker.count.Load() != 1 {
+		t.Fatalf("expected 1 subscriber, got %d", tracker.count.Load())
 	}
 
 	cancel()
 	<-done
 
-	if sub.count() != 0 {
-		t.Errorf("after disconnect: expected 0 subscribers, got %d", sub.count())
+	if tracker.count.Load() != 0 {
+		t.Errorf("after disconnect: expected 0 subscribers, got %d", tracker.count.Load())
 	}
 }
 
 func TestHandler_Heartbeat_EmitsPing(t *testing.T) {
-	sub := &mockSubscriber{}
+	esSrv := eventsource.NewServer()
+	defer esSrv.Close()
+
+	tracker := &mockTracker{}
 	c := cache.New()
 	c.Set(cache.PublicID(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
-	h := NewHandler(c, sub, newTestInstruments(t), nil, slog.Default(), 50*time.Millisecond, "/server/")
+	h := NewHandler(c, esSrv, tracker, newTestInstruments(t), nil, slog.Default(), 50*time.Millisecond, "/server/")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -265,12 +242,14 @@ func TestHandler_Heartbeat_EmitsPing(t *testing.T) {
 		h.ServeHTTP(rr, req)
 	}()
 
-	time.Sleep(120 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 	cancel()
 	<-done
 
-	if !strings.Contains(rr.Body.String(), ": ping") {
-		t.Errorf("body %q: expected heartbeat ping comment", rr.Body.String())
+	body := rr.Body.String()
+	// The eventsource.Server formats comments as ":ping\n" (no space after colon).
+	if !strings.Contains(body, ":ping") && !strings.Contains(body, ": ping") {
+		t.Errorf("body %q: expected heartbeat ping comment", body)
 	}
 }
 
@@ -278,11 +257,14 @@ func TestHandler_RawSDKKeyNeverLogged(t *testing.T) {
 	var logBuf strings.Builder
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	sub := &mockSubscriber{}
+	esSrv := eventsource.NewServer()
+	defer esSrv.Close()
+
+	tracker := &mockTracker{}
 	c := cache.New()
 	streamID := cache.PublicID(testSDKKey)
 	c.Set(streamID, cache.Entry{Payload: []byte(`{}`)})
-	h := NewHandler(c, sub, newTestInstruments(t), nil, logger, 15*time.Second, "/server/")
+	h := NewHandler(c, esSrv, tracker, newTestInstruments(t), nil, logger, 15*time.Second, "/server/")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rr := httptest.NewRecorder()
@@ -294,9 +276,7 @@ func TestHandler_RawSDKKeyNeverLogged(t *testing.T) {
 		h.ServeHTTP(rr, req)
 	}()
 
-	if !waitForSubs(sub, 1) {
-		t.Fatal("timed out waiting for subscriber")
-	}
+	time.Sleep(100 * time.Millisecond)
 	cancel()
 	<-done
 
@@ -309,15 +289,19 @@ func TestHandler_RawSDKKeyNeverLogged(t *testing.T) {
 	}
 }
 
-// TestHandler_ChannelClose_HandlerReturnsCleanly verifies that when the manager
-// closes the subscriber channel (e.g. after a lifecycle invalidation), the
-// handler exits cleanly without busy-looping on zero-value events.
-func TestHandler_ChannelClose_HandlerReturnsCleanly(t *testing.T) {
-	sub := &mockSubscriber{}
-	h, c := newTestHandlerWithCache(t, sub)
-	c.Set(cache.PublicID(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
+// TestHandler_Unregister_HandlerReturnsCleanly verifies that when the manager
+// unregisters a channel (e.g. after a lifecycle invalidation), the handler
+// exits cleanly.
+func TestHandler_Unregister_HandlerReturnsCleanly(t *testing.T) {
+	esSrv := eventsource.NewServer()
+	defer esSrv.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	tracker := &mockTracker{}
+	c := cache.New()
+	c.Set(cache.PublicID(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
+	h := NewHandler(c, esSrv, tracker, newTestInstruments(t), nil, slog.Default(), 15*time.Second, "/server/")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	rr := httptest.NewRecorder()
@@ -329,35 +313,32 @@ func TestHandler_ChannelClose_HandlerReturnsCleanly(t *testing.T) {
 		h.ServeHTTP(rr, req)
 	}()
 
-	if !waitForSubs(sub, 1) {
-		t.Fatal("timed out waiting for subscriber to register")
-	}
+	time.Sleep(100 * time.Millisecond)
 
-	// Close all subscriber channels (simulates lifecycle invalidation).
-	sub.mu.Lock()
-	for _, s := range sub.subs {
-		close(s.ch)
-	}
-	sub.mu.Unlock()
+	// Unregister forces disconnection (simulates lifecycle invalidation).
+	esSrv.Unregister(cache.PublicID(testSDKKey), true)
 
 	select {
 	case <-done:
-		// Handler returned cleanly after channel close.
-	case <-time.After(time.Second):
-		t.Error("handler did not return after subscriber channel was closed")
+		// Handler returned cleanly after channel unregister.
+	case <-time.After(2 * time.Second):
+		t.Error("handler did not return after channel was unregistered")
 	}
 }
 
 // --- Counter increment tests ---
 
 func TestSSEHandler_Counter_IncrementOnAcceptedSubscription(t *testing.T) {
-	sub := &mockSubscriber{}
+	esSrv := eventsource.NewServer()
+	defer esSrv.Close()
+
+	tracker := &mockTracker{}
 	c := cache.New()
 	streamID := cache.PublicID(testSDKKey)
 	c.Set(streamID, cache.Entry{Payload: []byte(`{}`)})
 
 	counter := telemetry.NewCounter()
-	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
+	h := NewHandler(c, esSrv, tracker, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -371,9 +352,7 @@ func TestSSEHandler_Counter_IncrementOnAcceptedSubscription(t *testing.T) {
 		h.ServeHTTP(rr, req)
 	}()
 
-	if !waitForSubs(sub, 1) {
-		t.Fatal("timed out waiting for subscriber to register")
-	}
+	time.Sleep(100 * time.Millisecond)
 	cancel()
 	<-done
 
@@ -381,8 +360,6 @@ func TestSSEHandler_Counter_IncrementOnAcceptedSubscription(t *testing.T) {
 	if len(samples) != 1 || samples[0].Count != 1 {
 		t.Errorf("want 1 sample with Count=1 for accepted SSE subscription, got %v", samples)
 	}
-	// IncrementByHash creates an entry without the raw SDK key — eligible for
-	// billing only after a paired HTTP request via Increment(sdkKey) repairs it.
 	if samples[0].SDKKey != "" {
 		t.Errorf("SSE counter entry must have empty SDKKey (hash-only), got %q", samples[0].SDKKey)
 	}
@@ -392,10 +369,13 @@ func TestSSEHandler_Counter_IncrementOnAcceptedSubscription(t *testing.T) {
 }
 
 func TestSSEHandler_Counter_NoIncrementOn405(t *testing.T) {
-	sub := &mockSubscriber{}
+	esSrv := eventsource.NewServer()
+	defer esSrv.Close()
+
+	tracker := &mockTracker{}
 	counter := telemetry.NewCounter()
 	c := cache.New()
-	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
+	h := NewHandler(c, esSrv, tracker, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
 
 	streamID := cache.PublicID(testSDKKey)
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
@@ -410,10 +390,13 @@ func TestSSEHandler_Counter_NoIncrementOn405(t *testing.T) {
 }
 
 func TestSSEHandler_Counter_NoIncrementOnMissingStreamID(t *testing.T) {
-	sub := &mockSubscriber{}
+	esSrv := eventsource.NewServer()
+	defer esSrv.Close()
+
+	tracker := &mockTracker{}
 	counter := telemetry.NewCounter()
 	c := cache.New()
-	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
+	h := NewHandler(c, esSrv, tracker, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
@@ -428,10 +411,13 @@ func TestSSEHandler_Counter_NoIncrementOnMissingStreamID(t *testing.T) {
 }
 
 func TestSSEHandler_Counter_NoIncrementOn412(t *testing.T) {
-	sub := &mockSubscriber{}
+	esSrv := eventsource.NewServer()
+	defer esSrv.Close()
+
+	tracker := &mockTracker{}
 	counter := telemetry.NewCounter()
 	c := cache.New() // config not cached
-	h := NewHandler(c, sub, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
+	h := NewHandler(c, esSrv, tracker, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.PublicID(testSDKKey), nil)
@@ -446,10 +432,10 @@ func TestSSEHandler_Counter_NoIncrementOn412(t *testing.T) {
 }
 
 func TestHandler_SSEDisabled_Returns501(t *testing.T) {
-	// nil Subscriber signals SSE is disabled; config is cached so the 412 gate
-	// would pass if SSE were enabled — the 501 must fire before that check.
-	h, c := newTestHandlerWithCache(t, nil)
+	// nil esServer signals SSE is disabled.
+	c := cache.New()
 	c.Set(cache.PublicID(testSDKKey), cache.Entry{Payload: []byte(`{}`)})
+	h := NewHandler(c, nil, nil, newTestInstruments(t), nil, slog.Default(), 15*time.Second, "/server/")
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+cache.PublicID(testSDKKey), nil)
@@ -468,7 +454,7 @@ func TestSSEHandler_Counter_NoIncrementOn501(t *testing.T) {
 	c := cache.New()
 	streamID := cache.PublicID(testSDKKey)
 	c.Set(streamID, cache.Entry{Payload: []byte(`{}`)})
-	h := NewHandler(c, nil, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
+	h := NewHandler(c, nil, nil, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+streamID, nil)

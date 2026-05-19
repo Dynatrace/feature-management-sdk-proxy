@@ -182,7 +182,7 @@ func New(t *testing.T, opts Options) (*Harness, error) {
 		}
 	})
 
-	sseHandler := sse.NewHandler(flagCache, sseManager, inst, counter, logger, 15*time.Second, configHandlerPath)
+	sseHandler := sse.NewHandler(flagCache, sseManager.Server(), sseManager, inst, counter, logger, 15*time.Second, configHandlerPath)
 
 	billingInterval := opts.BillingFlushInterval
 	if billingInterval == 0 {

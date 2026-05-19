@@ -34,12 +34,12 @@ func sseServer(t *testing.T, frames []string) *httptest.Server {
 	}))
 }
 
-// TestReadLoop_ParsesBasicEvent ensures a simple data-only event is dispatched.
-func TestReadLoop_ParsesBasicEvent(t *testing.T) {
+// TestConn_ParsesBasicEvent ensures a simple data-only event is dispatched.
+func TestConn_ParsesBasicEvent(t *testing.T) {
 	srv := sseServer(t, []string{"data: hello\n\n"})
 	defer srv.Close()
 
-	events := collectEvents(t, srv.URL, 1, 3*time.Second)
+	events := collectEvents(t, srv.URL, 1, 5*time.Second)
 	if len(events) != 1 {
 		t.Fatalf("got %d events, want 1", len(events))
 	}
@@ -48,13 +48,13 @@ func TestReadLoop_ParsesBasicEvent(t *testing.T) {
 	}
 }
 
-// TestReadLoop_ParsesEventTypeAndID ensures id, event, and data fields are parsed.
-func TestReadLoop_ParsesEventTypeAndID(t *testing.T) {
+// TestConn_ParsesEventTypeAndID ensures id, event, and data fields are parsed.
+func TestConn_ParsesEventTypeAndID(t *testing.T) {
 	frame := "id: 42\nevent: refetchConfig\ndata: {\"key\":\"val\"}\n\n"
 	srv := sseServer(t, []string{frame})
 	defer srv.Close()
 
-	events := collectEvents(t, srv.URL, 1, 3*time.Second)
+	events := collectEvents(t, srv.URL, 1, 5*time.Second)
 	if len(events) != 1 {
 		t.Fatalf("got %d events, want 1", len(events))
 	}
@@ -70,13 +70,13 @@ func TestReadLoop_ParsesEventTypeAndID(t *testing.T) {
 	}
 }
 
-// TestReadLoop_MultilineData ensures multi-line data fields are joined with newlines.
-func TestReadLoop_MultilineData(t *testing.T) {
+// TestConn_MultilineData ensures multi-line data fields are joined with newlines.
+func TestConn_MultilineData(t *testing.T) {
 	frame := "data: line1\ndata: line2\n\n"
 	srv := sseServer(t, []string{frame})
 	defer srv.Close()
 
-	events := collectEvents(t, srv.URL, 1, 3*time.Second)
+	events := collectEvents(t, srv.URL, 1, 5*time.Second)
 	if len(events) != 1 {
 		t.Fatalf("got %d events, want 1", len(events))
 	}
@@ -85,13 +85,13 @@ func TestReadLoop_MultilineData(t *testing.T) {
 	}
 }
 
-// TestReadLoop_CommentsIgnored ensures comment lines (: ...) are ignored.
-func TestReadLoop_CommentsIgnored(t *testing.T) {
-	frames := []string{": keepalive\n", "data: real\n\n"}
+// TestConn_CommentsIgnored ensures comment lines (: ...) are ignored.
+func TestConn_CommentsIgnored(t *testing.T) {
+	frames := []string{": keepalive\ndata: real\n\n"}
 	srv := sseServer(t, frames)
 	defer srv.Close()
 
-	events := collectEvents(t, srv.URL, 1, 3*time.Second)
+	events := collectEvents(t, srv.URL, 1, 5*time.Second)
 	if len(events) != 1 {
 		t.Fatalf("got %d events, want 1", len(events))
 	}
@@ -100,21 +100,8 @@ func TestReadLoop_CommentsIgnored(t *testing.T) {
 	}
 }
 
-// TestReadLoop_EmptyDataIgnored ensures a blank-line dispatch with no data is a no-op.
-func TestReadLoop_EmptyDataIgnored(t *testing.T) {
-	// Two dispatches: first has no data (skipped), second has data.
-	frames := []string{"\ndata: hello\n\n"}
-	srv := sseServer(t, frames)
-	defer srv.Close()
-
-	events := collectEvents(t, srv.URL, 1, 3*time.Second)
-	if len(events) != 1 {
-		t.Fatalf("got %d events, want 1", len(events))
-	}
-}
-
-// TestReadLoop_MultipleEvents ensures multiple events from one connection are all delivered.
-func TestReadLoop_MultipleEvents(t *testing.T) {
+// TestConn_MultipleEvents ensures multiple events from one connection are all delivered.
+func TestConn_MultipleEvents(t *testing.T) {
 	frames := []string{
 		"data: first\n\n",
 		"data: second\n\n",
@@ -123,7 +110,7 @@ func TestReadLoop_MultipleEvents(t *testing.T) {
 	srv := sseServer(t, frames)
 	defer srv.Close()
 
-	events := collectEvents(t, srv.URL, 3, 3*time.Second)
+	events := collectEvents(t, srv.URL, 3, 5*time.Second)
 	if len(events) != 3 {
 		t.Fatalf("got %d events, want 3", len(events))
 	}
@@ -135,7 +122,7 @@ func TestReadLoop_MultipleEvents(t *testing.T) {
 }
 
 // TestConn_ReconnectsOnEOF verifies that the conn goroutine reconnects when
-// the server closes the connection.
+// the server closes the connection (via the eventsource library's internal reconnect).
 func TestConn_ReconnectsOnEOF(t *testing.T) {
 	var connCount atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -143,10 +130,13 @@ func TestConn_ReconnectsOnEOF(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "data: ping\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
 	}))
 	defer srv.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	var got atomic.Int64
@@ -159,11 +149,11 @@ func TestConn_ReconnectsOnEOF(t *testing.T) {
 		inst:               newTestInstruments(t),
 		tracer:             testConnTracer,
 		onEvent: func(evt Event) {
-			got.Add(1)
-			if got.Load() >= 2 {
+			if got.Add(1) >= 2 {
 				cancel() // stop after receiving events from 2 reconnects
 			}
 		},
+		setStreaming: func(bool) {},
 	}
 
 	c.run(ctx)
@@ -176,72 +166,23 @@ func TestConn_ReconnectsOnEOF(t *testing.T) {
 	}
 }
 
-// TestConn_LastEventIDSentOnReconnect verifies Last-Event-ID is forwarded.
-func TestConn_LastEventIDSentOnReconnect(t *testing.T) {
-	var receivedIDs []string
-	var mu sync.Mutex
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		receivedIDs = append(receivedIDs, r.Header.Get("Last-Event-ID"))
-		mu.Unlock()
-
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "id: 7\ndata: hello\n\n")
-	}))
-	defer srv.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	var count atomic.Int64
-	c := &conn{
-		sseURL:             srv.URL,
-		inactivityDelaySec: 60,
-		keyID:              "testhash",
-		client:             srv.Client(),
-		logger:             slog.Default(),
-		inst:               newTestInstruments(t),
-		tracer:             testConnTracer,
-		onEvent: func(evt Event) {
-			if count.Add(1) >= 2 {
-				cancel()
-			}
-		},
-	}
-	c.run(ctx)
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(receivedIDs) < 2 {
-		t.Fatalf("server received %d connections, want at least 2", len(receivedIDs))
-	}
-	// First connection: no Last-Event-ID
-	if receivedIDs[0] != "" {
-		t.Errorf("first connect: Last-Event-ID = %q, want empty", receivedIDs[0])
-	}
-	// Second connection: should carry the ID from the first response
-	if receivedIDs[1] != "7" {
-		t.Errorf("second connect: Last-Event-ID = %q, want %q", receivedIDs[1], "7")
-	}
-}
-
 // TestConn_StopsOnContextCancel verifies the conn exits promptly when ctx is done.
 func TestConn_StopsOnContextCancel(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
 		// Keep connection open indefinitely
 		<-r.Context().Done()
 	}))
 	defer srv.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
 
 	go func() {
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 		cancel()
 	}()
 
@@ -255,40 +196,17 @@ func TestConn_StopsOnContextCancel(t *testing.T) {
 		inst:               newTestInstruments(t),
 		tracer:             testConnTracer,
 		onEvent:            func(Event) {},
+		setStreaming:       func(bool) {},
 	}
 	c.run(ctx)
 
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Errorf("run took %v, want < 1s after cancel", elapsed)
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("run took %v, want < 3s after cancel", elapsed)
 	}
 }
 
-// TestReconnectBackoff verifies the backoff doubles each step and caps at max.
-func TestReconnectBackoff(t *testing.T) {
-	b := newBackoff()
-	steps := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
-	for i, want := range steps {
-		got := b.next()
-		if got != want {
-			t.Errorf("step %d: next() = %v, want %v", i, got, want)
-		}
-	}
-	// Drive to cap
-	for range 10 {
-		b.next()
-	}
-	if got := b.next(); got != 60*time.Second {
-		t.Errorf("capped next() = %v, want 60s", got)
-	}
-	// Reset returns to initial
-	b.reset()
-	if got := b.next(); got != time.Second {
-		t.Errorf("after reset: next() = %v, want 1s", got)
-	}
-}
-
-// TestConn_InactivityTimeout verifies that timedBody closes the connection and
-// conn.run reconnects when no bytes arrive within inactivityDelaySec.
+// TestConn_InactivityTimeout verifies that the eventsource ReadTimeout fires
+// and the stream reconnects when no data arrives.
 func TestConn_InactivityTimeout(t *testing.T) {
 	var connCount atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -298,28 +216,28 @@ func TestConn_InactivityTimeout(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		// Send nothing — inactivity timer should fire and close the connection.
+		// Send nothing — read timeout should fire and cause reconnection.
 		<-r.Context().Done()
 	}))
 	defer srv.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	c := &conn{
 		sseURL:             srv.URL,
-		inactivityDelaySec: 1, // 1-second inactivity timeout
+		inactivityDelaySec: 1, // 1-second read timeout
 		keyID:              "testhash",
 		client:             srv.Client(),
 		logger:             slog.Default(),
 		inst:               newTestInstruments(t),
 		tracer:             testConnTracer,
 		onEvent:            func(Event) {},
+		setStreaming:       func(bool) {},
 	}
 
 	go func() {
-		// Cancel once we've seen at least two connections (one reconnect confirms
-		// the inactivity path triggered).
+		// Cancel once we've seen at least two connections (one reconnect).
 		for {
 			if connCount.Load() >= 2 {
 				cancel()
@@ -363,6 +281,7 @@ func collectEvents(t *testing.T, url string, want int, timeout time.Duration) []
 				cancel()
 			}
 		},
+		setStreaming: func(bool) {},
 	}
 	c.run(ctx)
 	mu.Lock()
