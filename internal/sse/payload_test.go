@@ -97,15 +97,18 @@ func TestRewriteSSEURL(t *testing.T) {
 		wantResult RewriteResult
 		// wantContains is checked in the output if wantResult == RewriteResultRewritten.
 		wantContains string
+		// wantNotContains is checked in the output if wantResult == RewriteResultRewritten.
+		wantNotContains string
 		// wantByteIdentical asserts the returned bytes equal the input payload.
 		wantByteIdentical bool
 	}{
 		{
-			name:         "rewrites upstream URL",
-			payload:      `{"flags":{},"eventStreams":[{"type":"sse","url":"` + upstream + `","inactivityDelaySec":120}]}`,
-			proxyURL:     proxy,
-			wantResult:   RewriteResultRewritten,
-			wantContains: proxy,
+			name:            "rewrites upstream URL",
+			payload:         `{"flags":{},"eventStreams":[{"type":"sse","url":"` + upstream + `","inactivityDelaySec":120}]}`,
+			proxyURL:        proxy,
+			wantResult:      RewriteResultRewritten,
+			wantContains:    proxy,
+			wantNotContains: upstream,
 		},
 		{
 			name:              "no SSE entry returns payload unchanged",
@@ -136,29 +139,28 @@ func TestRewriteSSEURL(t *testing.T) {
 			wantByteIdentical: true,
 		},
 		{
-			name: "upstream URL not in body bytes returns payload unchanged",
-			// ExtractSSEURL succeeds, but the URL was encoded differently so the
-			// byte form doesn't appear in the raw payload. This exercises NotFoundInBody.
-			// We simulate this by having the URL appear with escaped forward slashes (\/),
-			// which json.Marshal would not produce, so oldBytes won't match.
-			payload:           `{"eventStreams":[{"type":"sse","url":"https:\/\/upstream.sse.example.com\/stream","inactivityDelaySec":0}]}`,
-			proxyURL:          proxy,
-			wantResult:        RewriteResultNotFoundInBody,
-			wantByteIdentical: true,
+			name: "escaped forward slashes in URL still rewritten",
+			// JSON-encoded forward slashes (\/) are decoded during unmarshal,
+			// so the URL is correctly matched and replaced.
+			payload:         `{"eventStreams":[{"type":"sse","url":"https:\/\/upstream.sse.example.com\/stream","inactivityDelaySec":0}]}`,
+			proxyURL:        proxy,
+			wantResult:      RewriteResultRewritten,
+			wantContains:    proxy,
+			wantNotContains: "upstream.sse.example.com",
 		},
 		{
-			name:         "surrounding bytes preserved",
+			name:         "surrounding fields preserved",
 			payload:      `{"before":"value","eventStreams":[{"type":"sse","url":"` + upstream + `"}],"after":"value"}`,
 			proxyURL:     proxy,
 			wantResult:   RewriteResultRewritten,
 			wantContains: `"before":"value"`,
 		},
 		{
-			name:         "upstream URL absent from rewritten output",
-			payload:      `{"flags":{},"eventStreams":[{"type":"sse","url":"` + upstream + `","inactivityDelaySec":60}]}`,
-			proxyURL:     proxy,
-			wantResult:   RewriteResultRewritten,
-			wantContains: "",
+			name:            "upstream URL absent from rewritten output",
+			payload:         `{"flags":{},"eventStreams":[{"type":"sse","url":"` + upstream + `","inactivityDelaySec":60}]}`,
+			proxyURL:        proxy,
+			wantResult:      RewriteResultRewritten,
+			wantNotContains: upstream,
 		},
 	}
 
@@ -179,9 +181,8 @@ func TestRewriteSSEURL(t *testing.T) {
 				t.Errorf("output missing %q, got: %q", tc.wantContains, out)
 			}
 
-			// For a successful rewrite, the upstream URL must no longer appear.
-			if result == RewriteResultRewritten && bytes.Contains(out, []byte(upstream)) {
-				t.Errorf("upstream URL still present in rewritten output: %q", out)
+			if tc.wantNotContains != "" && bytes.Contains(out, []byte(tc.wantNotContains)) {
+				t.Errorf("output should not contain %q, got: %q", tc.wantNotContains, out)
 			}
 		})
 	}
