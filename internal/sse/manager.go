@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/launchdarkly/eventsource"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
@@ -18,21 +19,27 @@ import (
 )
 
 // Manager maintains exactly one upstream SSE connection per SDK key hash and
-// fans out received events to subscribed SDK clients.
+// fans out received events to subscribed SDK clients via an eventsource.Server.
 //
 // Call OnConfigCached after a fresh config payload is stored in the cache.
 // Call OnRefreshed after each background 200 refresh (not 304).
 // Never call either from the snapshot load path — SSE is only established
 // after the proxy confirms upstream reachability via a live HTTP response.
 type Manager struct {
-	client    *http.Client
-	inst      *metrics.Instruments
-	logger    *slog.Logger
-	tracer    trace.Tracer
+	client   *http.Client
+	inst     *metrics.Instruments
+	logger   *slog.Logger
+	tracer   trace.Tracer
+	esServer *eventsource.Server // downstream fan-out server
+
 	lifecycle func(Event) bool // optional; set via SetLifecycleHandler
 
 	mu    sync.RWMutex
 	conns map[string]*keyState
+
+	// subscriberCounts tracks the number of active downstream connections per
+	// keyID. Managed by the Handler (increment on connect, decrement on disconnect).
+	subscriberCounts sync.Map // keyID -> *atomic.Int64
 }
 
 type keyState struct {
@@ -40,27 +47,24 @@ type keyState struct {
 	inactivityDelaySec int
 	cancel             context.CancelFunc
 	wg                 sync.WaitGroup
-	subsMu             sync.Mutex
-	subs               []*subscriber
-	closed             bool // set by Close under subsMu; checked by Subscribe under subsMu
-	// streaming is accessed atomically (no mutex required); all other fields
-	// that need protection are covered by cancel/wg (main conn lifecycle) or subsMu.
-	streaming atomic.Bool // true only while the upstream read loop is actively reading
-}
-
-type subscriber struct {
-	ch chan Event
+	// streaming is accessed atomically; true only while the upstream read loop
+	// is actively reading.
+	streaming atomic.Bool
 }
 
 // New constructs a Manager. httpClient must not have an overall Timeout set —
 // SSE connections are long-lived. Use ResponseHeaderTimeout on the Transport.
 func New(httpClient *http.Client, inst *metrics.Instruments, logger *slog.Logger) *Manager {
+	srv := eventsource.NewServer()
+	srv.BufferSize = 16 // match previous channel buffer size
+
 	return &Manager{
-		client: httpClient,
-		inst:   inst,
-		logger: logger,
-		tracer: tracenoop.NewTracerProvider().Tracer("sse"),
-		conns:  make(map[string]*keyState),
+		client:   httpClient,
+		inst:     inst,
+		logger:   logger,
+		tracer:   tracenoop.NewTracerProvider().Tracer("sse"),
+		esServer: srv,
+		conns:    make(map[string]*keyState),
 	}
 }
 
@@ -68,6 +72,12 @@ func New(httpClient *http.Client, inst *metrics.Instruments, logger *slog.Logger
 // attempts emit sse.upstream.connect spans. Must be called before OnConfigCached.
 func (m *Manager) SetTracer(t trace.Tracer) {
 	m.tracer = t
+}
+
+// Server returns the underlying eventsource.Server used for downstream fan-out.
+// Used by the Handler to serve SSE connections to SDK clients.
+func (m *Manager) Server() *eventsource.Server {
+	return m.esServer
 }
 
 // OnConfigCached is called by the proxy handler after a successful cold fetch
@@ -112,49 +122,22 @@ func (m *Manager) OnRefreshed(keyID string, payload []byte) {
 		attribute.String("sdk_key_public_id", keyID),
 		attribute.String("reason", "url_change"),
 	))
-	// Old goroutine exits asynchronously; brief overlap is acceptable.
 	m.startLocked(context.Background(), keyID, sseURL, inactivitySec, state)
 }
 
-// Subscribe returns a channel that receives events for the given key hash and
-// an unsubscribe function. The caller must invoke unsubscribe when done.
-// If no upstream connection exists for keyID yet, the channel will receive
-// events once OnConfigCached is called for that key.
-func (m *Manager) Subscribe(keyID string) (<-chan Event, func()) {
-	ch := make(chan Event, 16)
-	sub := &subscriber{ch: ch}
+// IncrementSubscribers increments the subscriber count for a keyID.
+// Called by the Handler when a client connects.
+func (m *Manager) IncrementSubscribers(keyID string) {
+	val, _ := m.subscriberCounts.LoadOrStore(keyID, &atomic.Int64{})
+	val.(*atomic.Int64).Add(1)
+}
 
-	m.mu.Lock()
-	state, ok := m.conns[keyID]
-	if !ok {
-		state = &keyState{}
-		m.conns[keyID] = state
+// DecrementSubscribers decrements the subscriber count for a keyID.
+// Called by the Handler when a client disconnects.
+func (m *Manager) DecrementSubscribers(keyID string) {
+	if val, ok := m.subscriberCounts.Load(keyID); ok {
+		val.(*atomic.Int64).Add(-1)
 	}
-	m.mu.Unlock()
-
-	state.subsMu.Lock()
-	if state.closed {
-		// Close ran between m.mu.Unlock above and this lock; return a
-		// pre-closed channel so the handler exits immediately.
-		state.subsMu.Unlock()
-		closed := make(chan Event)
-		close(closed)
-		return closed, func() {}
-	}
-	state.subs = append(state.subs, sub)
-	state.subsMu.Unlock()
-
-	unsubscribe := func() {
-		state.subsMu.Lock()
-		defer state.subsMu.Unlock()
-		for i, s := range state.subs {
-			if s == sub {
-				state.subs = append(state.subs[:i], state.subs[i+1:]...)
-				return
-			}
-		}
-	}
-	return ch, unsubscribe
 }
 
 // SetLifecycleHandler registers a function to be called for each upstream SSE
@@ -167,10 +150,9 @@ func (m *Manager) SetLifecycleHandler(fn func(Event) bool) {
 	m.lifecycle = fn
 }
 
-// Close cancels the upstream SSE connection for keyID, closes all subscriber
-// channels, and removes the state from the manager. It is safe to call on a
-// key that has no active connection (no-op). Close does not wait for the
-// upstream goroutine to exit; cancellation is async.
+// Close cancels the upstream SSE connection for keyID, disconnects all
+// downstream subscribers via eventsource.Server.Unregister, and removes state.
+// Safe to call on a key that has no active connection (no-op).
 func (m *Manager) Close(keyID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -188,13 +170,8 @@ func (m *Manager) Close(keyID string) {
 		))
 	}
 
-	state.subsMu.Lock()
-	state.closed = true
-	for _, sub := range state.subs {
-		close(sub.ch)
-	}
-	state.subs = nil
-	state.subsMu.Unlock()
+	// Force-disconnect all downstream clients for this channel.
+	m.esServer.Unregister(keyID, true)
 
 	delete(m.conns, keyID)
 	m.logger.Info("sse: lifecycle invalidation closed connection",
@@ -202,8 +179,8 @@ func (m *Manager) Close(keyID string) {
 	)
 }
 
-// Shutdown cancels all upstream connections and waits for them to drain, or
-// until ctx is cancelled.
+// Shutdown cancels all upstream connections, disconnects all downstream
+// clients, and waits for goroutines to drain or until ctx is cancelled.
 func (m *Manager) Shutdown(ctx context.Context) error {
 	m.mu.Lock()
 	states := make([]*keyState, 0, len(m.conns))
@@ -215,16 +192,13 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	}
 	m.mu.Unlock()
 
+	// Close the downstream eventsource server.
+	m.esServer.Close()
+
 	done := make(chan struct{})
 	go func() {
 		for _, state := range states {
 			state.wg.Wait()
-			state.subsMu.Lock()
-			for _, sub := range state.subs {
-				close(sub.ch)
-			}
-			state.subs = nil
-			state.subsMu.Unlock()
 		}
 		close(done)
 	}()
@@ -238,19 +212,12 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 }
 
 // HasSubscribers implements cache.Liveness. It returns true when at least one
-// SDK client has an active SSE subscription for keyID. An active subscriber
-// is treated as a liveness signal — the entry must not be evicted while clients
-// are connected.
+// SDK client has an active SSE subscription for keyID.
 func (m *Manager) HasSubscribers(keyID string) bool {
-	m.mu.RLock()
-	state, ok := m.conns[keyID]
-	m.mu.RUnlock()
-	if !ok {
-		return false
+	if val, ok := m.subscriberCounts.Load(keyID); ok {
+		return val.(*atomic.Int64).Load() > 0
 	}
-	state.subsMu.Lock()
-	defer state.subsMu.Unlock()
-	return len(state.subs) > 0
+	return false
 }
 
 // RefreshInterval implements cache.RefreshIntervalProvider. It returns
@@ -280,7 +247,6 @@ func (m *Manager) ensureConn(ctx context.Context, keyID, sseURL string, inactivi
 			attribute.String("sdk_key_public_id", keyID),
 			attribute.String("reason", "url_change"),
 		))
-		// Old goroutine exits asynchronously.
 	}
 
 	if !exists {
@@ -296,7 +262,7 @@ func (m *Manager) startLocked(ctx context.Context, keyID, sseURL string, inactiv
 	state.sseURL = sseURL
 	state.inactivityDelaySec = inactivitySec
 	state.cancel = cancel
-	state.streaming.Store(false) // reset on (re)start
+	state.streaming.Store(false)
 
 	state.wg.Go(func() {
 		c := &conn{
@@ -308,7 +274,7 @@ func (m *Manager) startLocked(ctx context.Context, keyID, sseURL string, inactiv
 			inst:               m.inst,
 			tracer:             m.tracer,
 			onEvent: func(evt Event) {
-				m.dispatch(keyID, evt)
+				m.publish(keyID, evt)
 			},
 			onLifecycle:  m.lifecycle,
 			setStreaming: func(v bool) { state.streaming.Store(v) },
@@ -317,43 +283,13 @@ func (m *Manager) startLocked(ctx context.Context, keyID, sseURL string, inactiv
 	})
 }
 
-// dispatch fans out an event to all subscribers of keyID.
-func (m *Manager) dispatch(keyID string, evt Event) {
-	m.mu.Lock()
-	state, ok := m.conns[keyID]
-	m.mu.Unlock()
-	if !ok {
-		return
-	}
+// publish fans out an event to all downstream subscribers of keyID via the
+// eventsource.Server.
+func (m *Manager) publish(keyID string, evt Event) {
+	m.esServer.Publish([]string{keyID}, publishableEvent{evt: evt})
 
-	state.subsMu.Lock()
-	subs := make([]*subscriber, len(state.subs))
-	copy(subs, state.subs)
-	state.subsMu.Unlock()
-
-	if len(subs) == 0 {
-		m.inst.SSEUpstreamEvents.Add(context.Background(), 1, metric.WithAttributes(
-			attribute.String("sdk_key_public_id", keyID),
-			attribute.String("result", "dropped_no_subscribers"),
-		))
-		return
-	}
-
-	for _, sub := range subs {
-		select {
-		case sub.ch <- evt:
-			m.inst.SSEUpstreamEvents.Add(context.Background(), 1, metric.WithAttributes(
-				attribute.String("sdk_key_public_id", keyID),
-				attribute.String("result", "forwarded"),
-			))
-		default:
-			m.inst.SSEUpstreamEvents.Add(context.Background(), 1, metric.WithAttributes(
-				attribute.String("sdk_key_public_id", keyID),
-				attribute.String("result", "dropped_slow_subscriber"),
-			))
-			m.logger.Warn("sse: dropped event for slow subscriber",
-				slog.String("key", keyID),
-			)
-		}
-	}
+	m.inst.SSEUpstreamEvents.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("sdk_key_public_id", keyID),
+		attribute.String("result", "forwarded"),
+	))
 }

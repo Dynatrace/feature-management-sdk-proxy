@@ -1,13 +1,12 @@
 package sse
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/launchdarkly/eventsource"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -24,21 +23,24 @@ import (
 // HandlerPath is the proxy's SSE endpoint path.
 const HandlerPath = "/sse"
 
-// defaultEventType is the SSE spec default when no event: field is present.
-const defaultEventType = "message"
-
-// Subscriber is the narrow interface the Handler needs from the SSE Manager.
-type Subscriber interface {
-	Subscribe(keyID string) (<-chan Event, func())
+// SubscriberTracker is the narrow interface the Handler needs from the Manager
+// to track downstream subscriber counts (for HasSubscribers / cache liveness).
+type SubscriberTracker interface {
+	IncrementSubscribers(keyID string)
+	DecrementSubscribers(keyID string)
 }
 
-// Handler serves GET /sse. It authenticates the caller via the sdk_key query
-// parameter, gates on cache presence, and fans out upstream events to all
-// connected clients sharing the same SDK key. When constructed with a nil
-// manager, disabled is set to true and all requests return 501 Not Implemented.
+// Handler serves GET /sse. It authenticates the caller via the stream_id query
+// parameter, gates on cache presence, and delegates to the eventsource.Server
+// for downstream SSE streaming. The eventsource.Server handles fan-out of
+// upstream events to all connected clients sharing the same SDK key channel.
+//
+// When constructed with a nil esServer, disabled is set to true and all
+// requests return 501 Not Implemented.
 type Handler struct {
 	cache             *cache.Cache
-	manager           Subscriber
+	esServer          *eventsource.Server
+	tracker           SubscriberTracker
 	disabled          bool
 	inst              *metrics.Instruments
 	counter           *telemetry.Counter
@@ -53,11 +55,12 @@ type Handler struct {
 // configPath is the HTTP path prefix at which the proxy serves flagd config
 // (e.g. "/server/"); used in the 412 error hint so it stays in sync with the
 // mux registration. counter may be nil; counting is silently skipped.
-func NewHandler(c *cache.Cache, m Subscriber, inst *metrics.Instruments, counter *telemetry.Counter, logger *slog.Logger, heartbeatInterval time.Duration, configPath string) *Handler {
+func NewHandler(c *cache.Cache, esServer *eventsource.Server, tracker SubscriberTracker, inst *metrics.Instruments, counter *telemetry.Counter, logger *slog.Logger, heartbeatInterval time.Duration, configPath string) *Handler {
 	return &Handler{
 		cache:             c,
-		manager:           m,
-		disabled:          m == nil,
+		esServer:          esServer,
+		tracker:           tracker,
+		disabled:          esServer == nil,
 		inst:              inst,
 		counter:           counter,
 		logger:            logger,
@@ -120,26 +123,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Count only accepted SSE subscription requests (after stream_id and cache gate).
-	// Rejected requests (412 no config, invalid stream_id) are not counted —
-	// they never establish a connection and consume no ongoing proxy resources.
 	if h.counter != nil {
 		h.counter.IncrementByHash(keyID)
 	}
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		setupSpan.SetAttributes(attribute.String("outcome", "500_no_flusher"))
-		setupSpan.End()
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
+	// Set additional headers before the eventsource handler writes the response.
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
 
 	// Setup complete — end the span here so it doesn't span the full connection.
 	setupSpan.SetAttributes(attribute.String("outcome", "200_connected"))
@@ -148,63 +138,44 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.inst.SSEClientConnections.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("sdk_key_public_id", keyID),
 	))
-	defer h.inst.SSEClientConnections.Add(context.Background(), -1, metric.WithAttributes(
-		attribute.String("sdk_key_public_id", keyID),
-	))
-
-	ch, unsub := h.manager.Subscribe(keyID)
-	defer unsub()
+	if h.tracker != nil {
+		h.tracker.IncrementSubscribers(keyID)
+	}
+	defer func() {
+		h.inst.SSEClientConnections.Add(context.Background(), -1, metric.WithAttributes(
+			attribute.String("sdk_key_public_id", keyID),
+		))
+		if h.tracker != nil {
+			h.tracker.DecrementSubscribers(keyID)
+		}
+	}()
 
 	h.logger.Debug("sse: client connected", slog.String("key", keyID))
 
-	heartbeat := time.NewTicker(h.heartbeatInterval)
-	defer heartbeat.Stop()
+	// Start a heartbeat goroutine that publishes comments to this channel.
+	// The eventsource.Server delivers the comment to all subscribers of keyID.
+	heartbeatCtx, heartbeatCancel := context.WithCancel(r.Context())
+	defer heartbeatCancel()
+	go h.heartbeatLoop(heartbeatCtx, keyID)
 
-	for {
-		select {
-		case <-r.Context().Done():
-			h.logger.Debug("sse: client disconnected", slog.String("key", keyID))
-			return
-		case evt, ok := <-ch:
-			if !ok {
-				return
-			}
-			if err := writeSSEEvent(w, evt); err != nil {
-				return
-			}
-			flusher.Flush()
-			h.inst.SSEEventsDelivered.Add(context.Background(), 1, metric.WithAttributes(
-				attribute.String("sdk_key_public_id", keyID),
-			))
-		case <-heartbeat.C:
-			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
-				return
-			}
-			flusher.Flush()
-		}
-	}
+	// Delegate to the eventsource.Server handler. This blocks until the client
+	// disconnects or the channel is unregistered with forceDisconnect.
+	h.esServer.Handler(keyID)(w, r)
+
+	h.logger.Debug("sse: client disconnected", slog.String("key", keyID))
 }
 
-func writeSSEEvent(w http.ResponseWriter, evt Event) error {
-	if evt.ID != "" {
-		if _, err := fmt.Fprintf(w, "id: %s\n", evt.ID); err != nil {
-			return err
+// heartbeatLoop periodically publishes a comment to the keyID channel to keep
+// idle connections alive. Stops when ctx is done.
+func (h *Handler) heartbeatLoop(ctx context.Context, keyID string) {
+	ticker := time.NewTicker(h.heartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			h.esServer.PublishComment([]string{keyID}, "ping")
 		}
 	}
-	evtType := evt.EventType
-	if evtType == "" {
-		evtType = defaultEventType
-	}
-	if _, err := fmt.Fprintf(w, "event: %s\n", evtType); err != nil {
-		return err
-	}
-	// Upstream may produce multi-line data (conn.go joins lines with \n).
-	// Emit one data: line per segment per the SSE spec.
-	for line := range bytes.SplitSeq(evt.Data, []byte{'\n'}) {
-		if _, err := fmt.Fprintf(w, "data: %s\n", line); err != nil {
-			return err
-		}
-	}
-	_, err := fmt.Fprint(w, "\n")
-	return err
 }

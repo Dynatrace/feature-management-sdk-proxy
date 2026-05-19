@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/launchdarkly/eventsource"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -226,13 +227,15 @@ func run() error {
 		}
 	})
 
-	// Use a true nil interface (not a typed-nil *sse.Manager) so the handler can
-	// safely check manager == nil when SSE is disabled.
-	var sseSubscriber sse.Subscriber
+	// Pass the eventsource.Server and Manager to the handler. When SSE is disabled,
+	// sseManager is nil and NewHandler treats a nil esServer as disabled (501).
+	var esServer *eventsource.Server
+	var sseTracker sse.SubscriberTracker
 	if sseManager != nil {
-		sseSubscriber = sseManager
+		esServer = sseManager.Server()
+		sseTracker = sseManager
 	}
-	sseHandler := sse.NewHandler(flagCache, sseSubscriber, inst, counter, logger, 15*time.Second, configHandlerPath)
+	sseHandler := sse.NewHandler(flagCache, esServer, sseTracker, inst, counter, logger, 15*time.Second, configHandlerPath)
 	sseHandler.SetTracer(tracer)
 
 	// ReadyFunc gates /ready on snapshot load completion.

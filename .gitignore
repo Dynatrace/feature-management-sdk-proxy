@@ -15,3 +15,5 @@ start.sh
 coverage.txt
 /dist/
 /vendor/
+
+.idea/
