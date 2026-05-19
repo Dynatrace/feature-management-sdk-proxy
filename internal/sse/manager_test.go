@@ -357,10 +357,16 @@ func TestManager_RefreshInterval_Connected(t *testing.T) {
 	defer srv.Close()
 
 	m := newTestManager(t, srv.Client())
-	defer m.esServer.Close()
+	// Shut down the manager (cancels upstream conns) before srv.Close()
+	// to avoid srv.Close() blocking on the active TLS connection.
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		m.Shutdown(ctx) //nolint:errcheck
+	}()
 
 	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
-	m.OnConfigCached(t.Context(), "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", configWithSSEURL(srv.URL+"/sse"))
+	m.OnConfigCached(context.Background(), "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", configWithSSEURL(srv.URL+"/sse"))
 
 	// Wait for the read loop to enter streaming state.
 	select {

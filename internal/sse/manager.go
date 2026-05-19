@@ -40,6 +40,8 @@ type Manager struct {
 	// subscriberCounts tracks the number of active downstream connections per
 	// keyID. Managed by the Handler (increment on connect, decrement on disconnect).
 	subscriberCounts sync.Map // keyID -> *atomic.Int64
+
+	shutdownOnce sync.Once
 }
 
 type keyState struct {
@@ -181,34 +183,50 @@ func (m *Manager) Close(keyID string) {
 
 // Shutdown cancels all upstream connections, disconnects all downstream
 // clients, and waits for goroutines to drain or until ctx is cancelled.
+// It is safe to call multiple times; only the first call performs work.
 func (m *Manager) Shutdown(ctx context.Context) error {
-	m.mu.Lock()
-	states := make([]*keyState, 0, len(m.conns))
-	for _, state := range m.conns {
-		if state.cancel != nil {
-			state.cancel()
+	var err error
+	m.shutdownOnce.Do(func() {
+		m.mu.Lock()
+		states := make([]*keyState, 0, len(m.conns))
+		for _, state := range m.conns {
+			if state.cancel != nil {
+				state.cancel()
+			}
+			states = append(states, state)
 		}
-		states = append(states, state)
-	}
-	m.mu.Unlock()
+		m.mu.Unlock()
 
-	// Close the downstream eventsource server.
-	m.esServer.Close()
-
-	done := make(chan struct{})
-	go func() {
-		for _, state := range states {
-			state.wg.Wait()
+		// Close the downstream eventsource server in a separate goroutine
+		// because eventsource.Server.Close() sends on an unbuffered channel
+		// and can block if the internal run loop is processing a publish.
+		closeDone := make(chan struct{})
+		go func() {
+			m.esServer.Close()
+			close(closeDone)
+		}()
+		select {
+		case <-closeDone:
+		case <-ctx.Done():
+			err = ctx.Err()
+			return
 		}
-		close(done)
-	}()
 
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+		done := make(chan struct{})
+		go func() {
+			for _, state := range states {
+				state.wg.Wait()
+			}
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-ctx.Done():
+			err = ctx.Err()
+		}
+	})
+	return err
 }
 
 // HasSubscribers implements cache.Liveness. It returns true when at least one
