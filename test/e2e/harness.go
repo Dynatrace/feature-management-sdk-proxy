@@ -137,7 +137,7 @@ func New(t *testing.T, opts Options) (*Harness, error) {
 		}
 	}
 
-	sseManager := sse.New(sseMock.Client(), inst, logger)
+	sseManager := sse.New(sseMock.Client(), inst, logger, sse.Config{})
 
 	var snapshotInvalidator sse.Invalidator
 	if snapshotWriter != nil {

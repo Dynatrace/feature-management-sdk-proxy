@@ -13,10 +13,30 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
+	"golang.org/x/time/rate"
 
 	"github.com/dynatrace/sdk-proxy/internal/cache"
 	"github.com/dynatrace/sdk-proxy/internal/metrics"
 )
+
+// Admission result reasons — used in log entries and metric labels.
+const (
+	AdmitReasonRateLimit = "rate_limit"
+	AdmitReasonFanoutCap = "fanout_cap"
+)
+
+// Config holds per-flag-set isolation parameters for the Manager.
+// All rate/capacity fields treat 0 as "no limit".
+type Config struct {
+	// FanoutCapPerKey is the maximum number of downstream SDK client SSE connections
+	// per SDK key public ID. 0 means no cap.
+	FanoutCapPerKey int
+	// SubscribeRatePerSec is the token-bucket rate for new SSE subscribe admits per key.
+	// 0 means no rate limit.
+	SubscribeRatePerSec int
+	// SubscribeBurst is the burst size for the per-key subscribe rate bucket.
+	SubscribeBurst int
+}
 
 // Manager maintains exactly one upstream SSE connection per SDK key hash and
 // fans out received events to subscribed SDK clients via an eventsource.Server.
@@ -31,6 +51,7 @@ type Manager struct {
 	logger   *slog.Logger
 	tracer   trace.Tracer
 	esServer *eventsource.Server // downstream fan-out server
+	cfg      Config
 
 	lifecycle func(Event) bool // optional; set via SetLifecycleHandler
 
@@ -38,8 +59,11 @@ type Manager struct {
 	conns map[string]*keyState
 
 	// subscriberCounts tracks the number of active downstream connections per
-	// keyID. Managed by the Handler (increment on connect, decrement on disconnect).
+	// keyID. Incremented by AdmitSubscriber, decremented by DecrementSubscribers.
 	subscriberCounts sync.Map // keyID -> *atomic.Int64
+	// subscribeLimiters holds the per-key token-bucket rate limiters for subscribe
+	// admission. Created lazily by AdmitSubscriber; deleted on Close.
+	subscribeLimiters sync.Map // keyID -> *rate.Limiter
 
 	shutdownOnce sync.Once
 }
@@ -56,7 +80,7 @@ type keyState struct {
 
 // New constructs a Manager. httpClient must not have an overall Timeout set —
 // SSE connections are long-lived. Use ResponseHeaderTimeout on the Transport.
-func New(httpClient *http.Client, inst *metrics.Instruments, logger *slog.Logger) *Manager {
+func New(httpClient *http.Client, inst *metrics.Instruments, logger *slog.Logger, cfg Config) *Manager {
 	srv := eventsource.NewServer()
 	srv.BufferSize = 16 // match previous channel buffer size
 
@@ -67,6 +91,7 @@ func New(httpClient *http.Client, inst *metrics.Instruments, logger *slog.Logger
 		tracer:   tracenoop.NewTracerProvider().Tracer("sse"),
 		esServer: srv,
 		conns:    make(map[string]*keyState),
+		cfg:      cfg,
 	}
 }
 
@@ -123,11 +148,36 @@ func (m *Manager) OnRefreshed(keyID string, payload []byte) {
 	m.startLocked(context.Background(), keyID, sseURL, inactivitySec, state)
 }
 
-// IncrementSubscribers increments the subscriber count for a keyID.
-// Called by the Handler when a client connects.
-func (m *Manager) IncrementSubscribers(keyID string) {
+// AdmitSubscriber gates on per-key subscribe rate and fan-out cap; increments
+// the subscriber count on success. Returns (true, "") on admission, or
+// (false, reason) where reason is AdmitReasonRateLimit or AdmitReasonFanoutCap.
+// The matching decrement must be called via DecrementSubscribers on disconnect.
+func (m *Manager) AdmitSubscriber(keyID string) (bool, string) {
+	if m.cfg.SubscribeRatePerSec > 0 {
+		limVal, _ := m.subscribeLimiters.LoadOrStore(keyID, rate.NewLimiter(
+			rate.Limit(m.cfg.SubscribeRatePerSec), m.cfg.SubscribeBurst,
+		))
+		if !limVal.(*rate.Limiter).Allow() {
+			return false, AdmitReasonRateLimit
+		}
+	}
+
 	val, _ := m.subscriberCounts.LoadOrStore(keyID, &atomic.Int64{})
-	val.(*atomic.Int64).Add(1)
+	counter := val.(*atomic.Int64)
+	if m.cfg.FanoutCapPerKey > 0 {
+		for {
+			current := counter.Load()
+			if current >= int64(m.cfg.FanoutCapPerKey) {
+				return false, AdmitReasonFanoutCap
+			}
+			if counter.CompareAndSwap(current, current+1) {
+				break
+			}
+		}
+	} else {
+		counter.Add(1)
+	}
+	return true, ""
 }
 
 // DecrementSubscribers decrements the subscriber count for a keyID.
@@ -166,6 +216,10 @@ func (m *Manager) Close(keyID string) {
 
 	// Force-disconnect all downstream clients for this channel.
 	m.esServer.Unregister(keyID, true)
+
+	// Clean up per-key rate limiter so the next client for a recycled key
+	// starts with a fresh bucket rather than a stale one.
+	m.subscribeLimiters.Delete(keyID)
 
 	delete(m.conns, keyID)
 	m.logger.Info("sse: lifecycle invalidation closed connection",

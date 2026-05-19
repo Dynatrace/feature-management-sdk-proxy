@@ -441,6 +441,76 @@ func TestFromEnv_CacheInactivityEvictAfter_TooShort(t *testing.T) {
 	}
 }
 
+func TestFromEnv_SSEFanoutCapPerKey_Default(t *testing.T) {
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SSEFanoutCapPerKey != 1000 {
+		t.Errorf("SSEFanoutCapPerKey = %d, want 1000", cfg.SSEFanoutCapPerKey)
+	}
+	if cfg.SSESubscribeRatePerSec != 20 {
+		t.Errorf("SSESubscribeRatePerSec = %d, want 20", cfg.SSESubscribeRatePerSec)
+	}
+	if cfg.SSESubscribeBurst != 100 {
+		t.Errorf("SSESubscribeBurst = %d, want 100", cfg.SSESubscribeBurst)
+	}
+}
+
+func TestFromEnv_SSEFanoutCapPerKey_Custom(t *testing.T) {
+	t.Setenv("SSE_FANOUT_CAP_PER_KEY", "500")
+	t.Setenv("SSE_SUBSCRIBE_RATE_PER_SEC", "10")
+	t.Setenv("SSE_SUBSCRIBE_BURST", "50")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SSEFanoutCapPerKey != 500 {
+		t.Errorf("SSEFanoutCapPerKey = %d, want 500", cfg.SSEFanoutCapPerKey)
+	}
+	if cfg.SSESubscribeRatePerSec != 10 {
+		t.Errorf("SSESubscribeRatePerSec = %d, want 10", cfg.SSESubscribeRatePerSec)
+	}
+	if cfg.SSESubscribeBurst != 50 {
+		t.Errorf("SSESubscribeBurst = %d, want 50", cfg.SSESubscribeBurst)
+	}
+}
+
+func TestFromEnv_SSEFanoutCapPerKey_ZeroDisablesCap(t *testing.T) {
+	t.Setenv("SSE_FANOUT_CAP_PER_KEY", "0")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SSEFanoutCapPerKey != 0 {
+		t.Errorf("SSEFanoutCapPerKey = %d, want 0 (disabled)", cfg.SSEFanoutCapPerKey)
+	}
+}
+
+func TestFromEnv_SSEIsolation_Invalid(t *testing.T) {
+	cases := []struct {
+		env string
+		val string
+	}{
+		{"SSE_FANOUT_CAP_PER_KEY", "-1"},
+		{"SSE_FANOUT_CAP_PER_KEY", "100001"},
+		{"SSE_FANOUT_CAP_PER_KEY", "abc"},
+		{"SSE_SUBSCRIBE_RATE_PER_SEC", "0"},
+		{"SSE_SUBSCRIBE_RATE_PER_SEC", "10001"},
+		{"SSE_SUBSCRIBE_BURST", "0"},
+		{"SSE_SUBSCRIBE_BURST", "100001"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.env+"="+tc.val, func(t *testing.T) {
+			t.Setenv(tc.env, tc.val)
+			_, err := FromEnv()
+			if err == nil {
+				t.Errorf("expected error for %s=%s", tc.env, tc.val)
+			}
+		})
+	}
+}
+
 func TestConfig_LogValue_ZeroValue(t *testing.T) {
 	cfg := Config{}
 	var buf bytes.Buffer

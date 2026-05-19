@@ -120,12 +120,17 @@ These are load-bearing constraints — do not break them without an explicit des
 - **SSE fan-out**: N SDK client instances for the same SDK key → exactly 1 upstream SSE connection. Never N.
 - **SSE after config**: upstream SSE connections are only opened after the config for that SDK key is cached. Never open
   an upstream SSE connection for a key whose config has never been fetched.
-- **Proxy SSE endpoint**: `GET /sse`, SDK key in the Authorization header. SDKs with `proxyUrl` configured use this
-  endpoint — the SSE URL embedded in the flagd config JSON is ignored.
+- **Proxy SSE endpoint**: `GET /sse?stream_id={public_id}`. The `stream_id` is `cache.PublicID(sdkKey)` — the public
+  prefix only, never the raw key. No Authorization header is required or accepted. SDKs with `proxyUrl` configured use
+  this endpoint — the SSE URL embedded in the flagd config JSON is ignored.
 - **Dynamic cache poll interval**: while an upstream SSE connection is actively streaming for a key, the background
   refresher polls at 10 min (`RefreshIntervalConnected`); when disconnected, reconnecting, or SSE is disabled, it polls
   at 10 s (`RefreshIntervalDisconnected`). The per-key interval comes from `sse.Manager.RefreshInterval` wired via
   `RefreshIntervalProvider`. See [`docs/cache.md`](docs/cache.md).
+- **Per-flag-set isolation**: each SDK key public ID has a bounded fan-out group size (`SSE_FANOUT_CAP_PER_KEY`) and a
+  bounded subscribe rate (`SSE_SUBSCRIBE_RATE_PER_SEC`/`SSE_SUBSCRIBE_BURST`). One flag set's quota never affects
+  another's. Rejections surface as 429 with `sdk_key_public_id` in logs; the rejection counter
+  (`proxy.sse.subscribe.rejected_total`) carries no per-key label to avoid unbounded cardinality.
 - **Non-empty error on uncached miss during outage**: do not return an empty config. An empty response is
   indistinguishable from a legitimately empty flag set. When the CDN returns a 5xx, forward its code to the SDK client.
   When the CDN is unreachable (network error), return 503. Never return an empty body.

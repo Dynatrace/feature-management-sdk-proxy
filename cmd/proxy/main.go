@@ -201,7 +201,11 @@ func run() error {
 				ResponseHeaderTimeout: 30 * time.Second,
 			},
 		}
-		sseManager = sse.New(sseClient, inst, logger)
+		sseManager = sse.New(sseClient, inst, logger, sse.Config{
+			FanoutCapPerKey:     cfg.SSEFanoutCapPerKey,
+			SubscribeRatePerSec: cfg.SSESubscribeRatePerSec,
+			SubscribeBurst:      cfg.SSESubscribeBurst,
+		})
 		sseManager.SetTracer(tracer)
 
 		// Wire lifecycle invalidation: on tokenRotated/stageDeleted/projectDeleted events,

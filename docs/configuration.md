@@ -137,6 +137,50 @@ SSE_DISABLED=false
 
 ---
 
+### `SSE_FANOUT_CAP_PER_KEY`
+
+**Optional.** Default: `1000`. Range: 0–100000.
+
+Maximum number of concurrent downstream SSE connections the proxy accepts per SDK key public ID. When this cap is
+reached, new subscribe requests for that key return **429 Too Many Requests**. Other flag sets are unaffected.
+
+Set to `0` to disable the cap entirely. Under normal conditions the default is sufficient; lower this value to
+protect the proxy from a single flag set opening an unbounded number of connections.
+
+```bash
+SSE_FANOUT_CAP_PER_KEY=1000
+```
+
+---
+
+### `SSE_SUBSCRIBE_RATE_PER_SEC`
+
+**Optional.** Default: `20`. Range: 1–10000.
+
+Token-bucket rate (per second) at which new SSE subscribe requests are admitted per SDK key public ID. Requests that
+exceed the rate return **429 Too Many Requests** with `Retry-After: 1`.
+
+Paired with `SSE_SUBSCRIBE_BURST` to allow brief bursts above the sustained rate.
+
+```bash
+SSE_SUBSCRIBE_RATE_PER_SEC=20
+```
+
+---
+
+### `SSE_SUBSCRIBE_BURST`
+
+**Optional.** Default: `100`. Range: 1–100000.
+
+Burst size for the per-key SSE subscribe rate bucket. Allows this many connects in rapid succession before the
+token-bucket rate kicks in.
+
+```bash
+SSE_SUBSCRIBE_BURST=100
+```
+
+---
+
 ## Billing Variables
 
 ### `BILLING_FLUSH_INTERVAL`

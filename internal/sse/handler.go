@@ -23,9 +23,14 @@ import (
 const HandlerPath = "/sse"
 
 // SubscriberTracker is the narrow interface the Handler needs from the Manager
-// to track downstream subscriber counts (for HasSubscribers / cache liveness).
+// to gate and track downstream subscriber connections.
 type SubscriberTracker interface {
-	IncrementSubscribers(keyID string)
+	// AdmitSubscriber gates on per-key rate and fan-out cap; increments the
+	// subscriber count on success. Returns (true, "") on admission, or
+	// (false, reason) where reason is "rate_limit" or "fanout_cap".
+	AdmitSubscriber(keyID string) (bool, string)
+	// DecrementSubscribers decrements the subscriber count for keyID.
+	// Called when a client disconnects.
 	DecrementSubscribers(keyID string)
 }
 
@@ -119,7 +124,27 @@ func (h *Handler) Handle(c *gin.Context) {
 		return
 	}
 
-	// Count only accepted SSE subscription requests (after stream_id and cache gate).
+	// Per-key isolation gate: enforces fan-out cap and subscribe rate limit.
+	// Runs before the billing counter so rejected requests are not billed.
+	if h.tracker != nil {
+		if admitted, reason := h.tracker.AdmitSubscriber(keyID); !admitted {
+			h.logger.WarnContext(ctx, "sse: subscriber rejected by per-key limit",
+				slog.String("sdk_key_public_id", keyID),
+				slog.String("reason", reason),
+			)
+			h.inst.SSESubscribeRejectedTotal.Add(context.Background(), 1, metric.WithAttributes(
+				attribute.String("reason", reason),
+			))
+			setupSpan.SetAttributes(attribute.String("outcome", "429_"+reason))
+			setupSpan.End()
+			c.Header("Retry-After", "1")
+			c.String(http.StatusTooManyRequests, "subscriber limit exceeded: "+reason+"\n")
+			return
+		}
+		defer h.tracker.DecrementSubscribers(keyID)
+	}
+
+	// Count only accepted SSE subscription requests (after stream_id, cache, and isolation gates).
 	if h.counter != nil {
 		h.counter.IncrementByHash(keyID)
 	}
@@ -137,18 +162,12 @@ func (h *Handler) Handle(c *gin.Context) {
 		attribute.String("direction", "downstream"),
 		attribute.String("state", "connected"),
 	))
-	if h.tracker != nil {
-		h.tracker.IncrementSubscribers(keyID)
-	}
 	defer func() {
 		h.inst.SSEConnections.Add(context.Background(), -1, metric.WithAttributes(
 			attribute.String("sdk_key_public_id", keyID),
 			attribute.String("direction", "downstream"),
 			attribute.String("state", "connected"),
 		))
-		if h.tracker != nil {
-			h.tracker.DecrementSubscribers(keyID)
-		}
 	}()
 
 	h.logger.Debug("sse: client connected", slog.String("sdk_key_public_id", keyID))
