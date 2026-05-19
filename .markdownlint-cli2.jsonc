@@ -1,7 +1,9 @@
 {
   // Markdownlint configuration for sdk-proxy
   // Primary focus: enforce proper table column formatting
+  "$schema": "https://raw.githubusercontent.com/DavidAnson/markdownlint-cli2/v0.22.1/schema/markdownlint-cli2-config-schema.json",
   "config": {
+
     "default": true,
 
     // MD010 - No hard tabs (allow in code blocks only)
@@ -39,7 +41,9 @@
     // Columns must maintain uniform width for proper alignment.
     "MD060": { "style": "aligned" }
   },
-
+  "customRules": [
+    "markdownlint-rule-max-one-sentence-per-line"
+  ],
   // Ignore tool-generated and non-documentation files
   "ignores": [
     ".beads/**",
