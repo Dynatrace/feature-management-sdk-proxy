@@ -1,0 +1,53 @@
+{
+  // Markdownlint configuration for sdk-proxy
+  // Primary focus: enforce proper table column formatting
+  "$schema": "https://raw.githubusercontent.com/DavidAnson/markdownlint-cli2/v0.22.1/schema/markdownlint-cli2-config-schema.json",
+  "config": {
+
+    "default": true,
+
+    // MD010 - No hard tabs (allow in code blocks only)
+    "MD010": { "code_blocks": false },
+
+    // MD013 - Line length (disabled - handled by editors)
+    "MD013": false,
+
+    // MD024 - Allow duplicate headings in different sections
+    "MD024": { "siblings_only": true },
+
+    // MD031 - Blanks around fences (disabled - too strict for embedded docs)
+    "MD031": false,
+
+    // MD032 - Blanks around lists (disabled - conflicts with compact style)
+    "MD032": false,
+
+    // MD033 - Allow inline HTML (needed for some docs)
+    "MD033": false,
+
+    // MD040 - Fenced code language (disabled - not all snippets need a lang)
+    "MD040": false,
+
+    // --- Table formatting rules (primary enforcement) ---
+
+    // MD055 - Table pipe style: force consistent use of pipes (e.g., "| text |") for all table rows.
+    "MD055": { "style": "consistent" },
+
+    // MD056 - Table column count: ensure every row has the same
+    // number of columns as the header
+    "MD056": true,
+
+    // MD060 - Table column style: enforce consistent padding in cells.
+    // "aligned" Style aligned ensures pipe characters are vertically aligned.
+    // Columns must maintain uniform width for proper alignment.
+    "MD060": { "style": "aligned" }
+  },
+  //  "customRules": [
+  //    "markdownlint-rule-max-one-sentence-per-line"
+  //  ],
+  // Ignore tool-generated and non-documentation files
+  "ignores": [
+    ".beads/**",
+    ".claude/**",
+    "vendor/**"
+  ]
+}

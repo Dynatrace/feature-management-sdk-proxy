@@ -1,4 +1,4 @@
-.PHONY: build test test-int vet lint docker clean
+.PHONY: build test test-int vet lint lint-md docker clean
 
 build:
 	go build -o sdk-proxy ./cmd/proxy
@@ -14,6 +14,9 @@ vet:
 
 lint:
 	golangci-lint run
+
+lint-md:
+	npx markdownlint-cli2 "**/*.md"
 
 docker:
 	docker build -t sdk-proxy .

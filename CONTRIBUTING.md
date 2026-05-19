@@ -17,7 +17,8 @@ make lint        # golangci-lint (must pass before merge)
 make docker      # build the OCI image
 ```
 
-All integration tests are tagged `//go:build integration` and live under `test/e2e/`. They use in-process mocks for the CDN, SSE service, and health endpoints; no network access required.
+All integration tests are tagged `//go:build integration` and live under `test/e2e/`. They use in-process mocks for the
+CDN, SSE service, and health endpoints; no network access required.
 
 ## Commit Conventions
 
@@ -29,9 +30,11 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 **Types:** `feat`, `fix`, `refactor`, `test`, `chore`, `ci`, `docs`, `perf`
 
-**Scope:** the affected package or component: `cache`, `sse`, `telemetry`, `snapshot`, `server`, `health`, `config`, `metrics`
+**Scope:** the affected package or component: `cache`, `sse`, `telemetry`, `snapshot`, `server`, `health`, `config`,
+`metrics`
 
 **Examples:**
+
 ```
 feat(cache): add background TTL refresh goroutine
 fix(sse): handle upstream EOF on reconnect
@@ -63,10 +66,15 @@ bd close <id>         # close when done
 ## Code Conventions
 
 - No `init()` functions: wire all dependencies explicitly in `cmd/proxy/main.go`
-- **HTTP framework:** [Gin](https://github.com/gin-gonic/gin) v1.12+. All handlers are native `func(*gin.Context)` — never use `gin.WrapH`/`gin.WrapF` to wrap stdlib handlers
-- **Routing:** route groups with middleware in `cmd/proxy/main.go`. Health probes (`/livez`, `/readyz`, `/healthz`) mount directly on the root router; API routes (`/server/*`, `/sse`) go through the `middleware.TracePropagation()` group
-- **Middleware:** shared middleware lives in `internal/middleware/`. Per-route behavior belongs in the handler, not a new middleware
-- **Tests:** use `gin.CreateTestContext` + a `ginContext()` helper pattern; set `gin.SetMode(gin.TestMode)` in test `init()` to suppress debug output
+- **HTTP framework:** [Gin](https://github.com/gin-gonic/gin) v1.12+. All handlers are native `func(*gin.Context)` —
+  never use `gin.WrapH`/`gin.WrapF` to wrap stdlib handlers
+- **Routing:** route groups with middleware in `cmd/proxy/main.go`. Health probes (`/livez`, `/readyz`, `/healthz`)
+  mount directly on the root router; API routes (`/server/*`, `/sse`) go through the `middleware.TracePropagation()`
+  group
+- **Middleware:** shared middleware lives in `internal/middleware/`. Per-route behavior belongs in the handler, not a
+  new middleware
+- **Tests:** use `gin.CreateTestContext` + a `ginContext()` helper pattern; set `gin.SetMode(gin.TestMode)` in test
+  `init()` to suppress debug output
 - New OTel metrics go in `internal/metrics/metrics.go`, never inline
 - SDK keys must never appear in logs, metrics, or storage: use `cache.Key(sdkKey)` (SHA-256 truncated to 16 hex chars)
 - Snapshot writes must be async: a failed write must never fail an SDK request
