@@ -362,21 +362,24 @@ func run() error {
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
-		// Drain in-flight HTTP requests first — counter.Increment is called
-		// during request handling, so the final billing flush must happen after.
-		if err := srv.Shutdown(context.Background()); err != nil {
-			slog.Warn("server: shutdown error", slog.String("error", err.Error()))
-		}
-		if startErr := <-errCh; startErr != nil {
-			slog.Warn("server: listen error", slog.String("error", startErr.Error()))
-		}
-
+		// Shut down SSE first — this closes all downstream streaming connections
+		// so the HTTP server drain below can complete without waiting for
+		// long-lived SSE connections to time out.
 		if sseManager != nil {
 			sseShutCtx, sseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer sseCancel()
 			if err := sseManager.Shutdown(sseShutCtx); err != nil {
 				slog.Warn("sse: shutdown timed out", slog.String("error", err.Error()))
 			}
+		}
+
+		// Drain in-flight HTTP requests — counter.Increment is called
+		// during request handling, so the final billing flush must happen after.
+		if err := srv.Shutdown(context.Background()); err != nil {
+			slog.Warn("server: shutdown error", slog.String("error", err.Error()))
+		}
+		if startErr := <-errCh; startErr != nil {
+			slog.Warn("server: listen error", slog.String("error", startErr.Error()))
 		}
 
 		if sweeperDone != nil {
