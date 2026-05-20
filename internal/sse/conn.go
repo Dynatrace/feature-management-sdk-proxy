@@ -113,6 +113,12 @@ func (c *conn) run(ctx context.Context) {
 			EventType: ev.Event(),
 			Data:      []byte(ev.Data()),
 		}
+		c.logger.Debug("sse: event received",
+			slog.String("key", c.keyID),
+			slog.String("event_type", evt.EventType),
+			slog.String("id", evt.ID),
+			slog.Int("data_len", len(evt.Data)),
+		)
 		if c.onLifecycle != nil && c.onLifecycle(evt) {
 			continue
 		}

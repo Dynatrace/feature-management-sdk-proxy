@@ -5,13 +5,15 @@
 package e2e
 
 import (
-	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/launchdarkly/eventsource"
 )
 
 // eventually polls cond every interval until it returns true or deadline passes.
@@ -48,9 +50,10 @@ func assertStatus(t *testing.T, resp *http.Response, want int) {
 	}
 }
 
-// connectSSE opens a streaming GET to url and returns a channel that emits
-// complete SSE frames. The goroutine exits when ctx is cancelled or the
-// connection is closed. The returned cancel cancels the request context.
+// connectSSE opens a streaming GET to url using the LaunchDarkly eventsource
+// client and returns a channel that emits complete SSE frames. The goroutine
+// exits when ctx is cancelled or the connection is closed. The returned cancel
+// cancels the request context.
 func connectSSE(t *testing.T, url string) (<-chan string, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -62,27 +65,41 @@ func connectSSE(t *testing.T, url string) (<-chan string, context.CancelFunc) {
 		if err != nil {
 			return
 		}
-		resp, err := http.DefaultClient.Do(req)
+
+		stream, err := eventsource.SubscribeWithRequestAndOptions(req,
+			eventsource.StreamOptionInitialRetry(50*time.Millisecond),
+			eventsource.StreamOptionErrorHandler(func(err error) eventsource.StreamErrorHandlerResult {
+				// In tests, close immediately on any error rather than retrying.
+				return eventsource.StreamErrorHandlerResult{CloseNow: true}
+			}),
+		)
 		if err != nil {
 			return
 		}
-		defer resp.Body.Close()
 
-		var sb strings.Builder
-		scanner := bufio.NewScanner(resp.Body)
-		for scanner.Scan() {
-			line := scanner.Text()
-			sb.WriteString(line)
+		go func() {
+			<-ctx.Done()
+			stream.Close()
+		}()
+
+		for ev := range stream.Events {
+			// Reconstruct the SSE frame text for backward compatibility
+			// with receiveEvent's strings.Contains matching.
+			var sb strings.Builder
+			if id := ev.Id(); id != "" {
+				fmt.Fprintf(&sb, "id: %s\n", id)
+			}
+			if event := ev.Event(); event != "" {
+				fmt.Fprintf(&sb, "event: %s\n", event)
+			}
+			fmt.Fprintf(&sb, "data: %s\n", ev.Data())
 			sb.WriteByte('\n')
-			if line == "" {
-				// blank line terminates a frame
-				frame := sb.String()
-				sb.Reset()
-				select {
-				case ch <- frame:
-				case <-ctx.Done():
-					return
-				}
+
+			frame := sb.String()
+			select {
+			case ch <- frame:
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
