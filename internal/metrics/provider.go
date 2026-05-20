@@ -8,7 +8,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 const defaultPushInterval = 30 * time.Second
@@ -18,15 +17,7 @@ const defaultPushInterval = 30 * time.Second
 // callers should not pass a custom endpoint — use the standard var instead.
 // Uses HTTP/protobuf transport (required by Dynatrace). TLS is enabled by default.
 // The caller must defer Shutdown on the returned provider to flush pending metrics.
-func NewProvider(ctx context.Context) (*metric.MeterProvider, error) {
-	res, err := resource.New(ctx,
-		resource.WithAttributes(semconv.ServiceName("sdk-proxy")),
-		resource.WithFromEnv(),      // honours OTEL_RESOURCE_ATTRIBUTES, OTEL_SERVICE_NAME
-		resource.WithTelemetrySDK(), // adds telemetry.sdk.* attributes
-	)
-	if err != nil {
-		return nil, fmt.Errorf("metrics: build resource: %w", err)
-	}
+func NewProvider(ctx context.Context, res *resource.Resource) (*metric.MeterProvider, error) {
 
 	exporter, err := otlpmetrichttp.New(ctx,
 		otlpmetrichttp.WithTemporalitySelector(metric.LowMemoryTemporalitySelector),

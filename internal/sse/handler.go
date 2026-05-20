@@ -83,7 +83,7 @@ func (h *Handler) SetTracer(t trace.Tracer) {
 // Route registration should use: router.GET(sse.HandlerPath, sseHandler.Handle)
 func (h *Handler) Handle(c *gin.Context) {
 	if h.disabled {
-		h.logger.Debug("sse: SSE disabled — rejecting client connection with 501")
+		h.logger.DebugContext(c.Request.Context(), "sse: SSE disabled — rejecting client connection with 501")
 		c.String(http.StatusNotImplemented, "SSE is disabled\n")
 		return
 	}
@@ -95,7 +95,7 @@ func (h *Handler) Handle(c *gin.Context) {
 	}
 
 	if !cache.IsValidID(streamID) {
-		h.logger.Warn("sse: invalid stream_id format",
+		h.logger.WarnContext(c.Request.Context(), "sse: invalid stream_id format",
 			slog.Int("len", len(streamID)),
 		)
 		c.String(http.StatusBadRequest, "invalid stream_id: must be a valid SDK key public prefix\n")
@@ -106,12 +106,12 @@ func (h *Handler) Handle(c *gin.Context) {
 
 	// Create the setup span. W3C trace context was already extracted by the
 	// TracePropagation middleware, so c.Request.Context() has the parent trace.
-	_, setupSpan := h.tracer.Start(c.Request.Context(), "sse.client.subscribe",
+	ctx, setupSpan := h.tracer.Start(c.Request.Context(), "sse.client.subscribe",
 		trace.WithAttributes(tracing.SDKKeyPublicID(keyID)))
 
 	if _, ok := h.cache.Get(keyID); !ok {
-		h.logger.Warn("sse: client connected before config cached; returning 412",
-			slog.String("key", keyID),
+		h.logger.WarnContext(ctx, "sse: client connected before config cached; returning 412",
+			slog.String("sdk_key_public_id", keyID),
 		)
 		setupSpan.SetAttributes(attribute.String("outcome", "412_no_config"))
 		setupSpan.End()
@@ -132,22 +132,26 @@ func (h *Handler) Handle(c *gin.Context) {
 	setupSpan.SetAttributes(attribute.String("outcome", "200_connected"))
 	setupSpan.End()
 
-	h.inst.SSEClientConnections.Add(context.Background(), 1, metric.WithAttributes(
+	h.inst.SSEConnections.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("sdk_key_public_id", keyID),
+		attribute.String("direction", "downstream"),
+		attribute.String("state", "connected"),
 	))
 	if h.tracker != nil {
 		h.tracker.IncrementSubscribers(keyID)
 	}
 	defer func() {
-		h.inst.SSEClientConnections.Add(context.Background(), -1, metric.WithAttributes(
+		h.inst.SSEConnections.Add(context.Background(), -1, metric.WithAttributes(
 			attribute.String("sdk_key_public_id", keyID),
+			attribute.String("direction", "downstream"),
+			attribute.String("state", "connected"),
 		))
 		if h.tracker != nil {
 			h.tracker.DecrementSubscribers(keyID)
 		}
 	}()
 
-	h.logger.Debug("sse: client connected", slog.String("key", keyID))
+	h.logger.Debug("sse: client connected", slog.String("sdk_key_public_id", keyID))
 
 	// Start a heartbeat goroutine that publishes comments to this channel.
 	// The eventsource.Server delivers the comment to all subscribers of keyID.
@@ -159,7 +163,7 @@ func (h *Handler) Handle(c *gin.Context) {
 	// disconnects or the channel is unregistered with forceDisconnect.
 	h.esServer.Handler(keyID)(c.Writer, c.Request)
 
-	h.logger.Debug("sse: client disconnected", slog.String("key", keyID))
+	h.logger.Debug("sse: client disconnected", slog.String("sdk_key_public_id", keyID))
 }
 
 // heartbeatLoop periodically publishes a comment to the keyID channel to keep

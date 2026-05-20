@@ -121,7 +121,7 @@ receive the next `refetchEvaluation` once the upstream connection is re-establis
 Snapshot writes happen asynchronously after each cache update. A failed write is logged and counted (
 `proxy.snapshot.writes.total{result="failure"}`) but never fails an SDK request or delays the response. If the write
 queue fills faster than the backend can drain it, excess writes are dropped and counted by
-`proxy.snapshot.write_queue.dropped_total`. Under normal load both counters should be zero.
+`proxy.snapshot.writes.total{result="dropped"}`. Under normal load both counters should be zero.
 
 ### Lifecycle Events
 

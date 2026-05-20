@@ -19,7 +19,6 @@ SDK key triggers a CDN fetch; subsequent requests are served directly from cache
 | `proxy.requests.total{result="hit"}` rate       | High relative to `miss`                 | Miss rate is consistently high; cache may be evicting or not warming |
 | `proxy.requests.total{result="upstream_error"}` | Near zero                               | Sustained upstream errors indicate a CDN connectivity issue          |
 | `proxy.requests.total{result="client_error"}`   | Near zero                               | Malformed requests reaching the proxy                                |
-| `proxy.cache.size`                              | Stable, proportional to active SDK keys | Sudden drops indicate unexpected evictions                           |
 
 **CDN outage behavior:** When the CDN is unreachable, the proxy continues serving cached configs. Requests for uncached
 keys receive a non-empty error response: the CDN's own 5xx code is forwarded when available, or `503` when the CDN is
@@ -35,12 +34,13 @@ subscribed. Client instances fan out from this single upstream connection.
 
 **What to watch:**
 
-| Signal                                                        | Healthy                                     | Investigate if                                               |
-|---------------------------------------------------------------|---------------------------------------------|--------------------------------------------------------------|
-| `proxy.sse.connections`                                       | One per active SDK key                      | Exceeds number of distinct SDK keys (unexpected duplication) |
-| `proxy.sse.client.connections`                                | Grows with connected SDK instances          | Drops unexpectedly while traffic is steady                   |
-| `proxy.sse.upstream.reconnects`                               | Occasional `eof` or `inactivity` reconnects | Sustained high reconnect rate with `io_error`                |
-| `proxy.sse.upstream.events{result="dropped_slow_subscriber"}` | Zero                                        | Persistent drops indicate a slow client subscriber           |
+| Signal                                                                            | Healthy                                    | Investigate if                                                                              |
+|-----------------------------------------------------------------------------------|--------------------------------------------|---------------------------------------------------------------------------------------------|
+| `proxy.sse.connections{direction="upstream"}` sum                                 | One per active SDK key                     | Exceeds number of distinct SDK keys (unexpected duplication)                                |
+| `proxy.sse.connections{direction="upstream", state="unhealthy"}`                  | Zero (or brief spikes during reconnection) | Sustained non-zero for a key: upstream SSE is failing to connect or reconnecting repeatedly |
+| `proxy.sse.connections{direction="downstream"}` sum                               | Grows with connected SDK instances         | Drops unexpectedly while traffic is steady                                                  |
+
+**Connection health:** `proxy.sse.connections` combines upstream and downstream connections in one metric. Filter by `direction=upstream` to get the upstream connection count; `state=unhealthy` identifies connections currently in connecting or reconnecting state. Brief `unhealthy` spikes during reconnection backoff are normal; a sustained `unhealthy` state for a key indicates an upstream connectivity problem.
 
 **Connection lifecycle:** An upstream SSE connection is opened after a key's config is first cached. If a client
 subscribes before the config is cached, the request returns `412 Precondition Failed`. This is normal on cold start; the
@@ -55,15 +55,17 @@ See [snapshot.md](snapshot.md) for details on each path.
 
 **What to watch:**
 
-| Signal                                              | Healthy                                                                   | Investigate if                                                                          |
-|-----------------------------------------------------|---------------------------------------------------------------------------|-----------------------------------------------------------------------------------------|
-| `proxy.startup.path{path="cold"}`                   | Expected when no persistence is configured                                | Unexpected cold starts in a fleet using persistence; check backend connectivity         |
-| `proxy.startup.path{path="snapshot"}`               | Expected in a steady-state fleet with persistence                         | Absent when persistence is configured; may indicate snapshot write failures             |
-| `proxy.startup.path{path="snapshot_stale"}`         | Occasional during long outages                                            | Frequent stale starts suggest `SNAPSHOT_MAX_AGE` may be too short or writes are failing |
-| `proxy.startup.path{path="empty_persistence_cold"}` | Expected on first deploy or after a store wipe when upstream is reachable | Recurring in a steady-state fleet; snapshots may not be persisting correctly            |
-| `proxy.startup.path{path="backend_unreachable"}`    | Should never occur in production                                          | Backend is unreachable at startup; check connectivity and credentials                   |
-| `proxy.snapshot.load.total{result="loaded"}`        | Increases proportionally to active SDK keys                               | Unexpectedly low; snapshot writes may be failing                                        |
-| `proxy.snapshot.load.total{result!="loaded"}`       | Near zero                                                                 | `skipped_corrupt` or `backend_error` results indicate storage issues                    |
+Startup path is captured in structured logs rather than metrics: each startup emits a log record at `INFO` or `WARN` level with the path classification. Search logs for `startup:` to find these records.
+
+| Log message                                                          | Healthy                                                                   | Investigate if                                                                          |
+|----------------------------------------------------------------------|---------------------------------------------------------------------------|-----------------------------------------------------------------------------------------|
+| `startup: no persistence configured, starting cold`                  | Expected when no persistence is configured                                | Unexpected cold starts in a fleet using persistence; check backend connectivity         |
+| `startup: serving from fresh snapshot`                               | Expected in a steady-state fleet with persistence                         | Absent when persistence is configured; may indicate snapshot write failures             |
+| `startup: serving stale snapshot` (WARN)                             | Occasional during long outages                                            | Frequent stale starts suggest `SNAPSHOT_MAX_AGE` may be too short or writes are failing |
+| `startup: persistence configured but store is empty, starting cold` | Expected on first deploy or after a store wipe when upstream is reachable | Recurring in a steady-state fleet; snapshots may not be persisting correctly            |
+| `startup: snapshot backend unreachable` (process exits 1)            | Should never occur in production                                          | Backend is unreachable at startup; check connectivity and credentials                   |
+| `proxy.snapshot.load.total{result="loaded"}`                         | Increases proportionally to active SDK keys                               | Unexpectedly low; snapshot writes may be failing                                        |
+| `proxy.snapshot.load.total{result!="loaded"}`                        | Near zero                                                                 | `skipped_corrupt` or `backend_error` results indicate storage issues                    |
 
 ---
 
@@ -73,9 +75,9 @@ Cache entries (cache entry + upstream SSE connection + persisted snapshot) are r
 
 | Trigger                                                                 | Source                                                       | Metric                                   |
 |-------------------------------------------------------------------------|--------------------------------------------------------------|------------------------------------------|
-| **Lifecycle events** (`tokenRotated`, `stageDeleted`, `projectDeleted`) | Upstream SSE lifecycle channel                               | `proxy.lifecycle.invalidated_keys_total` |
-| **Inactivity sweeper**                                                  | Background goroutine; 1-hour tick                            | `proxy.cache.inactivity_evictions.total` |
-| **4xx on background refresh**                                           | Upstream CDN returns 401/403/404/410 during TTL revalidation | `proxy.cache.refresh_evictions.total`    |
+| **Lifecycle events** (`tokenRotated`, `stageDeleted`, `projectDeleted`) | Upstream SSE lifecycle channel                               | `proxy.lifecycle.invalidated_keys_total`              |
+| **Inactivity sweeper**                                                  | Background goroutine; 1-hour tick                            | `proxy.cache.inactivity_evictions.total`               |
+| **4xx on background refresh**                                           | Upstream CDN returns 401/403/404/410 during TTL revalidation | `proxy.cache.refresh.total{result="evicted"}`         |
 
 All three triggers have identical effect: the cache entry, the upstream SSE connection, and the persisted snapshot are
 all removed synchronously. The next SDK request for the key triggers a fresh cold-miss CDN fetch.
