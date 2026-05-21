@@ -137,8 +137,7 @@ SNAPSHOT_S3_SECRET_ACCESS_KEY=...   # optional static credentials
 ```
 
 For compatibility with Cloudflare R2, or other providers, the `SNAPSHOT_S3_ENDPOINT` variable is also supported to
-override the S3 endpoint
-URL:
+override the S3 endpoint URL:
 
 ```bash
 SNAPSHOT_S3_ENDPOINT=https://<account_id>.r2.cloudflarestorage.com
