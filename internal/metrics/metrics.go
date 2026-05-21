@@ -25,6 +25,7 @@ const (
 	CacheRefreshTotal               = "proxy.cache.refresh.total"
 	SnapshotDemandRevalidationTotal = "proxy.snapshot.demand_revalidation.total"
 	SnapshotOutageFallbackTotal     = "proxy.snapshot.outage_fallback.total"
+	SSESubscribeRejectedTotal       = "proxy.sse.subscribe.rejected_total"
 )
 
 // Instruments holds every OTel instrument the proxy emits. Obtain one via Register.
@@ -97,6 +98,11 @@ type Instruments struct {
 	// background CDN refresh failures, labeled by result:
 	// loaded/no_newer/same_etag/debounced/backend_error/decode_error/superseded.
 	SnapshotOutageFallbackTotal metric.Int64Counter
+
+	// SSESubscribeRejectedTotal counts SSE subscribe requests rejected by per-key
+	// isolation limits, labeled by reason (rate_limit/fanout_cap).
+	// No sdk_key_public_id label — per-key cardinality is intentionally excluded.
+	SSESubscribeRejectedTotal metric.Int64Counter
 }
 
 // Register creates all metric instruments against meter. Call once at startup and
@@ -239,6 +245,14 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("metrics: register %s: %w", SnapshotOutageFallbackTotal, err)
 	}
 
+	sseSubRejected, err := meter.Int64Counter(SSESubscribeRejectedTotal,
+		metric.WithDescription("SSE subscribe requests rejected by per-key isolation limits, labeled by reason (rate_limit/fanout_cap)"),
+		metric.WithUnit("{request}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", SSESubscribeRejectedTotal, err)
+	}
+
 	return &Instruments{
 		RequestsTotal:                   reqTotal,
 		SSEConnections:                  sseConns,
@@ -257,5 +271,6 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		CacheRefreshTotal:               cacheRefreshTotal,
 		SnapshotDemandRevalidationTotal: snapshotDemandReval,
 		SnapshotOutageFallbackTotal:     snapshotOutageFallback,
+		SSESubscribeRejectedTotal:       sseSubRejected,
 	}, nil
 }
