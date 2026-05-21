@@ -43,7 +43,7 @@ type Config struct {
 	SSEDisabled bool
 
 	// SSEFanoutCapPerKey is the maximum number of downstream SDK client SSE
-	// connections allowed per SDK key public ID. Connections beyond this cap are
+	// connections allowed per channel(SDK key public ID). Connections beyond this cap are
 	// rejected with 429. Range 0-100000 (0 disables the cap).
 	// Default 1000. Env: SSE_FANOUT_CAP_PER_KEY.
 	SSEFanoutCapPerKey int
