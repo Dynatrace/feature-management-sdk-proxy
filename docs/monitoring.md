@@ -190,5 +190,3 @@ response verbatim.
 
 **Normal behavior:** `result="forwarded"` is the dominant label. Expect `result="unauthorized"` or
 `result="bad_request"` in small quantities during SDK key rotation or misconfiguration; these never reach upstream.
-
-**Note:** eval metrics POSTs do not increment usage counters. Billing is unaffected by this endpoint.
