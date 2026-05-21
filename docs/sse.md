@@ -162,34 +162,29 @@ the old goroutine exits is acceptable.
 
 ## Per-Flag-Set Isolation
 
-Each SDK key public ID has independent limits that prevent one misbehaving flag set from consuming all proxy resources.
-All limits are enforced before billing is recorded — rejected requests are not billed.
+A single misbehaving SDK key (one that opens hundreds of connections or reconnects at high frequency) can consume
+resources that other flag sets depend on. To prevent this, the proxy enforces independent admission limits per SDK key
+public ID. No flag set's behavior affects another's.
 
-| Limit           | Env var                   | Default | Description                                                                   |
-|-----------------|---------------------------|---------|-------------------------------------------------------------------------------|
-| Fan-out cap     | `SSE_FANOUT_CAP_PER_KEY`  | 1000    | Maximum concurrent downstream SSE connections per key. 0 disables the cap.   |
-| Subscribe rate  | `SSE_SUBSCRIBE_RATE_PER_SEC` | 20   | Token-bucket rate (per second) for new subscribe admits per key.              |
-| Subscribe burst | `SSE_SUBSCRIBE_BURST`     | 100     | Burst allowance for the per-key subscribe rate bucket.                        |
+All limits are evaluated before a connection is accepted. Rejected requests are not billed: only connections that
+complete setup and begin streaming count toward your usage. This means a misconfigured or aggressive client hitting
+the rate limit won't inflate your SDK usage costs.
 
-When a request is rejected by these limits, the handler returns **429 Too Many Requests** with a `Retry-After: 1`
-header. The rejection reason (`rate_limit` or `fanout_cap`) is logged with `sdk_key_public_id` and recorded in
-`proxy.sse.subscribe.rejected_total`. The `sdk_key_public_id` label is intentionally absent from that metric to
-avoid unbounded cardinality.
+| Limit           | Env var                      | Default | Description                                                                       |
+|-----------------|------------------------------|---------|-----------------------------------------------------------------------------------|
+| Fan-out cap     | `SSE_FANOUT_CAP_PER_KEY`     | 1000    | Maximum concurrent downstream SSE connections per key. 0 disables the cap.       |
+| Subscribe rate  | `SSE_SUBSCRIBE_RATE_PER_SEC` | 20      | Sustained rate (per second) for new subscribe admits per key.                     |
+| Subscribe burst | `SSE_SUBSCRIBE_BURST`        | 100     | Token-bucket burst capacity. Covers startup spikes before the sustained rate applies. See [configuration.md](configuration.md#sse_subscribe_burst) for details. |
 
-Limits are per-key: one flag set at its cap does not affect any other flag set.
+Requests rejected by either limit return **429 Too Many Requests** with `Retry-After: 1`. The rejection reason
+(`rate_limit` or `fanout_cap`) is logged with `sdk_key_public_id` and recorded in
+`proxy.sse.subscribe.rejected_total`. The per-key label is intentionally absent from that metric: adding it would
+create unbounded cardinality.
 
 ### Metrics
 
-| Metric                                | Type          | Labels                        | Description                                        |
-|---------------------------------------|---------------|-------------------------------|----------------------------------------------------|
-| `proxy.sse.connections`               | UpDownCounter | `sdk_key_public_id`           | Active upstream SSE connections                    |
-| `proxy.sse.client.connections`        | UpDownCounter | `sdk_key_public_id`           | Active SDK client connections to the proxy         |
-| `proxy.sse.events_delivered_total`    | Counter       | `sdk_key_public_id`           | Events successfully written to SDK clients         |
-| `proxy.sse.upstream.reconnects`       | Counter       | `sdk_key_public_id`, `reason` | Upstream reconnect attempts                        |
-| `proxy.sse.upstream.events`           | Counter       | `sdk_key_public_id`, `result` | Upstream events received, by dispatch result       |
-| `proxy.sse.subscribe.rejected_total`  | Counter       | `reason`                      | Subscribe requests rejected by per-key limits      |
-
-The `result` label on `proxy.sse.upstream.events` takes values `forwarded`, `dropped_no_subscribers`, or
-`dropped_slow_subscriber`.
-
-The `reason` label on `proxy.sse.subscribe.rejected_total` takes values `rate_limit` or `fanout_cap`.
+| Metric                                | Type          | Labels                                    | Description                                                                  |
+|---------------------------------------|---------------|-------------------------------------------|------------------------------------------------------------------------------|
+| `proxy.sse.connections`               | UpDownCounter | `sdk_key_public_id`, `direction`, `state` | Active SSE connections. `direction=upstream`: one per SDK key; `direction=downstream`: one per connected SDK client. |
+| `proxy.sse.upstream.events`           | Counter       | `sdk_key_public_id`, `result`             | Upstream events received. `result`: `forwarded`                              |
+| `proxy.sse.subscribe.rejected_total`  | Counter       | `reason`                                  | Subscribe requests rejected by per-key limits. `reason`: `rate_limit`, `fanout_cap` |

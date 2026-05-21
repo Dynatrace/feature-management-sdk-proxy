@@ -172,8 +172,17 @@ SSE_SUBSCRIBE_RATE_PER_SEC=20
 
 **Optional.** Default: `100`. Range: 1–100000.
 
-Burst size for the per-key SSE subscribe rate bucket. Allows this many connects in rapid succession before the
-token-bucket rate kicks in.
+Token-bucket burst capacity for the per-key subscribe rate limiter. The bucket starts full and refills at
+`SSE_SUBSCRIBE_RATE_PER_SEC` tokens per second up to this maximum.
+
+Burst capacity matters most at startup: when a Kubernetes deployment scales up or recovers from a crash, many SDK
+instances may connect simultaneously. With the defaults (`SSE_SUBSCRIBE_RATE_PER_SEC=20`,
+`SSE_SUBSCRIBE_BURST=100`), up to 100 connections are admitted instantly, then 20 per second after that. The default
+of 100 is sized to absorb a typical rolling deployment without triggering 429s during the reconnect window.
+
+Raise this value if your deployments routinely start more than 100 SDK instances for a single flag set at once.
+Lower it if you want to enforce tighter burst limits, accepting more 429s during restarts in exchange for less
+instantaneous load.
 
 ```bash
 SSE_SUBSCRIBE_BURST=100
