@@ -1,0 +1,5 @@
+FROM gcr.io/distroless/static:nonroot
+ARG TARGETPLATFORM
+COPY ${TARGETPLATFORM}/sdk-proxy /sdk-proxy
+EXPOSE 8080
+ENTRYPOINT ["/sdk-proxy"]
