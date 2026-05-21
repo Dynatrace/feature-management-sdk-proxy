@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/dynatrace/sdk-proxy/internal/metrics"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
 )
 
 const inactivitySweepInterval = 1 * time.Hour

@@ -10,8 +10,8 @@ import (
 
 	"go.opentelemetry.io/otel/metric/noop"
 
-	"github.com/dynatrace/sdk-proxy/internal/cache"
-	"github.com/dynatrace/sdk-proxy/internal/metrics"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
 )
 
 // stubStore is an in-memory snapshot.Store for testing.

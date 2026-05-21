@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dynatrace/sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
 )
 
 func TestCounter_ZeroState_DrainReturnsNil(t *testing.T) {

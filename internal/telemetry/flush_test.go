@@ -10,7 +10,7 @@ import (
 
 	"go.opentelemetry.io/otel/metric/noop"
 
-	"github.com/dynatrace/sdk-proxy/internal/metrics"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
 )
 
 // spyReporter is a thread-safe BillingReporter for flush tests.

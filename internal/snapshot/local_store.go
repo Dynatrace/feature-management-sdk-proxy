@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dynatrace/sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
 )
 
 // LocalStore implements Store against a local directory.

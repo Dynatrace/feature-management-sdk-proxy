@@ -19,16 +19,16 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
-	"github.com/dynatrace/sdk-proxy/internal/cache"
-	"github.com/dynatrace/sdk-proxy/internal/health"
-	"github.com/dynatrace/sdk-proxy/internal/metrics"
-	"github.com/dynatrace/sdk-proxy/internal/middleware"
-	"github.com/dynatrace/sdk-proxy/internal/proxy"
-	"github.com/dynatrace/sdk-proxy/internal/server"
-	"github.com/dynatrace/sdk-proxy/internal/snapshot"
-	"github.com/dynatrace/sdk-proxy/internal/sse"
-	"github.com/dynatrace/sdk-proxy/internal/telemetry"
-	"github.com/dynatrace/sdk-proxy/internal/telemetry/billingtest"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/health"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/middleware"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/proxy"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/server"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/snapshot"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sse"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/telemetry"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/telemetry/billingtest"
 )
 
 const (

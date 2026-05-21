@@ -17,7 +17,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
-	"github.com/dynatrace/sdk-proxy/internal/metrics"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
 )
 
 // RefreshIntervalConnected is the polling interval when an upstream SSE

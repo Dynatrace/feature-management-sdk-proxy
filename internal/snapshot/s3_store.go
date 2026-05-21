@@ -14,7 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
-	"github.com/dynatrace/sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
 )
 
 // S3Store implements Store against any S3-compatible object storage service

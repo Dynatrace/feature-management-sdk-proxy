@@ -7,7 +7,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/dynatrace/sdk-proxy/internal/telemetry"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/telemetry"
 )
 
 // Reporter is a thread-safe BillingReporter for tests. It records every Report

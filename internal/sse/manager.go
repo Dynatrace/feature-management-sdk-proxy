@@ -15,8 +15,8 @@ import (
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 	"golang.org/x/time/rate"
 
-	"github.com/dynatrace/sdk-proxy/internal/cache"
-	"github.com/dynatrace/sdk-proxy/internal/metrics"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
 )
 
 // Admission result reasons — used in log entries and metric labels.
