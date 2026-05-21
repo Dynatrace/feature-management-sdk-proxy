@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dynatrace/sdk-proxy/internal/cache"
-	"github.com/dynatrace/sdk-proxy/internal/snapshot"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/snapshot"
 )
 
 // TestStartup_ColdNoPersistence verifies that when no snapshot backend is

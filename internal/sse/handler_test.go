@@ -13,8 +13,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/launchdarkly/eventsource"
 
-	"github.com/dynatrace/sdk-proxy/internal/cache"
-	"github.com/dynatrace/sdk-proxy/internal/telemetry"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/telemetry"
 )
 
 // mockTracker implements SubscriberTracker for testing.

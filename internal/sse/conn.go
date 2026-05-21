@@ -13,8 +13,8 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/dynatrace/sdk-proxy/internal/metrics"
-	"github.com/dynatrace/sdk-proxy/internal/tracing"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/tracing"
 )
 
 // conn manages a single upstream SSE connection for one SDK key using the

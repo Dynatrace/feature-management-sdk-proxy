@@ -10,8 +10,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/dynatrace/sdk-proxy/internal/cache"
-	"github.com/dynatrace/sdk-proxy/internal/metrics"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
 )
 
 // fallbackStoreTimeout caps the S3 Get in checkAndApply so a slow or

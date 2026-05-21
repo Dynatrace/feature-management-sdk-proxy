@@ -13,10 +13,10 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
-	"github.com/dynatrace/sdk-proxy/internal/cache"
-	"github.com/dynatrace/sdk-proxy/internal/metrics"
-	"github.com/dynatrace/sdk-proxy/internal/telemetry"
-	"github.com/dynatrace/sdk-proxy/internal/tracing"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/telemetry"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/tracing"
 )
 
 // HandlerPath is the proxy's SSE endpoint path.

@@ -17,11 +17,11 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/singleflight"
 
-	"github.com/dynatrace/sdk-proxy/internal/cache"
-	"github.com/dynatrace/sdk-proxy/internal/metrics"
-	"github.com/dynatrace/sdk-proxy/internal/sse"
-	"github.com/dynatrace/sdk-proxy/internal/telemetry"
-	"github.com/dynatrace/sdk-proxy/internal/tracing"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sse"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/telemetry"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/tracing"
 )
 
 const (

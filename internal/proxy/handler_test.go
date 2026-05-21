@@ -17,8 +17,8 @@ import (
 	"github.com/gin-gonic/gin"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
-	"github.com/dynatrace/sdk-proxy/internal/cache"
-	"github.com/dynatrace/sdk-proxy/internal/telemetry"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/telemetry"
 )
 
 func init() {

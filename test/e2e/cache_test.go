@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dynatrace/sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
 )
 
 // TestCache_Miss_FetchesUpstream verifies that a cold request triggers one

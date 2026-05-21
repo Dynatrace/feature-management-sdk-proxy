@@ -1,4 +1,4 @@
-module github.com/dynatrace/sdk-proxy
+module github.com/dynatrace/feature-management-sdk-proxy
 
 go 1.26
 

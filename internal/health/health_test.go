@@ -10,7 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/dynatrace/sdk-proxy/internal/health"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/health"
 )
 
 func init() {

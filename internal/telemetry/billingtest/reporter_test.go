@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dynatrace/sdk-proxy/internal/telemetry"
-	"github.com/dynatrace/sdk-proxy/internal/telemetry/billingtest"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/telemetry"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/telemetry/billingtest"
 )
 
 // Compile-time assertion: Reporter satisfies the BillingReporter interface.

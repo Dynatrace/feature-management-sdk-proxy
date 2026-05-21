@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dynatrace/sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
 )
 
 // TestBilling_CacheHit_IncrementsCounter verifies that a cache-hit request

@@ -8,7 +8,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 
-	internalmetrics "github.com/dynatrace/sdk-proxy/internal/metrics"
+	internalmetrics "github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
 )
 
 func TestRegister_NoopMeter(t *testing.T) {

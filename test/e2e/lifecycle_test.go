@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dynatrace/sdk-proxy/internal/cache"
-	"github.com/dynatrace/sdk-proxy/internal/sse"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sse"
 )
 
 // TestLifecycle_TokenRotated_InvalidatesKey verifies that a tokenRotated event
