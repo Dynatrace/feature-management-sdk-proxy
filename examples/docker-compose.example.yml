@@ -1,0 +1,74 @@
+# Example deployment of the sdk-proxy container image.
+# Copy to docker-compose.yml, adjust the values, then run:
+#   docker compose up
+#
+# Health endpoints (for external probes / load balancer checks):
+#   GET /livez   — always 200 while the process is running
+#   GET /readyz  — 200 once snapshot load completes, 503 until then
+#   GET /healthz — alias for /readyz
+#
+# Full variable reference: docs/configuration.md
+
+services:
+  sdk-proxy:
+    image: ghcr.io/dynatrace/feature-management-sdk-proxy:latest
+    ports:
+      - "8080:8080"
+    environment:
+
+      # ── Core ────────────────────────────────────────────────────────────────
+      PORT: "8080"
+      LOG_LEVEL: INFO           # DEBUG | INFO | WARN | ERROR
+      SHUTDOWN_TIMEOUT: 30s     # grace period for in-flight requests on SIGTERM
+      PROXY_INSTANCE_ID: sdk-proxy-1  # unique per replica; differentiates billing records
+
+      # ── CDN ─────────────────────────────────────────────────────────────────
+      # CDN_BASE_DOMAIN: fm.dynatrace.com   # override to target a non-prod CDN environment
+
+      # ── SSE ─────────────────────────────────────────────────────────────────
+      # SSE_DISABLED: "false"   # set "true" to fall back to polling-only mode (10 s interval)
+
+      # ── Billing ─────────────────────────────────────────────────────────────
+      # BILLING_FLUSH_INTERVAL: 60s      # how often SDK usage counters flush to billing (min 10s)
+      # BILLING_RETRY_BUFFER_SIZE: "1000" # max failed samples held for retry before oldest is dropped
+
+      # ── Snapshot persistence — local filesystem ──────────────────────────────
+      # Uncomment this block and the volumes section below to persist cache
+      # entries across restarts using a local directory.
+      #
+      # SNAPSHOT_BACKEND: local
+      # SNAPSHOT_LOCAL_DIR: /snapshots   # must be an absolute path
+      # SNAPSHOT_MAX_AGE: 24h            # snapshots older than this are served stale and refreshed
+
+      # ── Snapshot persistence — S3-compatible object storage ──────────────────
+      # Uncomment to persist snapshots to AWS S3, MinIO, Ceph, or GCS (S3 compat).
+      # Prefer IAM/IRSA over static keys in production.
+      #
+      # SNAPSHOT_BACKEND: s3
+      # SNAPSHOT_S3_BUCKET: my-proxy-snapshots
+      # SNAPSHOT_S3_REGION: us-east-1
+      # SNAPSHOT_S3_PREFIX: prod/sdk-proxy          # optional; useful when sharing a bucket
+      # SNAPSHOT_S3_ENDPOINT: http://minio:9000     # omit to use the AWS regional endpoint
+      # SNAPSHOT_S3_ACCESS_KEY: ""                  # omit to use IAM/IRSA/instance role
+      # SNAPSHOT_S3_SECRET_KEY: ""
+      # SNAPSHOT_MAX_AGE: 24h
+
+      # ── OpenTelemetry ────────────────────────────────────────────────────────
+      # Set OTEL_EXPORTER_OTLP_ENDPOINT to enable metrics and traces export.
+      # The proxy uses OTLP/HTTP (port 4318) as required by Dynatrace.
+      #
+      # OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      # OTEL_SERVICE_NAME: sdk-proxy
+      # OTEL_RESOURCE_ATTRIBUTES: deployment.environment=production,k8s.cluster.name=us-east-1
+      # OTEL_TRACES_SAMPLER: parentbased_always_on
+      # OTEL_TRACES_SAMPLER_ARG: ""   # e.g. "0.1" for 10 % sampling with traceidratio
+
+    # Mount a volume when using SNAPSHOT_BACKEND=local.
+    # volumes:
+    #   - snapshots:/snapshots
+
+    restart: unless-stopped
+
+# Uncomment when using SNAPSHOT_BACKEND=local.
+# volumes:
+#   snapshots:

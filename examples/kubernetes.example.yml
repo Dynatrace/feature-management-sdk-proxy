@@ -1,0 +1,215 @@
+# Example Kubernetes deployment of the sdk-proxy container image.
+#
+# This file is a single multi-document manifest. Apply it with:
+#   kubectl apply -f kubernetes.example.yml
+#
+# Sections marked "optional" are commented out. Uncomment the blocks
+# that match your deployment requirements.
+#
+# Health endpoints (wired to the probes below):
+#   GET /livez   — always 200 while the process is running
+#   GET /readyz  — 200 once snapshot load completes, 503 until then
+#   GET /healthz — alias for /readyz
+#
+# Full variable reference: docs/configuration.md
+
+---
+# ── ConfigMap — non-sensitive configuration ────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sdk-proxy-config
+  # namespace: sdk-proxy
+data:
+  # Core
+  PORT: "8080"
+  LOG_LEVEL: INFO           # DEBUG | INFO | WARN | ERROR
+  SHUTDOWN_TIMEOUT: 30s     # grace period for in-flight requests on SIGTERM
+
+  # CDN
+  # CDN_BASE_DOMAIN: fm.dynatrace.com   # override to target a non-prod CDN environment
+
+  # SSE
+  # SSE_DISABLED: "false"   # set "true" to fall back to polling-only mode (10 s interval)
+
+  # Billing
+  # BILLING_FLUSH_INTERVAL: 60s
+  # BILLING_RETRY_BUFFER_SIZE: "1000"
+
+  # Snapshot persistence — choose local or s3, not both
+  # SNAPSHOT_BACKEND: local
+  # SNAPSHOT_LOCAL_DIR: /snapshots    # must match the volume mount path below
+  # SNAPSHOT_MAX_AGE: 24h
+
+  # SNAPSHOT_BACKEND: s3
+  # SNAPSHOT_S3_BUCKET: my-proxy-snapshots
+  # SNAPSHOT_S3_REGION: us-east-1
+  # SNAPSHOT_S3_PREFIX: prod/sdk-proxy          # optional; useful when sharing a bucket
+  # SNAPSHOT_S3_ENDPOINT: http://minio:9000     # omit to use the AWS regional endpoint
+  # SNAPSHOT_MAX_AGE: 24h
+
+  # OpenTelemetry — set the endpoint to enable metrics and traces export
+  # OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.monitoring:4318
+  # OTEL_SERVICE_NAME: sdk-proxy
+  # OTEL_RESOURCE_ATTRIBUTES: deployment.environment=production,k8s.cluster.name=us-east-1
+  # OTEL_TRACES_SAMPLER: parentbased_always_on
+  # OTEL_TRACES_SAMPLER_ARG: ""   # e.g. "0.1" for 10 % sampling with traceidratio
+
+---
+# ── Secret — S3 credentials (optional) ────────────────────────────────────────
+# Only needed when SNAPSHOT_BACKEND=s3 and you are not using IAM/IRSA.
+# Prefer IRSA or Workload Identity in production; omit this Secret entirely
+# and remove the envFrom reference in the Deployment when using role-based auth.
+#
+# apiVersion: v1
+# kind: Secret
+# metadata:
+#   name: sdk-proxy-s3-credentials
+#   # namespace: sdk-proxy
+# stringData:
+#   SNAPSHOT_S3_ACCESS_KEY: AKIAIOSFODNN7EXAMPLE
+#   SNAPSHOT_S3_SECRET_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+
+---
+# ── Deployment ─────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sdk-proxy
+  # namespace: sdk-proxy
+  labels:
+    app: sdk-proxy
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sdk-proxy
+  template:
+    metadata:
+      labels:
+        app: sdk-proxy
+    spec:
+      terminationGracePeriodSeconds: 60  # must exceed SHUTDOWN_TIMEOUT
+      containers:
+        - name: sdk-proxy
+          image: ghcr.io/dynatrace/feature-management-sdk-proxy:latest
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          envFrom:
+            - configMapRef:
+                name: sdk-proxy-config
+            # Uncomment when using S3 with static credentials:
+            # - secretRef:
+            #     name: sdk-proxy-s3-credentials
+
+          env:
+            # PROXY_INSTANCE_ID is set per-pod via the Downward API so that
+            # billing records can distinguish replicas in a fleet.
+            - name: PROXY_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+
+          # httpGet probes work against distroless images — no shell required.
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            failureThreshold: 12   # 12 × 5 s = 60 s for slow snapshot loads
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+          # Uncomment when using SNAPSHOT_BACKEND=local:
+          # volumeMounts:
+          #   - name: snapshots
+          #     mountPath: /snapshots
+
+      # Uncomment when using SNAPSHOT_BACKEND=local:
+      # volumes:
+      #   - name: snapshots
+      #     persistentVolumeClaim:
+      #       claimName: sdk-proxy-snapshots
+
+---
+# ── Service ────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: sdk-proxy
+  # namespace: sdk-proxy
+spec:
+  selector:
+    app: sdk-proxy
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+  type: ClusterIP
+
+---
+# ── PersistentVolumeClaim — local snapshot storage (optional) ──────────────────
+# Uncomment when using SNAPSHOT_BACKEND=local and reference it in the Deployment
+# volumes block above.
+#
+# apiVersion: v1
+# kind: PersistentVolumeClaim
+# metadata:
+#   name: sdk-proxy-snapshots
+#   # namespace: sdk-proxy
+# spec:
+#   accessModes:
+#     - ReadWriteOnce
+#   resources:
+#     requests:
+#       storage: 1Gi
+
+---
+# ── HorizontalPodAutoscaler (optional) ────────────────────────────────────────
+# Requires the Kubernetes metrics-server. Note: local snapshot persistence
+# (ReadWriteOnce PVCs) is incompatible with HPA scaling to multiple nodes —
+# use S3 or no persistence when enabling autoscaling.
+#
+# apiVersion: autoscaling/v2
+# kind: HorizontalPodAutoscaler
+# metadata:
+#   name: sdk-proxy
+#   # namespace: sdk-proxy
+# spec:
+#   scaleTargetRef:
+#     apiVersion: apps/v1
+#     kind: Deployment
+#     name: sdk-proxy
+#   minReplicas: 2
+#   maxReplicas: 10
+#   metrics:
+#     - type: Resource
+#       resource:
+#         name: cpu
+#         target:
+#           type: Utilization
+#           averageUtilization: 70
