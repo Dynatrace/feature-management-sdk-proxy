@@ -118,7 +118,7 @@ func run() error {
 				slog.Error("logs: shutdown failed", slog.String("error", err.Error()))
 			}
 		}()
-		bridge := otelslog.NewHandler("github.com/dynatrace/sdk-proxy",
+		bridge := otelslog.NewHandler("github.com/dynatrace/feature-management-sdk-proxy",
 			otelslog.WithLoggerProvider(lp))
 		logger = slog.New(telemetry.NewTeeHandler(stdoutHandler, bridge))
 		slog.SetDefault(logger)
