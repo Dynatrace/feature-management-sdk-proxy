@@ -27,7 +27,7 @@ func NewTransport(base http.RoundTripper, t trace.Tracer) *Transport {
 
 // RoundTrip implements http.RoundTripper.
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	ctx, span := t.tracer.Start(req.Context(), req.Method,
+	ctx, span := t.tracer.Start(req.Context(), "HTTP "+req.Method,
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
 			attribute.String("http.request.method", req.Method),

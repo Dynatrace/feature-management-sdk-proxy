@@ -90,7 +90,7 @@ func (m *Manager) OnConfigCached(ctx context.Context, sdkKey string, payload []b
 	sseURL, inactivitySec, ok := ExtractSSEURL(payload)
 	if !ok {
 		m.logger.Debug("sse: no SSE entry in config, skipping upstream connection",
-			slog.String("key", cache.PublicID(sdkKey)),
+			slog.String("sdk_key_public_id", cache.PublicID(sdkKey)),
 		)
 		return
 	}
@@ -115,15 +115,11 @@ func (m *Manager) OnRefreshed(keyID string, payload []byte) {
 	}
 
 	m.logger.Info("sse: SSE URL changed, restarting upstream connection",
-		slog.String("key", keyID),
+		slog.String("sdk_key_public_id", keyID),
 	)
 	if state.cancel != nil {
 		state.cancel()
 	}
-	m.inst.SSEUpstreamReconnects.Add(context.Background(), 1, metric.WithAttributes(
-		attribute.String("sdk_key_public_id", keyID),
-		attribute.String("reason", "url_change"),
-	))
 	m.startLocked(context.Background(), keyID, sseURL, inactivitySec, state)
 }
 
@@ -166,10 +162,6 @@ func (m *Manager) Close(keyID string) {
 
 	if state.cancel != nil {
 		state.cancel()
-		m.inst.SSEUpstreamReconnects.Add(context.Background(), 1, metric.WithAttributes(
-			attribute.String("sdk_key_public_id", keyID),
-			attribute.String("reason", "lifecycle_invalidated"),
-		))
 	}
 
 	// Force-disconnect all downstream clients for this channel.
@@ -177,7 +169,7 @@ func (m *Manager) Close(keyID string) {
 
 	delete(m.conns, keyID)
 	m.logger.Info("sse: lifecycle invalidation closed connection",
-		slog.String("key", keyID),
+		slog.String("sdk_key_public_id", keyID),
 	)
 }
 
@@ -261,10 +253,6 @@ func (m *Manager) ensureConn(ctx context.Context, keyID, sseURL string, inactivi
 			return // already running with same URL
 		}
 		state.cancel()
-		m.inst.SSEUpstreamReconnects.Add(context.Background(), 1, metric.WithAttributes(
-			attribute.String("sdk_key_public_id", keyID),
-			attribute.String("reason", "url_change"),
-		))
 	}
 
 	if !exists {
@@ -291,23 +279,39 @@ func (m *Manager) startLocked(ctx context.Context, keyID, sseURL string, inactiv
 			logger:             m.logger,
 			inst:               m.inst,
 			tracer:             m.tracer,
-			onEvent: func(evt Event) {
-				m.publish(keyID, evt)
-			},
-			onLifecycle:  m.lifecycle,
-			setStreaming: func(v bool) { state.streaming.Store(v) },
+			onLifecycle:        m.lifecycle,
+			setStreaming:       func(v bool) { state.streaming.Store(v) },
+		}
+		// onEvent references c.connectSpanCtx which is populated inside c.run
+		// after the setup span ends, so it is always set before any event fires.
+		c.onEvent = func(evt Event) {
+			m.publish(keyID, evt, c.connectSpanCtx)
 		}
 		c.run(connCtx)
 	})
 }
 
 // publish fans out an event to all downstream subscribers of keyID via the
-// eventsource.Server.
-func (m *Manager) publish(keyID string, evt Event) {
+// eventsource.Server. It emits a short-lived sse.event.forward span per event
+// (not per connection), linked to the upstream connect span.
+func (m *Manager) publish(keyID string, evt Event, connectSC trace.SpanContext) {
+	spanOpts := []trace.SpanStartOption{
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(
+			attribute.String("sdk_key_public_id", keyID),
+			attribute.String("sse.event.type", evt.EventType),
+		),
+	}
+	if connectSC.IsValid() {
+		spanOpts = append(spanOpts, trace.WithLinks(trace.Link{SpanContext: connectSC}))
+	}
+	_, span := m.tracer.Start(context.Background(), "sse.event.forward", spanOpts...)
+
 	m.esServer.Publish([]string{keyID}, publishableEvent{evt: evt})
 
 	m.inst.SSEUpstreamEvents.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("sdk_key_public_id", keyID),
 		attribute.String("result", "forwarded"),
 	))
+	span.End()
 }

@@ -142,7 +142,7 @@ func (h *Handler) Handle(c *gin.Context) {
 
 	target, ok := h.buildTarget(sdkKey)
 	if !ok {
-		h.logger.Warn("proxy: unrecognized SDK key format", slog.String("key", cache.PublicID(sdkKey)))
+		h.logger.WarnContext(c.Request.Context(), "proxy: unrecognized SDK key format", slog.String("sdk_key_public_id", cache.PublicID(sdkKey)))
 		c.String(http.StatusBadRequest, "unrecognized SDK key format: must be {token}.{platform}_{geo}_{publicRandom}.{secret}_{sha1}\n")
 		return
 	}
@@ -168,14 +168,14 @@ func (h *Handler) Handle(c *gin.Context) {
 	}
 
 	if entry, ok := h.cache.Get(key); ok {
-		h.logger.Debug("proxy: cache hit", slog.String("key", key))
+		h.logger.DebugContext(ctx, "proxy: cache hit", slog.String("sdk_key_public_id", key))
 		result := h.serveCacheHit(ctx, c, entry, sdkKey, key)
 		h.recordResult(ctx, result)
 		span.SetAttributes(attribute.String("result", result))
 		return
 	}
 
-	h.logger.Debug("proxy: cache miss — fetching upstream", slog.String("key", key))
+	h.logger.DebugContext(ctx, "proxy: cache miss — fetching upstream", slog.String("sdk_key_public_id", key))
 	result := h.serveMiss(ctx, c, sdkKey, key, target)
 	h.recordResult(ctx, result)
 	span.SetAttributes(attribute.String("result", result))
@@ -261,8 +261,8 @@ func (h *Handler) serveFromCache(ctx context.Context, c *gin.Context, entry cach
 	var payload []byte
 	if h.rewriteSSEURLs {
 		var rewriteResult sse.RewriteResult
-		payload, rewriteResult = sse.RewriteSSEURL(entry.Payload, h.proxySSEURL(c.Request, key))
-		h.recordRewriteResult(rewriteResult, key)
+		payload, rewriteResult = sse.RewriteSSEURL(entry.Payload, h.proxySSEURL(ctx, c.Request, key))
+		h.recordRewriteResult(ctx, rewriteResult, key)
 	} else {
 		payload = entry.Payload
 	}
@@ -309,8 +309,8 @@ func (h *Handler) doDemandRevalidate(ctx context.Context, sdkKey, key string, en
 	if err != nil {
 		span.RecordError(err)
 		span.SetAttributes(attribute.String("result", "error"))
-		h.logger.Warn("proxy: demand revalidation fetch failed, serving stale entry",
-			slog.String("key", key),
+		h.logger.WarnContext(ctx, "proxy: demand revalidation fetch failed, serving stale entry",
+			slog.String("sdk_key_public_id", key),
 			slog.String("error", err.Error()),
 		)
 		h.recordDemandReval(ctx, "error")
@@ -322,7 +322,7 @@ func (h *Handler) doDemandRevalidate(ctx context.Context, sdkKey, key string, en
 		now := time.Now()
 		h.cache.ResetTTL(key, now)
 		entry.FetchedAt = now
-		h.logger.Debug("proxy: demand revalidation — upstream unchanged (304), TTL extended", slog.String("key", key))
+		h.logger.DebugContext(ctx, "proxy: demand revalidation — upstream unchanged (304), TTL extended", slog.String("sdk_key_public_id", key))
 		if h.sseManager != nil {
 			sseCtx := trace.ContextWithSpanContext(context.Background(), span.SpanContext())
 			h.sseManager.OnConfigCached(sseCtx, sdkKey, entry.Payload)
@@ -336,7 +336,7 @@ func (h *Handler) doDemandRevalidate(ctx context.Context, sdkKey, key string, en
 		result.Entry.OriginatingFetch = span.SpanContext()
 		span.SetAttributes(attribute.String("result", "ok"))
 		h.cache.Set(key, *result.Entry)
-		h.logger.Debug("proxy: demand revalidation — new content received (200), cache updated", slog.String("key", key))
+		h.logger.DebugContext(ctx, "proxy: demand revalidation — new content received (200), cache updated", slog.String("sdk_key_public_id", key))
 		if h.sseManager != nil {
 			sseCtx := trace.ContextWithSpanContext(context.Background(), span.SpanContext())
 			h.sseManager.OnConfigCached(sseCtx, sdkKey, result.Entry.Payload)
@@ -355,8 +355,8 @@ func (h *Handler) doDemandRevalidate(ctx context.Context, sdkKey, key string, en
 		)
 		if cache.ShouldEvict(result.StatusCode) {
 			h.cache.Delete(key)
-			h.logger.Warn("proxy: demand revalidation got evictable status, evicting entry",
-				slog.String("key", key),
+			h.logger.WarnContext(ctx, "proxy: demand revalidation got evictable status, evicting entry",
+				slog.String("sdk_key_public_id", key),
 				slog.Int("upstream_status", result.StatusCode),
 			)
 			if h.evictor != nil {
@@ -365,8 +365,8 @@ func (h *Handler) doDemandRevalidate(ctx context.Context, sdkKey, key string, en
 			h.recordDemandReval(ctx, "evicted")
 			return demandRevalEntry{evictedCode: result.StatusCode}
 		}
-		h.logger.Warn("proxy: demand revalidation got upstream error, serving stale entry",
-			slog.String("key", key),
+		h.logger.WarnContext(ctx, "proxy: demand revalidation got upstream error, serving stale entry",
+			slog.String("sdk_key_public_id", key),
 			slog.Int("upstream_status", result.StatusCode),
 		)
 		h.recordDemandReval(ctx, "preserved_stale")
@@ -439,7 +439,7 @@ func (h *Handler) coldFetch(ctx context.Context, sdkKey, key, target string) col
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		h.logger.Error("proxy: build upstream request failed", slog.String("error", sanitizeErr(err).Error()))
+		h.logger.ErrorContext(ctx, "proxy: build upstream request failed", slog.String("error", sanitizeErr(err).Error()))
 		span.RecordError(err)
 		span.SetAttributes(attribute.String("result", "internal_error"))
 		return coldFetchResult{resultLabel: resultInternalError}
@@ -447,8 +447,8 @@ func (h *Handler) coldFetch(ctx context.Context, sdkKey, key, target string) col
 
 	resp, err := h.client.Do(req)
 	if err != nil {
-		h.logger.Warn("proxy: upstream request failed",
-			slog.String("key", key),
+		h.logger.WarnContext(ctx, "proxy: upstream request failed",
+			slog.String("sdk_key_public_id", key),
 			slog.String("error", sanitizeErr(err).Error()),
 		)
 		span.RecordError(sanitizeErr(err))
@@ -461,7 +461,7 @@ func (h *Handler) coldFetch(ctx context.Context, sdkKey, key, target string) col
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, h.maxResponseBytes+1))
 	if err != nil {
-		h.logger.Error("proxy: read upstream response failed", slog.String("error", err.Error()))
+		h.logger.ErrorContext(ctx, "proxy: read upstream response failed", slog.String("error", err.Error()))
 		span.RecordError(err)
 		span.SetAttributes(attribute.String("result", "internal_error"))
 		return coldFetchResult{resultLabel: resultInternalError}
@@ -471,15 +471,15 @@ func (h *Handler) coldFetch(ctx context.Context, sdkKey, key, target string) col
 	case resp.StatusCode == http.StatusNotModified:
 		// Upstream returned 304 on a cold fetch (no If-None-Match was sent).
 		// This is a bug in the upstream — refuse to return nothing to the SDK.
-		h.logger.Error("proxy: upstream returned 304 on cold fetch",
-			slog.String("key", key),
+		h.logger.ErrorContext(ctx, "proxy: upstream returned 304 on cold fetch",
+			slog.String("sdk_key_public_id", key),
 		)
 		span.SetAttributes(attribute.String("result", "unexpected_304"))
 		return coldFetchResult{resultLabel: resultBadGateway}
 
 	case resp.StatusCode >= 500:
-		h.logger.Warn("proxy: upstream server error",
-			slog.String("key", key),
+		h.logger.WarnContext(ctx, "proxy: upstream server error",
+			slog.String("sdk_key_public_id", key),
 			slog.Int("upstream_status", resp.StatusCode),
 		)
 		span.SetAttributes(attribute.String("result", resultServerError),
@@ -490,8 +490,8 @@ func (h *Handler) coldFetch(ctx context.Context, sdkKey, key, target string) col
 
 	case resp.StatusCode == http.StatusOK:
 		if int64(len(body)) > h.maxResponseBytes {
-			h.logger.Warn("proxy: upstream response exceeds size limit",
-				slog.String("key", key),
+			h.logger.WarnContext(ctx, "proxy: upstream response exceeds size limit",
+				slog.String("sdk_key_public_id", key),
 				slog.Int64("limit_bytes", h.maxResponseBytes),
 			)
 			span.SetAttributes(attribute.String("result", resultBadGateway))
@@ -686,11 +686,11 @@ func derivedScheme(r *http.Request) string {
 // that provided the header — there is no SSRF surface here. The host is
 // validated to reject values containing whitespace or control characters that
 // could malform the resulting URL string.
-func (h *Handler) proxySSEURL(r *http.Request, keyID string) string {
+func (h *Handler) proxySSEURL(ctx context.Context, r *http.Request, keyID string) string {
 	host := r.Host
 	if strings.ContainsAny(host, " \t\r\n") {
-		h.logger.Warn("proxy: malformed Host header discarded in SSE URL rewrite",
-			slog.String("key", keyID),
+		h.logger.WarnContext(ctx, "proxy: malformed Host header discarded in SSE URL rewrite",
+			slog.String("sdk_key_public_id", keyID),
 		)
 		host = "unknown"
 	}
@@ -707,7 +707,7 @@ func (h *Handler) recordResult(ctx context.Context, result string) {
 
 // recordRewriteResult increments the ConfigSSERewriteTotal counter and emits
 // a warning log when the upstream URL was not found as a byte literal.
-func (h *Handler) recordRewriteResult(result sse.RewriteResult, keyID string) {
+func (h *Handler) recordRewriteResult(ctx context.Context, result sse.RewriteResult, keyID string) {
 	var label string
 	switch result {
 	case sse.RewriteResultRewritten:
@@ -716,13 +716,13 @@ func (h *Handler) recordRewriteResult(result sse.RewriteResult, keyID string) {
 		label = "no_sse_entry"
 	case sse.RewriteResultNotFoundInBody:
 		label = "not_found_in_body"
-		h.logger.Warn("proxy: SSE URL rewrite skipped — upstream URL not found as literal byte sequence",
-			slog.String("key", keyID),
+		h.logger.WarnContext(ctx, "proxy: SSE URL rewrite skipped — upstream URL not found as literal byte sequence",
+			slog.String("sdk_key_public_id", keyID),
 		)
 	default:
 		label = "unknown"
-		h.logger.Warn("proxy: unknown SSE rewrite result",
-			slog.String("key", keyID),
+		h.logger.WarnContext(ctx, "proxy: unknown SSE rewrite result",
+			slog.String("sdk_key_public_id", keyID),
 			slog.Int("result", int(result)),
 		)
 	}

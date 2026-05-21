@@ -90,7 +90,10 @@ func (w *Writer) enqueue(job writeJob) {
 		w.logger.Warn("snapshot: write queue full, dropping oldest",
 			slog.String("sdk_key_public_id", dropped.keyID),
 		)
-		w.inst.SnapshotWriteQueueDropped.Add(context.Background(), 1)
+		w.inst.SnapshotWritesTotal.Add(context.Background(), 1, metric.WithAttributes(
+			attribute.String("result", "dropped"),
+			attribute.String("operation", "put"),
+		))
 	default:
 		// Run drained a slot concurrently; space is already available.
 	}
@@ -149,7 +152,7 @@ func (w *Writer) persist(job writeJob) {
 	body, err := EncodeEnvelope(job.keyID, job.etag, now, job.payload)
 	if err != nil {
 		w.logger.Warn("snapshot: encode failed",
-			slog.String("key", job.keyID),
+			slog.String("sdk_key_public_id", job.keyID),
 			slog.String("error", err.Error()),
 		)
 		w.inst.SnapshotWritesTotal.Add(context.Background(), 1,
@@ -159,7 +162,7 @@ func (w *Writer) persist(job writeJob) {
 
 	if err := w.store.Put(context.Background(), job.keyID, body); err != nil {
 		w.logger.Warn("snapshot: write failed",
-			slog.String("key", job.keyID),
+			slog.String("sdk_key_public_id", job.keyID),
 			slog.String("error", err.Error()),
 		)
 		w.inst.SnapshotWritesTotal.Add(context.Background(), 1,
@@ -176,7 +179,7 @@ func (w *Writer) persist(job writeJob) {
 func (w *Writer) persistDelete(keyID string) {
 	if err := w.store.Delete(context.Background(), keyID); err != nil {
 		w.logger.Warn("snapshot: delete failed",
-			slog.String("key", keyID),
+			slog.String("sdk_key_public_id", keyID),
 			slog.String("error", err.Error()),
 		)
 		w.inst.SnapshotWritesTotal.Add(context.Background(), 1,

@@ -351,7 +351,7 @@ func (r *Refresher) refresh(ctx context.Context) {
 		// FetchURL is empty for snapshot-restored entries until the first SDK
 		// request repairs it. Skip quietly; the handler will hydrate it on hit.
 		if entry.FetchURL == "" {
-			r.logger.Debug("cache: skipping stale snapshot-restored entry (no FetchURL yet)", slog.String("key", keyID))
+			r.logger.Debug("cache: skipping stale snapshot-restored entry (no FetchURL yet)", slog.String("sdk_key_public_id", keyID))
 			continue
 		}
 		fetchCtx, span := r.tracer.Start(ctx, "proxy.refresh_fetch",
@@ -365,7 +365,7 @@ func (r *Refresher) refresh(ctx context.Context) {
 			span.SetAttributes(attribute.String("result", "error"))
 			span.End()
 			r.logger.Warn("cache: background refresh failed",
-				slog.String("key", keyID),
+				slog.String("sdk_key_public_id", keyID),
 				slog.String("error", err.Error()),
 			)
 			if r.failureObserver != nil {
@@ -377,7 +377,7 @@ func (r *Refresher) refresh(ctx context.Context) {
 			span.SetAttributes(attribute.String("result", "not_modified"))
 			span.End()
 			r.cache.ResetTTL(keyID, time.Now())
-			r.logger.Debug("cache: background refresh — upstream unchanged (304), TTL extended", slog.String("key", keyID))
+			r.logger.Debug("cache: background refresh — upstream unchanged (304), TTL extended", slog.String("sdk_key_public_id", keyID))
 			continue
 		}
 		if result.Entry != nil {
@@ -386,7 +386,7 @@ func (r *Refresher) refresh(ctx context.Context) {
 			span.SetAttributes(attribute.String("result", "ok"))
 			span.End()
 			r.cache.Set(keyID, *result.Entry)
-			r.logger.Debug("cache: background refresh — new content received (200), cache updated", slog.String("key", keyID))
+			r.logger.Debug("cache: background refresh — new content received (200), cache updated", slog.String("sdk_key_public_id", keyID))
 			for _, obs := range r.observers {
 				obs.OnRefreshed(keyID, result.Entry.Payload)
 			}
@@ -403,29 +403,33 @@ func (r *Refresher) refresh(ctx context.Context) {
 			if ShouldEvict(result.StatusCode) {
 				r.cache.Delete(keyID)
 				r.logger.Warn("cache: background refresh got evictable status, evicting entry",
-					slog.String("key", keyID),
+					slog.String("sdk_key_public_id", keyID),
 					slog.Int("upstream_status", result.StatusCode),
 					slog.String("reason", EvictionReason(result.StatusCode)),
 				)
 				if r.inst != nil {
-					r.inst.CacheRefreshEvictionsTotal.Add(ctx, 1,
-						metric.WithAttributes(attribute.String("status_code", statusStr)))
+					r.inst.CacheRefreshTotal.Add(ctx, 1, metric.WithAttributes(
+						attribute.String("result", "evicted"),
+						attribute.String("status_code", statusStr),
+					))
 				}
 				if r.evictor == nil {
 					r.logger.Warn("cache: evictor not set — SSE close and snapshot delete skipped on eviction",
-						slog.String("key", keyID),
+						slog.String("sdk_key_public_id", keyID),
 					)
 				} else {
 					r.evictor(keyID)
 				}
 			} else {
 				r.logger.Warn("cache: background refresh got upstream error, preserving stale entry",
-					slog.String("key", keyID),
+					slog.String("sdk_key_public_id", keyID),
 					slog.Int("upstream_status", result.StatusCode),
 				)
 				if r.inst != nil {
-					r.inst.CacheRefreshPreservedStaleTotal.Add(ctx, 1,
-						metric.WithAttributes(attribute.String("status_code", statusStr)))
+					r.inst.CacheRefreshTotal.Add(ctx, 1, metric.WithAttributes(
+						attribute.String("result", "preserved_stale"),
+						attribute.String("status_code", statusStr),
+					))
 				}
 				if r.failureObserver != nil {
 					go r.failureObserver.OnRefreshFailure(ctx, keyID, entry.ETag, entry.FetchedAt)

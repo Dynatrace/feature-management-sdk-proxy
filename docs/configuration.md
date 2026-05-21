@@ -361,7 +361,7 @@ volumes:
 
 Maximum number of pending async snapshot writes queued in memory. Writes are enqueued after each cache update and
 drained by a background goroutine. When the queue is full, the pending write is dropped and
-`proxy.snapshot.write_queue.dropped_total` is incremented.
+`proxy.snapshot.writes.total{result="dropped", operation="put"}` is incremented.
 
 ```bash
 SNAPSHOT_WRITE_QUEUE_SIZE=256
@@ -371,15 +371,13 @@ SNAPSHOT_WRITE_QUEUE_SIZE=256
 
 ## OTel Variables
 
-Metrics and traces export is disabled by default. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable both; all other OTel
-variables are optional. See [telemetry.md](telemetry.md) for the full reference.
+Metrics, traces, and logs export is disabled by default. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable all three; all other OTel variables are optional. See [telemetry.md](telemetry.md) for the full reference.
 
 ### `OTEL_EXPORTER_OTLP_ENDPOINT`
 
-**Optional.** Default: unset (metrics and traces sent to a no-op provider).
+**Optional.** Default: unset (metrics, traces, and logs sent to no-op providers).
 
-The OTLP/HTTP endpoint for an OpenTelemetry collector. When set, the proxy pushes metrics every 30 seconds and traces
-continuously using HTTP/protobuf transport (required by Dynatrace; use port 4318 for OTLP/HTTP).
+The OTLP/HTTP endpoint for an OpenTelemetry collector. When set, the proxy pushes metrics every 30 seconds and batches traces and logs continuously.
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
@@ -391,7 +389,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
 
 **Optional.** Default: `sdk-proxy`.
 
-Overrides the service name attached to all exported metrics and traces.
+Overrides the service name attached to all exported telemetry.
 
 ```bash
 OTEL_SERVICE_NAME=sdk-proxy
@@ -403,8 +401,7 @@ OTEL_SERVICE_NAME=sdk-proxy
 
 **Optional.**
 
-Comma-separated `key=value` pairs added as resource attributes to all exported metrics and traces. Useful for adding
-environment, region, or cluster labels.
+Comma-separated `key=value` pairs added as resource attributes to all exported metrics, traces, and logs. Useful for adding environment, region, or cluster labels.
 
 ```bash
 OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production,k8s.cluster.name=us-east-1
