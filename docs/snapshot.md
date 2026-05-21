@@ -142,7 +142,3 @@ override the S3 endpoint URL:
 ```bash
 SNAPSHOT_S3_ENDPOINT=https://<account_id>.r2.cloudflarestorage.com
 ```
-
-
-
-
