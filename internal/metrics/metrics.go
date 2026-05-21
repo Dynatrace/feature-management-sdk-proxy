@@ -26,6 +26,8 @@ const (
 	SnapshotDemandRevalidationTotal = "proxy.snapshot.demand_revalidation.total"
 	SnapshotOutageFallbackTotal     = "proxy.snapshot.outage_fallback.total"
 	SSESubscribeRejectedTotal       = "proxy.sse.subscribe.rejected_total"
+	EvalMetricsRequestsTotal        = "proxy.metrics.requests.total"
+	EvalMetricsForwardLatency       = "proxy.metrics.forward.latency_seconds"
 )
 
 // Instruments holds every OTel instrument the proxy emits. Obtain one via Register.
@@ -103,6 +105,14 @@ type Instruments struct {
 	// isolation limits, labeled by reason (rate_limit/fanout_cap).
 	// No sdk_key_public_id label — per-key cardinality is intentionally excluded.
 	SSESubscribeRejectedTotal metric.Int64Counter
+
+	// EvalMetricsRequestsTotal counts POST /v1/metrics proxy requests labeled by
+	// result (forwarded/bad_request/unauthorized/payload_too_large/upstream_error/bad_gateway/internal_error).
+	EvalMetricsRequestsTotal metric.Int64Counter
+
+	// EvalMetricsForwardLatency records wall-clock duration of the upstream POST /v1/metrics
+	// call from request entry to response written, in seconds.
+	EvalMetricsForwardLatency metric.Float64Histogram
 }
 
 // Register creates all metric instruments against meter. Call once at startup and
@@ -253,6 +263,23 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("metrics: register %s: %w", SSESubscribeRejectedTotal, err)
 	}
 
+	evalMetricsReqTotal, err := meter.Int64Counter(EvalMetricsRequestsTotal,
+		metric.WithDescription("POST /v1/metrics proxy requests by result (forwarded/bad_request/unauthorized/payload_too_large/upstream_error/bad_gateway/internal_error)"),
+		metric.WithUnit("{request}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", EvalMetricsRequestsTotal, err)
+	}
+
+	evalMetricsLatency, err := meter.Float64Histogram(EvalMetricsForwardLatency,
+		metric.WithDescription("Wall-clock duration of the upstream POST /v1/metrics call from request entry to response written"),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", EvalMetricsForwardLatency, err)
+	}
+
 	return &Instruments{
 		RequestsTotal:                   reqTotal,
 		SSEConnections:                  sseConns,
@@ -272,5 +299,7 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		SnapshotDemandRevalidationTotal: snapshotDemandReval,
 		SnapshotOutageFallbackTotal:     snapshotOutageFallback,
 		SSESubscribeRejectedTotal:       sseSubRejected,
+		EvalMetricsRequestsTotal:        evalMetricsReqTotal,
+		EvalMetricsForwardLatency:       evalMetricsLatency,
 	}, nil
 }

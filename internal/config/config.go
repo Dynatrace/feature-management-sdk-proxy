@@ -93,11 +93,11 @@ type Config struct {
 	// Env: CACHE_INACTIVITY_EVICT_AFTER, default 48h.
 	CacheInactivityEvictAfter time.Duration
 
-	// UpstreamMaxResponseBytes caps the body the proxy reads from the upstream
-	// CDN. A response that exceeds this limit is rejected with a 502 and never
-	// cached, preventing unbounded memory growth from a misbehaving upstream.
-	// Env: UPSTREAM_MAX_RESPONSE_BYTES, default 10485760 (10 MiB).
-	UpstreamMaxResponseBytes int64
+	// MaxBodyBytes caps any body the proxy reads or accepts: upstream CDN
+	// responses (rejected with 502 if exceeded) and inbound eval-metrics request
+	// bodies (rejected with 413 if exceeded). Prevents unbounded memory growth.
+	// Env: MAX_BODY_BYTES, default 10485760 (10 MiB).
+	MaxBodyBytes int64
 }
 
 // LogValue implements slog.LogValuer. Secrets emit [REDACTED] automatically
@@ -128,7 +128,7 @@ func (c Config) LogValue() slog.Value {
 		slog.Int("snapshot_write_queue_size", c.SnapshotWriteQueueSize),
 		slog.Duration("snapshot_max_age", c.SnapshotMaxAge),
 		slog.Duration("cache_inactivity_evict_after", c.CacheInactivityEvictAfter),
-		slog.Int64("upstream_max_response_bytes", c.UpstreamMaxResponseBytes),
+		slog.Int64("max_body_bytes", c.MaxBodyBytes),
 	}
 	if c.SnapshotBackend == snapshotBackendS3 {
 		attrs = append(attrs,
@@ -166,7 +166,7 @@ func FromEnv() (Config, error) {
 		SnapshotWriteQueueSize:    256,
 		SnapshotMaxAge:            24 * time.Hour,
 		CacheInactivityEvictAfter: 48 * time.Hour,
-		UpstreamMaxResponseBytes:  10 * 1024 * 1024,
+		MaxBodyBytes:              10 * 1024 * 1024,
 		SSEFanoutCapPerKey:        1000,
 		SSESubscribeRatePerSec:    20,
 		SSESubscribeBurst:         100,
@@ -320,12 +320,12 @@ func FromEnv() (Config, error) {
 		cfg.CacheInactivityEvictAfter = d
 	}
 
-	if v := os.Getenv("UPSTREAM_MAX_RESPONSE_BYTES"); v != "" {
+	if v := os.Getenv("MAX_BODY_BYTES"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil || n < 1 {
-			return Config{}, fmt.Errorf("invalid UPSTREAM_MAX_RESPONSE_BYTES %q: must be a positive integer (bytes)", v)
+			return Config{}, fmt.Errorf("invalid MAX_BODY_BYTES %q: must be a positive integer (bytes)", v)
 		}
-		cfg.UpstreamMaxResponseBytes = n
+		cfg.MaxBodyBytes = n
 	}
 
 	if v := os.Getenv("SSE_FANOUT_CAP_PER_KEY"); v != "" {

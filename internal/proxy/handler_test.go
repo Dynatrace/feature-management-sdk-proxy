@@ -528,9 +528,9 @@ func TestExtractGeo(t *testing.T) {
 		{"", "", false},
 	}
 	for _, tc := range cases {
-		geo, ok := extractGeo(tc.sdkKey)
+		geo, ok := ExtractGeo(tc.sdkKey)
 		if ok != tc.wantOK || geo != tc.wantGeo {
-			t.Errorf("extractGeo(%q) = (%q, %v), want (%q, %v)", tc.sdkKey, geo, ok, tc.wantGeo, tc.wantOK)
+			t.Errorf("ExtractGeo(%q) = (%q, %v), want (%q, %v)", tc.sdkKey, geo, ok, tc.wantGeo, tc.wantOK)
 		}
 	}
 }

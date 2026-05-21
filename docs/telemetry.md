@@ -33,6 +33,8 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable export. Metrics push every **30 seco
 | `proxy.cache.refresh.total`                 | Counter       | `{entry}`        | `result`, `status_code`       | Non-200/304 background refresh outcomes. `result`: `evicted` (4xx: entry removed), `preserved_stale` (429/5xx: entry kept to avoid amplifying outages). `status_code`: the upstream HTTP status code.                                                                                                                                                                                                                                                                                                                                                |
 | `proxy.snapshot.demand_revalidation.total`  | Counter       | `{revalidation}` | `result`                      | Demand revalidations of snapshot-loaded entries triggered on the first stale hit. `result`: `hit` (fresh, no CDN call), `not_modified` (304), `refreshed` (200), `evicted` (4xx), `preserved_stale` (429/5xx), `error` (network). See [cache.md](cache.md#demand-revalidation-of-snapshot-loaded-entries).                                                                                                                                                                                                                                           |
 | `proxy.snapshot.outage_fallback.total`      | Counter       | `{check}`        | `result`                      | Async snapshot store reads triggered by background CDN refresh failures (network error or 429/5xx). Only emitted when `SNAPSHOT_BACKEND` is configured. `result`: `loaded` (newer snapshot applied), `no_newer` (snapshot not newer than current entry), `same_etag` (payload unchanged), `debounced` (suppressed by 60s per-key interval), `backend_error` (store read failed), `decode_error` (corrupt or unknown version envelope), `superseded` (concurrent refresh applied first). See [snapshot.md](snapshot.md#runtime-cross-proxy-fallback). |
+| `proxy.metrics.requests.total`              | Counter       | `{request}`      | `result`                      | POST /v1/metrics proxy requests. `result`: `forwarded`, `bad_request`, `unauthorized`, `payload_too_large`, `upstream_error`, `bad_gateway`, `internal_error`. Note: no `sdk_key_public_id` label; use OTel spans for per-key correlation. |
+| `proxy.metrics.forward.latency_seconds`     | Histogram     | `s`              | —                             | Wall-clock duration of the upstream `POST /v1/metrics` call from request entry to response written. Buckets: 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10 seconds. |
 
 See [monitoring.md](monitoring.md) for guidance on interpreting these metrics by operator concern.
 
@@ -54,6 +56,8 @@ not a parent-child relationship) to reference the original upstream fetch span.
 | `sse.upstream.connect`       | One span per upstream SSE connect attempt; reconnects emit separate spans                                                           | `sdk_key_public_id`, `outcome` (`connected`, `subscribe_failed`)                                                     |
 | `sse.client.subscribe`       | SSE client connection setup phase (auth + cache gate + isolation gate + headers sent)                                               | `sdk_key_public_id`, `outcome` (`200_connected`, `412_no_config`, `429_rate_limit`, `429_fanout_cap`)                |
 | `sse.event.forward`          | Short-lived span per forwarded SSE event (e.g. `refetchEvaluation`); one span per event, not per connection. Kind: `Producer`. Includes a **Span Link** to the originating `sse.upstream.connect` span. | `sdk_key_public_id`, `sse.event.type` |
+| `POST /v1/metrics`           | Eval metrics proxy handler: every SDK POST metrics request (OTel HTTP server semconv). Raw SDK key never appears in `url.full`. | `http.request.method`, `http.route`, `sdk_key_public_id`, `upstream.status_code`, `result` |
+| `HTTP POST`                  | Upstream metrics ingest call, child of `POST /v1/metrics` | `http.request.method`, `server.address`, `http.response.status_code` |
 
 ### Span Link: cache hit → originating fetch
 
@@ -65,7 +69,7 @@ was active. In Dynatrace, span links appear under **Related spans** on the span 
 ### W3C Trace Context propagation
 
 The proxy extracts W3C `traceparent` / `tracestate` headers from incoming SDK requests via centralized Gin middleware (
-`internal/middleware.TracePropagation`). The middleware is applied to API routes (`/server/*`, `/sse`) as a route group;
+`internal/middleware.TracePropagation`). The middleware is applied to API routes (`/server/*`, `/sse`, `/v1/metrics`) as a route group;
 health probes are excluded. If the SDK has its own tracer configured, the proxy spans will appear as children of the
 SDK's trace in Dynatrace.
 

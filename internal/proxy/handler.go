@@ -600,18 +600,18 @@ func (f *Fetcher) Fetch(ctx context.Context, _ string, fetchURL, etag string) (c
 // buildTarget derives the geo-bound CDN URL for an SDK key.
 // Returns ("", false) if the SDK key format is not recognized.
 func (h *Handler) buildTarget(sdkKey string) (string, bool) {
-	geo, ok := extractGeo(sdkKey)
+	geo, ok := ExtractGeo(sdkKey)
 	if !ok {
 		return "", false
 	}
 	return "https://cdn." + geo + "." + h.cdnBaseDomain + "/server/" + sdkKey + ".json", true
 }
 
-// extractGeo parses the geo segment from an SDK key in the new format
+// ExtractGeo parses the geo segment from an SDK key in the format
 // {token}.{platform}_{geo}_{publicRandom}.{secret}_{sha1}.
 // Returns ("", false) for any other format. The geo is always [a-z]{2} per the
-// full-key regex, so it is safe to embed in the derived CDN URL.
-func extractGeo(sdkKey string) (string, bool) {
+// full-key regex, so it is safe to embed in derived upstream URLs.
+func ExtractGeo(sdkKey string) (string, bool) {
 	if !cache.ValidateFullKey(sdkKey) {
 		return "", false
 	}

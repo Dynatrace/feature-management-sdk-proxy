@@ -24,6 +24,7 @@ import (
 
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/config"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/evalmetrics"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/health"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/middleware"
@@ -241,13 +242,13 @@ func run() error {
 		Timeout:   5 * time.Second,
 		Transport: tracing.NewTransport(nil, tracer),
 	}
-	refreshFetcher := proxy.NewFetcher(refreshClient, logger, cfg.UpstreamMaxResponseBytes)
+	refreshFetcher := proxy.NewFetcher(refreshClient, logger, cfg.MaxBodyBytes)
 
 	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, snapshotWriter, refreshFetcher, inst, counter, logger, tracer)
 	if err != nil {
 		return fmt.Errorf("proxy: %w", err)
 	}
-	proxyHandler.SetMaxResponseBytes(cfg.UpstreamMaxResponseBytes)
+	proxyHandler.SetMaxResponseBytes(cfg.MaxBodyBytes)
 	proxyHandler.SetRewriteSSEURLs(!cfg.SSEDisabled)
 	proxyHandler.SetEvictor(func(keyID string) {
 		if sseManager != nil {
@@ -257,6 +258,17 @@ func run() error {
 			snapshotWriter.OnInvalidated(keyID)
 		}
 	})
+
+	// Evaluation metrics reverse proxy: dedicated client with tracing transport.
+	evalMetricsClient := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: tracing.NewTransport(nil, tracer),
+	}
+	evalMetricsHandler, err := evalmetrics.New(cfg.CDNBaseDomain, evalMetricsClient, inst, logger, tracer)
+	if err != nil {
+		return fmt.Errorf("evalmetrics: %w", err)
+	}
+	evalMetricsHandler.SetMaxRequestBytes(cfg.MaxBodyBytes)
 
 	// Pass the eventsource.Server and Manager to the handler. When SSE is disabled,
 	// sseManager is nil and NewHandler treats a nil esServer as disabled (501).
@@ -294,6 +306,10 @@ func run() error {
 	// the /server/{sdk_key}.json path structure.
 	api.GET(configHandlerPath+":file", proxyHandler.Handle)
 	api.HEAD(configHandlerPath+":file", proxyHandler.Handle)
+
+	// Evaluation metrics passthrough — transparent reverse proxy to the upstream
+	// metrics ingest service. See docs/adr/0004-evaluation-metrics-reverse-proxy.md.
+	api.POST("/v1/metrics", evalMetricsHandler.Handle)
 
 	// Catch-all: return 404 for unmatched routes.
 	router.NoRoute(func(c *gin.Context) {
