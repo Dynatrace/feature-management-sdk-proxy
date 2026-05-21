@@ -19,3 +19,6 @@ coverage.txt
 .idea/
 
 proxy
+
+# Claude Code worktrees
+.claude/worktrees/
