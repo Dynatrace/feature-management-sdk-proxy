@@ -20,7 +20,7 @@ services:
       PORT: "8080"
       LOG_LEVEL: INFO           # DEBUG | INFO | WARN | ERROR
       SHUTDOWN_TIMEOUT: 30s     # grace period for in-flight requests on SIGTERM
-      PROXY_INSTANCE_ID: sdk-proxy-1  # unique per replica; differentiates billing records
+      # PROXY_INSTANCE_ID: sdk-proxy-1  # unique per replica
 
       # ── CDN ─────────────────────────────────────────────────────────────────
       # CDN_BASE_DOMAIN: fm.dynatrace.com   # override to target a non-prod CDN environment
