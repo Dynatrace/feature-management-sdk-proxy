@@ -43,7 +43,7 @@ behavior.
 
 ## Quick Start
 
-**Requirements:** Go 1.24+, or Docker.
+**Requirements:** Go 1.26+, or Docker.
 
 ```bash
 # Build
