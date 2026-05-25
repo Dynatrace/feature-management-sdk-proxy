@@ -8,9 +8,9 @@
 // SSE URL from the flagd config JSON eventStreams array (narrow parse exception 1:
 // only eventStreams[*].url and .inactivityDelaySec are read; the rest of the
 // payload is treated as opaque bytes).
-// RewriteSSEURL extends this exception: it locates the upstream URL via
-// ExtractSSEURL and replaces it with a byte-precise substitution, leaving
-// all other payload bytes identical to what upstream returned.
+// RewriteSSEURL extends this exception: it parses the full JSON payload, replaces
+// the URL field in the first type=="sse" eventStreams entry, and re-serializes
+// the modified payload.
 //
 // OnConfigCached must be called after a fresh cold-fetch 200 populates the
 // cache. OnRefreshed must be called after each background 200 refresh (not

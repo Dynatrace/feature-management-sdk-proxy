@@ -17,13 +17,21 @@ import (
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/telemetry"
 )
 
-// mockTracker implements SubscriberTracker for testing.
+// mockTracker implements SubscriberTracker for testing. Always admits.
 type mockTracker struct {
 	count atomic.Int64
 }
 
-func (m *mockTracker) IncrementSubscribers(_ string) { m.count.Add(1) }
-func (m *mockTracker) DecrementSubscribers(_ string) { m.count.Add(-1) }
+func (m *mockTracker) AdmitSubscriber(_ string) (bool, string) { m.count.Add(1); return true, "" }
+func (m *mockTracker) DecrementSubscribers(_ string)           { m.count.Add(-1) }
+
+// rejectTracker always rejects with a given reason.
+type rejectTracker struct {
+	reason string
+}
+
+func (r *rejectTracker) AdmitSubscriber(_ string) (bool, string) { return false, r.reason }
+func (r *rejectTracker) DecrementSubscribers(_ string)           {}
 
 const testSDKKey = "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
 
@@ -441,5 +449,65 @@ func TestSSEHandler_Counter_NoIncrementOn501(t *testing.T) {
 	}
 	if samples := counter.Drain(); len(samples) != 0 {
 		t.Errorf("501 (SSE disabled) must not increment counter, got %v", samples)
+	}
+}
+
+// --- Per-key isolation tests ---
+
+func TestHandler_RateLimit_Returns429(t *testing.T) {
+	esSrv := eventsource.NewServer()
+	defer esSrv.Close()
+
+	c := cache.New()
+	streamID := cache.PublicID(testSDKKey)
+	c.Set(streamID, cache.Entry{Payload: []byte(`{}`)})
+	h := NewHandler(c, esSrv, &rejectTracker{reason: AdmitReasonRateLimit}, newTestInstruments(t), nil, slog.Default(), 15*time.Second, "/server/")
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+streamID, nil)
+	h.Handle(ginContext(rr, req))
+
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("got %d, want 429 on rate limit", rr.Code)
+	}
+	if rr.Header().Get("Retry-After") == "" {
+		t.Error("expected Retry-After header on 429")
+	}
+}
+
+func TestHandler_FanoutCap_Returns429(t *testing.T) {
+	esSrv := eventsource.NewServer()
+	defer esSrv.Close()
+
+	c := cache.New()
+	streamID := cache.PublicID(testSDKKey)
+	c.Set(streamID, cache.Entry{Payload: []byte(`{}`)})
+	h := NewHandler(c, esSrv, &rejectTracker{reason: AdmitReasonFanoutCap}, newTestInstruments(t), nil, slog.Default(), 15*time.Second, "/server/")
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+streamID, nil)
+	h.Handle(ginContext(rr, req))
+
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("got %d, want 429 on fanout cap", rr.Code)
+	}
+}
+
+func TestHandler_RateLimit_NoCounterIncrement(t *testing.T) {
+	esSrv := eventsource.NewServer()
+	defer esSrv.Close()
+
+	c := cache.New()
+	streamID := cache.PublicID(testSDKKey)
+	c.Set(streamID, cache.Entry{Payload: []byte(`{}`)})
+	counter := telemetry.NewCounter()
+	h := NewHandler(c, esSrv, &rejectTracker{reason: AdmitReasonRateLimit}, newTestInstruments(t), counter, slog.Default(), 15*time.Second, "/server/")
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sse?stream_id="+streamID, nil)
+	h.Handle(ginContext(rr, req))
+
+	if samples := counter.Drain(); len(samples) != 0 {
+		t.Errorf("rejected request must not increment billing counter, got %v", samples)
 	}
 }

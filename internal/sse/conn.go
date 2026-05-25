@@ -42,17 +42,72 @@ type conn struct {
 	// streaming tracks whether we are currently in the active read loop.
 	// Used to flip setStreaming only on transitions.
 	streaming atomic.Bool
+
+	// connectSpanCtx holds the SpanContext from the sse.upstream.connect setup
+	// span, captured after the span ends. Used to link sse.event.forward spans
+	// back to the originating connection attempt.
+	// Written once in run() before the event loop begins; read only from within
+	// the same goroutine via the onEvent closure. No concurrent access.
+	connectSpanCtx trace.SpanContext
+
+	// currentHealth tracks the health state currently reflected in SSEConnectionHealth.
+	// 0=none (not yet started or already exited), 1=unhealthy, 2=healthy.
+	currentHealth atomic.Int32
+}
+
+const (
+	connHealthNone      int32 = 0
+	connHealthUnhealthy int32 = 1
+	connHealthHealthy   int32 = 2
+)
+
+func connHealthLabel(s int32) string {
+	if s == connHealthHealthy {
+		return "healthy"
+	}
+	return "unhealthy"
+}
+
+// setHealth transitions to the given health state, updating SSEConnections{direction=upstream}.
+func (c *conn) setHealth(next int32) {
+	prev := c.currentHealth.Swap(next)
+	if prev == next {
+		return
+	}
+	bg := context.Background()
+	if prev != connHealthNone {
+		c.inst.SSEConnections.Add(bg, -1, metric.WithAttributes(
+			attribute.String("sdk_key_public_id", c.keyID),
+			attribute.String("direction", "upstream"),
+			attribute.String("state", connHealthLabel(prev)),
+		))
+	}
+	c.inst.SSEConnections.Add(bg, 1, metric.WithAttributes(
+		attribute.String("sdk_key_public_id", c.keyID),
+		attribute.String("direction", "upstream"),
+		attribute.String("state", connHealthLabel(next)),
+	))
+}
+
+// clearHealth decrements the current upstream health bucket and resets to none.
+// Called on conn.run exit to balance every +1 emitted during the connection lifetime.
+func (c *conn) clearHealth() {
+	prev := c.currentHealth.Swap(connHealthNone)
+	if prev == connHealthNone {
+		return
+	}
+	c.inst.SSEConnections.Add(context.Background(), -1, metric.WithAttributes(
+		attribute.String("sdk_key_public_id", c.keyID),
+		attribute.String("direction", "upstream"),
+		attribute.String("state", connHealthLabel(prev)),
+	))
 }
 
 // run is the main loop. It creates an eventsource.Stream that handles
 // reconnection internally, and reads events until ctx is cancelled.
 func (c *conn) run(ctx context.Context) {
-	c.inst.SSEConnections.Add(ctx, 1, metric.WithAttributes(
-		attribute.String("sdk_key_public_id", c.keyID),
-	))
-	defer c.inst.SSEConnections.Add(context.Background(), -1, metric.WithAttributes(
-		attribute.String("sdk_key_public_id", c.keyID),
-	))
+	c.setHealth(connHealthUnhealthy)
+	defer c.clearHealth()
 
 	_, setupSpan := c.tracer.Start(ctx, "sse.upstream.connect",
 		trace.WithAttributes(tracing.SDKKeyPublicID(c.keyID)))
@@ -64,7 +119,10 @@ func (c *conn) run(ctx context.Context) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.sseURL, nil)
 	if err != nil {
-		c.logger.Error("sse: failed to build request", slog.String("key", c.keyID), slog.String("error", err.Error()))
+		c.logger.Error("sse: failed to build request",
+			slog.String("sdk_key_public_id", c.keyID),
+			slog.String("error", err.Error()),
+		)
 		setupSpan.RecordError(err)
 		setupSpan.End()
 		return
@@ -85,7 +143,7 @@ func (c *conn) run(ctx context.Context) {
 		setupSpan.RecordError(err)
 		setupSpan.End()
 		c.logger.Warn("sse: upstream subscribe failed",
-			slog.String("key", c.keyID),
+			slog.String("sdk_key_public_id", c.keyID),
 			slog.String("error", err.Error()),
 		)
 		return
@@ -93,6 +151,7 @@ func (c *conn) run(ctx context.Context) {
 
 	setupSpan.SetAttributes(attribute.String("outcome", "connected"))
 	setupSpan.End()
+	c.connectSpanCtx = setupSpan.SpanContext()
 
 	// Close the stream when the context is cancelled.
 	go func() {
@@ -113,6 +172,12 @@ func (c *conn) run(ctx context.Context) {
 			EventType: ev.Event(),
 			Data:      []byte(ev.Data()),
 		}
+		c.logger.Debug("sse: event received",
+			slog.String("key", c.keyID),
+			slog.String("event_type", evt.EventType),
+			slog.String("id", evt.ID),
+			slog.Int("data_len", len(evt.Data)),
+		)
 		if c.onLifecycle != nil && c.onLifecycle(evt) {
 			continue
 		}
@@ -134,23 +199,27 @@ func (c *conn) makeErrorHandler(ctx context.Context) eventsource.StreamErrorHand
 		// Mark as not streaming during reconnection backoff.
 		c.markStreaming(false)
 
-		reason := classifyError(err)
-		c.inst.SSEUpstreamReconnects.Add(context.Background(), 1, metric.WithAttributes(
-			attribute.String("sdk_key_public_id", c.keyID),
-			attribute.String("reason", reason),
-		))
 		c.logger.Warn("sse: upstream connection lost, reconnecting",
-			slog.String("key", c.keyID),
-			slog.String("reason", reason),
+			slog.String("sdk_key_public_id", c.keyID),
+			slog.String("reason", classifyError(err)),
 		)
 		return eventsource.StreamErrorHandlerResult{}
 	}
 }
 
-// markStreaming transitions the streaming state and invokes the callback.
+// markStreaming transitions the streaming state, invokes the callback, and
+// updates the SSEConnectionHealth metric. Only fires on actual transitions.
 func (c *conn) markStreaming(v bool) {
-	if c.streaming.Swap(v) != v && c.setStreaming != nil {
+	if c.streaming.Swap(v) == v {
+		return
+	}
+	if c.setStreaming != nil {
 		c.setStreaming(v)
+	}
+	if v {
+		c.setHealth(connHealthHealthy)
+	} else {
+		c.setHealth(connHealthUnhealthy)
 	}
 }
 

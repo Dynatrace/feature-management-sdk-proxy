@@ -103,7 +103,7 @@ Eviction is immediate and unconditional once the status code matches. The evicti
 `tokenRotated` or `stageDeleted` event: the cache entry, upstream SSE connection, and persisted snapshot are all
 removed. The next SDK request for that key triggers a fresh CDN cold-miss fetch.
 
-Metric: `proxy.cache.refresh_evictions_total{status_code="404"}` (see [telemetry.md](telemetry.md)).
+Metric: `proxy.cache.refresh.total{result="evicted", status_code="404"}` (see [telemetry.md](telemetry.md)).
 
 ## Inactivity Eviction
 

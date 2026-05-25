@@ -42,6 +42,21 @@ type Config struct {
 	// RefreshIntervalDisconnected (10s). Env: SSE_DISABLED, default false.
 	SSEDisabled bool
 
+	// SSEFanoutCapPerKey is the maximum number of downstream SDK client SSE
+	// connections allowed per channel(SDK key public ID). Connections beyond this cap are
+	// rejected with 429. Range 0-100000 (0 disables the cap).
+	// Default 1000. Env: SSE_FANOUT_CAP_PER_KEY.
+	SSEFanoutCapPerKey int
+
+	// SSESubscribeRatePerSec is the token-bucket rate at which new SSE subscriptions
+	// are admitted per SDK key public ID. Range 1-10000, default 20.
+	// Env: SSE_SUBSCRIBE_RATE_PER_SEC.
+	SSESubscribeRatePerSec int
+
+	// SSESubscribeBurst is the burst size for the per-key SSE subscribe rate bucket.
+	// Range 1-100000, default 100. Env: SSE_SUBSCRIBE_BURST.
+	SSESubscribeBurst int
+
 	// Snapshot persistence (optional). When SnapshotBackend is "", persistence
 	// is disabled and all other Snapshot* fields are ignored.
 	//
@@ -106,6 +121,9 @@ func (c Config) LogValue() slog.Value {
 		slog.String("proxy_instance_id", c.ProxyInstanceID),
 		slog.Int("lifecycle_keys_cap", c.LifecycleKeysCap),
 		slog.Bool("sse_disabled", c.SSEDisabled),
+		slog.Int("sse_fanout_cap_per_key", c.SSEFanoutCapPerKey),
+		slog.Int("sse_subscribe_rate_per_sec", c.SSESubscribeRatePerSec),
+		slog.Int("sse_subscribe_burst", c.SSESubscribeBurst),
 		slog.String("snapshot_backend", snapshotBackend),
 		slog.Int("snapshot_write_queue_size", c.SnapshotWriteQueueSize),
 		slog.Duration("snapshot_max_age", c.SnapshotMaxAge),
@@ -149,6 +167,9 @@ func FromEnv() (Config, error) {
 		SnapshotMaxAge:            24 * time.Hour,
 		CacheInactivityEvictAfter: 48 * time.Hour,
 		UpstreamMaxResponseBytes:  10 * 1024 * 1024,
+		SSEFanoutCapPerKey:        1000,
+		SSESubscribeRatePerSec:    20,
+		SSESubscribeBurst:         100,
 	}
 
 	if v := os.Getenv("PORT"); v != "" {
@@ -305,6 +326,30 @@ func FromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("invalid UPSTREAM_MAX_RESPONSE_BYTES %q: must be a positive integer (bytes)", v)
 		}
 		cfg.UpstreamMaxResponseBytes = n
+	}
+
+	if v := os.Getenv("SSE_FANOUT_CAP_PER_KEY"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > 100_000 {
+			return Config{}, fmt.Errorf("invalid SSE_FANOUT_CAP_PER_KEY %q: must be an integer between 0 and 100000 (0 disables the cap)", v)
+		}
+		cfg.SSEFanoutCapPerKey = n
+	}
+
+	if v := os.Getenv("SSE_SUBSCRIBE_RATE_PER_SEC"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 10_000 {
+			return Config{}, fmt.Errorf("invalid SSE_SUBSCRIBE_RATE_PER_SEC %q: must be an integer between 1 and 10000", v)
+		}
+		cfg.SSESubscribeRatePerSec = n
+	}
+
+	if v := os.Getenv("SSE_SUBSCRIBE_BURST"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 100_000 {
+			return Config{}, fmt.Errorf("invalid SSE_SUBSCRIBE_BURST %q: must be an integer between 1 and 100000", v)
+		}
+		cfg.SSESubscribeBurst = n
 	}
 
 	return cfg, nil

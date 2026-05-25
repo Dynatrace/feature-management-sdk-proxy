@@ -137,6 +137,59 @@ SSE_DISABLED=false
 
 ---
 
+### `SSE_FANOUT_CAP_PER_KEY`
+
+**Optional.** Default: `1000`. Range: 0–100000.
+
+Maximum number of concurrent downstream SSE connections the proxy accepts per SDK key public ID. When this cap is
+reached, new subscribe requests for that key return **429 Too Many Requests**. Other flag sets are unaffected.
+
+Set to `0` to disable the cap entirely. Under normal conditions the default is sufficient; lower this value to
+protect the proxy from a single flag set opening an unbounded number of connections.
+
+```bash
+SSE_FANOUT_CAP_PER_KEY=1000
+```
+
+---
+
+### `SSE_SUBSCRIBE_RATE_PER_SEC`
+
+**Optional.** Default: `20`. Range: 1–10000.
+
+Token-bucket rate (per second) at which new SSE subscribe requests are admitted per SDK key public ID. Requests that
+exceed the rate return **429 Too Many Requests** with `Retry-After: 1`.
+
+Paired with `SSE_SUBSCRIBE_BURST` to allow brief bursts above the sustained rate.
+
+```bash
+SSE_SUBSCRIBE_RATE_PER_SEC=20
+```
+
+---
+
+### `SSE_SUBSCRIBE_BURST`
+
+**Optional.** Default: `100`. Range: 1–100000.
+
+Token-bucket burst capacity for the per-key subscribe rate limiter. The bucket starts full and refills at
+`SSE_SUBSCRIBE_RATE_PER_SEC` tokens per second up to this maximum.
+
+Burst capacity matters most at startup: when a Kubernetes deployment scales up or recovers from a crash, many SDK
+instances may connect simultaneously. With the defaults (`SSE_SUBSCRIBE_RATE_PER_SEC=20`,
+`SSE_SUBSCRIBE_BURST=100`), up to 100 connections are admitted instantly, then 20 per second after that. The default
+of 100 is sized to absorb a typical rolling deployment without triggering 429s during the reconnect window.
+
+Raise this value if your deployments routinely start more than 100 SDK instances for a single flag set at once.
+Lower it if you want to enforce tighter burst limits, accepting more 429s during restarts in exchange for less
+instantaneous load.
+
+```bash
+SSE_SUBSCRIBE_BURST=100
+```
+
+---
+
 ## Billing Variables
 
 ### `BILLING_FLUSH_INTERVAL`
@@ -361,7 +414,7 @@ volumes:
 
 Maximum number of pending async snapshot writes queued in memory. Writes are enqueued after each cache update and
 drained by a background goroutine. When the queue is full, the pending write is dropped and
-`proxy.snapshot.write_queue.dropped_total` is incremented.
+`proxy.snapshot.writes.total{result="dropped", operation="put"}` is incremented.
 
 ```bash
 SNAPSHOT_WRITE_QUEUE_SIZE=256
@@ -371,15 +424,13 @@ SNAPSHOT_WRITE_QUEUE_SIZE=256
 
 ## OTel Variables
 
-Metrics and traces export is disabled by default. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable both; all other OTel
-variables are optional. See [telemetry.md](telemetry.md) for the full reference.
+Metrics, traces, and logs export is disabled by default. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable all three; all other OTel variables are optional. See [telemetry.md](telemetry.md) for the full reference.
 
 ### `OTEL_EXPORTER_OTLP_ENDPOINT`
 
-**Optional.** Default: unset (metrics and traces sent to a no-op provider).
+**Optional.** Default: unset (metrics, traces, and logs sent to no-op providers).
 
-The OTLP/HTTP endpoint for an OpenTelemetry collector. When set, the proxy pushes metrics every 30 seconds and traces
-continuously using HTTP/protobuf transport (required by Dynatrace; use port 4318 for OTLP/HTTP).
+The OTLP/HTTP endpoint for an OpenTelemetry collector. When set, the proxy pushes metrics every 30 seconds and batches traces and logs continuously.
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
@@ -391,7 +442,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
 
 **Optional.** Default: `sdk-proxy`.
 
-Overrides the service name attached to all exported metrics and traces.
+Overrides the service name attached to all exported telemetry.
 
 ```bash
 OTEL_SERVICE_NAME=sdk-proxy
@@ -403,8 +454,7 @@ OTEL_SERVICE_NAME=sdk-proxy
 
 **Optional.**
 
-Comma-separated `key=value` pairs added as resource attributes to all exported metrics and traces. Useful for adding
-environment, region, or cluster labels.
+Comma-separated `key=value` pairs added as resource attributes to all exported metrics, traces, and logs. Useful for adding environment, region, or cluster labels.
 
 ```bash
 OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production,k8s.cluster.name=us-east-1

@@ -48,7 +48,7 @@ func LoadAll(ctx context.Context, store Store, c *cache.Cache, inst *metrics.Ins
 		body, err := store.Get(ctx, keyID)
 		if err != nil {
 			logger.Warn("snapshot: load: failed to get object",
-				slog.String("key", keyID),
+				slog.String("sdk_key_public_id", keyID),
 				slog.String("error", err.Error()),
 			)
 			inst.SnapshotLoadTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "backend_error")))
@@ -59,12 +59,12 @@ func LoadAll(ctx context.Context, store Store, c *cache.Cache, inst *metrics.Ins
 		if err != nil {
 			if errors.Is(err, ErrUnknownVersion) {
 				logger.Warn("snapshot: load: skipping object with unknown version",
-					slog.String("key", keyID),
+					slog.String("sdk_key_public_id", keyID),
 				)
 				inst.SnapshotLoadTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "skipped_unknown_version")))
 			} else {
 				logger.Warn("snapshot: load: skipping corrupt envelope",
-					slog.String("key", keyID),
+					slog.String("sdk_key_public_id", keyID),
 					slog.String("error", err.Error()),
 				)
 				inst.SnapshotLoadTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "skipped_corrupt")))

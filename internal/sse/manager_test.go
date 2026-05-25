@@ -27,7 +27,7 @@ func newTestInstruments(t *testing.T) *metrics.Instruments {
 
 func newTestManager(t *testing.T, client *http.Client) *Manager {
 	t.Helper()
-	return New(client, newTestInstruments(t), slog.Default())
+	return New(client, newTestInstruments(t), slog.Default(), Config{})
 }
 
 func configWithSSEURL(url string) []byte {
@@ -423,7 +423,10 @@ func TestManager_HasSubscribers_WithSubscriber(t *testing.T) {
 	defer m.esServer.Close()
 	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
-	m.IncrementSubscribers(keyHash)
+	admitted, _ := m.AdmitSubscriber(keyHash)
+	if !admitted {
+		t.Fatal("expected admission with no limits configured")
+	}
 	defer m.DecrementSubscribers(keyHash)
 
 	if !m.HasSubscribers(keyHash) {
@@ -436,10 +439,114 @@ func TestManager_HasSubscribers_AfterDecrement(t *testing.T) {
 	defer m.esServer.Close()
 	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
-	m.IncrementSubscribers(keyHash)
+	m.AdmitSubscriber(keyHash)
 	m.DecrementSubscribers(keyHash)
 
 	if m.HasSubscribers(keyHash) {
 		t.Error("expected false after decrement")
+	}
+}
+
+// --- AdmitSubscriber tests ---
+
+func TestManager_AdmitSubscriber_NoLimits_AlwaysAdmits(t *testing.T) {
+	m := New(nil, newTestInstruments(t), slog.Default(), Config{})
+	defer m.esServer.Close()
+	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+
+	for range 50 {
+		admitted, reason := m.AdmitSubscriber(key)
+		if !admitted {
+			t.Fatalf("no-limits config rejected admit with reason %q", reason)
+		}
+	}
+}
+
+func TestManager_AdmitSubscriber_FanoutCap_Enforced(t *testing.T) {
+	const maxConn = 3
+	m := New(nil, newTestInstruments(t), slog.Default(), Config{FanoutCapPerKey: maxConn})
+	defer m.esServer.Close()
+	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+
+	for range maxConn {
+		admitted, _ := m.AdmitSubscriber(key)
+		if !admitted {
+			t.Fatal("expected admission below cap")
+		}
+	}
+
+	admitted, reason := m.AdmitSubscriber(key)
+	if admitted {
+		t.Error("expected rejection at cap")
+	}
+	if reason != AdmitReasonFanoutCap {
+		t.Errorf("reason = %q, want %q", reason, AdmitReasonFanoutCap)
+	}
+}
+
+func TestManager_AdmitSubscriber_FanoutCap_ResetsAfterDecrement(t *testing.T) {
+	const maxConn = 2
+	m := New(nil, newTestInstruments(t), slog.Default(), Config{FanoutCapPerKey: maxConn})
+	defer m.esServer.Close()
+	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+
+	m.AdmitSubscriber(key)
+	m.AdmitSubscriber(key)
+
+	// At cap — reject.
+	if admitted, _ := m.AdmitSubscriber(key); admitted {
+		t.Fatal("expected rejection at cap before decrement")
+	}
+
+	m.DecrementSubscribers(key)
+
+	// One slot freed — should admit now.
+	if admitted, _ := m.AdmitSubscriber(key); !admitted {
+		t.Error("expected admission after decrement freed a slot")
+	}
+}
+
+func TestManager_AdmitSubscriber_RateLimit_Enforced(t *testing.T) {
+	// Burst of 1: first admit passes, second is immediately rejected.
+	m := New(nil, newTestInstruments(t), slog.Default(), Config{SubscribeRatePerSec: 1, SubscribeBurst: 1})
+	defer m.esServer.Close()
+	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+
+	admitted, _ := m.AdmitSubscriber(key)
+	if !admitted {
+		t.Fatal("expected first admit to pass with burst=1")
+	}
+
+	admitted, reason := m.AdmitSubscriber(key)
+	if admitted {
+		t.Error("expected second immediate admit to be rate-limited")
+	}
+	if reason != AdmitReasonRateLimit {
+		t.Errorf("reason = %q, want %q", reason, AdmitReasonRateLimit)
+	}
+}
+
+func TestManager_AdmitSubscriber_IsolatedPerKey(t *testing.T) {
+	const maxConn = 1
+	m := New(nil, newTestInstruments(t), slog.Default(), Config{FanoutCapPerKey: maxConn})
+	defer m.esServer.Close()
+	// Two keys with distinct public IDs (different token prefix).
+	key1 := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key2 := cache.PublicID("dt02.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+
+	// Fill key1's cap.
+	admitted, _ := m.AdmitSubscriber(key1)
+	if !admitted {
+		t.Fatal("expected key1 admission")
+	}
+
+	// key1 at cap — reject.
+	if admitted, _ := m.AdmitSubscriber(key1); admitted {
+		t.Error("expected key1 to be at cap")
+	}
+
+	// key2 should be unaffected.
+	if admitted, _ := m.AdmitSubscriber(key2); !admitted {
+		t.Error("key2 should not be affected by key1's cap")
 	}
 }

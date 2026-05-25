@@ -10,28 +10,22 @@ import (
 const (
 	RequestsTotal                   = "proxy.requests.total"
 	SSEConnections                  = "proxy.sse.connections"
-	SSEClientConnections            = "proxy.sse.client.connections"
-	SSEEventsDelivered              = "proxy.sse.events_delivered_total"
-	SSEUpstreamReconnects           = "proxy.sse.upstream.reconnects"
 	SSEUpstreamEvents               = "proxy.sse.upstream.events"
-	CacheSize                       = "proxy.cache.size"
 	SnapshotAgeSeconds              = "proxy.snapshot.age_seconds"
 	BillingFlushTotal               = "proxy.billing.flush.total"
 	BillingBufferSize               = "proxy.billing.buffer.size"
 	BillingFlushLag                 = "proxy.billing.flush.lag_seconds"
 	BillingRetryBufferDropped       = "proxy.billing.retry_buffer.dropped_total"
-	StartupPath                     = "proxy.startup.path"
 	SnapshotWritesTotal             = "proxy.snapshot.writes.total"
 	ConfigSSERewriteTotal           = "proxy.config.sse_rewrite_total"
 	SnapshotLoadTotal               = "proxy.snapshot.load.total"
-	SnapshotWriteQueueDropped       = "proxy.snapshot.write_queue.dropped_total"
 	LifecycleEventsTotal            = "proxy.lifecycle.events_total"
 	LifecycleInvalidatedKeys        = "proxy.lifecycle.invalidated_keys_total"
 	CacheInactivityEvictionsTotal   = "proxy.cache.inactivity_evictions.total"
-	CacheRefreshEvictionsTotal      = "proxy.cache.refresh_evictions.total"
-	CacheRefreshPreservedStaleTotal = "proxy.cache.refresh_preserved_stale.total"
+	CacheRefreshTotal               = "proxy.cache.refresh.total"
 	SnapshotDemandRevalidationTotal = "proxy.snapshot.demand_revalidation.total"
 	SnapshotOutageFallbackTotal     = "proxy.snapshot.outage_fallback.total"
+	SSESubscribeRejectedTotal       = "proxy.sse.subscribe.rejected_total"
 )
 
 // Instruments holds every OTel instrument the proxy emits. Obtain one via Register.
@@ -40,28 +34,15 @@ type Instruments struct {
 	// (hit, miss, upstream_error, client_error).
 	RequestsTotal metric.Int64Counter
 
-	// SSEConnections tracks active upstream SSE connections per sdk_key_public_id.
+	// SSEConnections tracks active SSE connections partitioned by direction and state.
+	// direction=upstream: one per SDK key; state=healthy (streaming) or state=unhealthy (connecting/reconnecting).
+	// direction=downstream: one per connected SDK client; state=connected.
+	// sum{direction="upstream"} == total upstream connections; query state="unhealthy" to alert on connectivity issues.
 	SSEConnections metric.Int64UpDownCounter
 
-	// SSEClientConnections tracks active SDK client SSE connections to the proxy
-	// per sdk_key_public_id.
-	SSEClientConnections metric.Int64UpDownCounter
-
-	// SSEEventsDelivered counts SSE events successfully written to SDK clients
-	// per sdk_key_public_id.
-	SSEEventsDelivered metric.Int64Counter
-
-	// SSEUpstreamReconnects counts upstream SSE reconnect attempts per sdk_key_public_id
-	// labeled by reason (eof/io_error/inactivity/url_change).
-	SSEUpstreamReconnects metric.Int64Counter
-
 	// SSEUpstreamEvents counts SSE events received from upstream per sdk_key_public_id
-	// labeled by result (forwarded/dropped_no_subscribers/dropped_slow_subscriber).
+	// labeled by result (forwarded).
 	SSEUpstreamEvents metric.Int64Counter
-
-	// CacheSize reports the number of bytes held for a given sdk_key_public_id.
-	// Synchronous gauge: each component pushes updates at mutation time.
-	CacheSize metric.Int64Gauge
 
 	// SnapshotAgeSeconds reports seconds since the snapshot was last written, per sdk_key_public_id.
 	// Synchronous gauge: updated after each successful snapshot write and on startup.
@@ -81,16 +62,8 @@ type Instruments struct {
 	// BillingFlushLag records the wall-clock lag between the oldest unsent record and flush time.
 	BillingFlushLag metric.Float64Histogram
 
-	// StartupPath counts proxy startups labeled by path
-	// (cold/snapshot/snapshot_stale/empty_persistence_cold/backend_unreachable).
-	// cold: no persistence configured. snapshot: fresh snapshots loaded.
-	// snapshot_stale: snapshots loaded but oldest entry meets or exceeds SNAPSHOT_MAX_AGE.
-	// empty_persistence_cold: backend reachable but store empty — proxy starts cold.
-	// backend_unreachable: backend unreachable — process exits after emit.
-	// Each process instance increments exactly once at startup; useful for fleet-wide aggregation.
-	StartupPath metric.Int64Counter
-
-	// SnapshotWritesTotal counts snapshot write attempts labeled by result (success, failure).
+	// SnapshotWritesTotal counts snapshot write outcomes labeled by result (success, failure, dropped)
+	// and operation (put, delete). dropped = write discarded at queue level due to overflow (always put).
 	SnapshotWritesTotal metric.Int64Counter
 
 	// ConfigSSERewriteTotal counts SSE URL rewrite outcomes per served config request,
@@ -101,9 +74,6 @@ type Instruments struct {
 	// result (loaded/skipped_unknown_version/skipped_corrupt/backend_error).
 	SnapshotLoadTotal metric.Int64Counter
 
-	// SnapshotWriteQueueDropped counts snapshot writes dropped due to queue overflow.
-	SnapshotWriteQueueDropped metric.Int64Counter
-
 	// LifecycleEventsTotal counts lifecycle events received, labeled by event_type and result.
 	LifecycleEventsTotal metric.Int64Counter
 
@@ -113,14 +83,10 @@ type Instruments struct {
 	// CacheInactivityEvictionsTotal counts cache entries evicted by the inactivity sweeper.
 	CacheInactivityEvictionsTotal metric.Int64Counter
 
-	// CacheRefreshEvictionsTotal counts cache entries evicted during background refresh
-	// due to a 4xx response from upstream, labeled by status_code (401/403/404/410).
-	CacheRefreshEvictionsTotal metric.Int64Counter
-
-	// CacheRefreshPreservedStaleTotal counts background refresh responses that were
-	// non-200/non-304 but did NOT trigger eviction (e.g. 429, 5xx), labeled by
-	// status_code. Enables alerting on sustained upstream errors without eviction.
-	CacheRefreshPreservedStaleTotal metric.Int64Counter
+	// CacheRefreshTotal counts all non-200/304 background refresh outcomes labeled by result
+	// (evicted/preserved_stale) and status_code. evicted = 4xx from upstream (401/403/404/410);
+	// preserved_stale = 429 or 5xx — entry kept to avoid amplifying outages.
+	CacheRefreshTotal metric.Int64Counter
 
 	// SnapshotDemandRevalidationTotal counts demand revalidations of snapshot-loaded
 	// entries triggered on the first stale hit, labeled by result:
@@ -132,6 +98,11 @@ type Instruments struct {
 	// background CDN refresh failures, labeled by result:
 	// loaded/no_newer/same_etag/debounced/backend_error/decode_error/superseded.
 	SnapshotOutageFallbackTotal metric.Int64Counter
+
+	// SSESubscribeRejectedTotal counts SSE subscribe requests rejected by per-key
+	// isolation limits, labeled by reason (rate_limit/fanout_cap).
+	// No sdk_key_public_id label — per-key cardinality is intentionally excluded.
+	SSESubscribeRejectedTotal metric.Int64Counter
 }
 
 // Register creates all metric instruments against meter. Call once at startup and
@@ -146,51 +117,19 @@ func Register(meter metric.Meter) (*Instruments, error) {
 	}
 
 	sseConns, err := meter.Int64UpDownCounter(SSEConnections,
-		metric.WithDescription("Active upstream SSE connections per SDK key hash"),
+		metric.WithDescription("Active SSE connections by direction (upstream/downstream) and state. upstream/healthy = streaming; upstream/unhealthy = connecting or reconnecting; downstream/connected = active SDK client connection."),
 		metric.WithUnit("{connection}"),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("metrics: register %s: %w", SSEConnections, err)
 	}
 
-	sseClientConns, err := meter.Int64UpDownCounter(SSEClientConnections,
-		metric.WithDescription("Active SDK client SSE connections to the proxy per SDK key hash"),
-		metric.WithUnit("{connection}"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("metrics: register %s: %w", SSEClientConnections, err)
-	}
-
-	sseEventsDelivered, err := meter.Int64Counter(SSEEventsDelivered,
-		metric.WithDescription("SSE events successfully written to SDK clients per SDK key hash"),
-		metric.WithUnit("{event}"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("metrics: register %s: %w", SSEEventsDelivered, err)
-	}
-
-	sseReconnects, err := meter.Int64Counter(SSEUpstreamReconnects,
-		metric.WithDescription("Upstream SSE reconnect attempts by sdk_key_public_id and reason (eof/io_error/inactivity/url_change)"),
-		metric.WithUnit("{reconnect}"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("metrics: register %s: %w", SSEUpstreamReconnects, err)
-	}
-
 	sseEvents, err := meter.Int64Counter(SSEUpstreamEvents,
-		metric.WithDescription("Upstream SSE events received by sdk_key_public_id and result (forwarded/dropped_no_subscribers/dropped_slow_subscriber)"),
+		metric.WithDescription("Upstream SSE events received by sdk_key_public_id and result (forwarded)"),
 		metric.WithUnit("{event}"),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("metrics: register %s: %w", SSEUpstreamEvents, err)
-	}
-
-	cacheSize, err := meter.Int64Gauge(CacheSize,
-		metric.WithDescription("Cached payload size in bytes per SDK key hash"),
-		metric.WithUnit("By"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("metrics: register %s: %w", CacheSize, err)
 	}
 
 	snapshotAge, err := meter.Float64Gauge(SnapshotAgeSeconds,
@@ -226,16 +165,8 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("metrics: register %s: %w", BillingFlushLag, err)
 	}
 
-	startupPath, err := meter.Int64Counter(StartupPath,
-		metric.WithDescription("Proxy startup count labeled by path (cold/snapshot/snapshot_stale/empty_persistence_cold/backend_unreachable)"),
-		metric.WithUnit("{startup}"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("metrics: register %s: %w", StartupPath, err)
-	}
-
 	snapshotWrites, err := meter.Int64Counter(SnapshotWritesTotal,
-		metric.WithDescription("Snapshot write attempts by result (success/failure)"),
+		metric.WithDescription("Snapshot write outcomes by result (success/failure/dropped) and operation (put/delete). dropped = queue overflow, always put."),
 		metric.WithUnit("{write}"),
 	)
 	if err != nil {
@@ -266,14 +197,6 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("metrics: register %s: %w", SnapshotLoadTotal, err)
 	}
 
-	snapshotWriteQueueDropped, err := meter.Int64Counter(SnapshotWriteQueueDropped,
-		metric.WithDescription("Snapshot writes dropped due to write queue overflow"),
-		metric.WithUnit("{write}"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("metrics: register %s: %w", SnapshotWriteQueueDropped, err)
-	}
-
 	lifecycleEventsTotal, err := meter.Int64Counter(LifecycleEventsTotal,
 		metric.WithDescription("Lifecycle SSE events received by event_type and result (handled/malformed)"),
 		metric.WithUnit("{event}"),
@@ -298,20 +221,12 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("metrics: register %s: %w", CacheInactivityEvictionsTotal, err)
 	}
 
-	cacheRefreshEvictions, err := meter.Int64Counter(CacheRefreshEvictionsTotal,
-		metric.WithDescription("Cache entries evicted during background refresh due to a 4xx response from upstream, labeled by status_code"),
+	cacheRefreshTotal, err := meter.Int64Counter(CacheRefreshTotal,
+		metric.WithDescription("Non-200/304 background refresh outcomes labeled by result (evicted/preserved_stale) and status_code. evicted = 4xx; preserved_stale = 429 or 5xx."),
 		metric.WithUnit("{entry}"),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("metrics: register %s: %w", CacheRefreshEvictionsTotal, err)
-	}
-
-	cacheRefreshPreservedStale, err := meter.Int64Counter(CacheRefreshPreservedStaleTotal,
-		metric.WithDescription("Background refresh responses that were non-200/non-304 but did not trigger eviction (e.g. 429, 5xx), labeled by status_code"),
-		metric.WithUnit("{response}"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("metrics: register %s: %w", CacheRefreshPreservedStaleTotal, err)
+		return nil, fmt.Errorf("metrics: register %s: %w", CacheRefreshTotal, err)
 	}
 
 	snapshotDemandReval, err := meter.Int64Counter(SnapshotDemandRevalidationTotal,
@@ -330,30 +245,32 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("metrics: register %s: %w", SnapshotOutageFallbackTotal, err)
 	}
 
+	sseSubRejected, err := meter.Int64Counter(SSESubscribeRejectedTotal,
+		metric.WithDescription("SSE subscribe requests rejected by per-key isolation limits, labeled by reason (rate_limit/fanout_cap)"),
+		metric.WithUnit("{request}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", SSESubscribeRejectedTotal, err)
+	}
+
 	return &Instruments{
 		RequestsTotal:                   reqTotal,
 		SSEConnections:                  sseConns,
-		SSEClientConnections:            sseClientConns,
-		SSEEventsDelivered:              sseEventsDelivered,
-		SSEUpstreamReconnects:           sseReconnects,
 		SSEUpstreamEvents:               sseEvents,
-		CacheSize:                       cacheSize,
 		SnapshotAgeSeconds:              snapshotAge,
 		BillingFlushTotal:               billingFlush,
 		BillingBufferSize:               billingBuf,
 		BillingFlushLag:                 billingLag,
-		StartupPath:                     startupPath,
 		SnapshotWritesTotal:             snapshotWrites,
 		ConfigSSERewriteTotal:           sseRewrite,
 		BillingRetryBufferDropped:       retryBufDropped,
 		SnapshotLoadTotal:               snapshotLoadTotal,
-		SnapshotWriteQueueDropped:       snapshotWriteQueueDropped,
 		LifecycleEventsTotal:            lifecycleEventsTotal,
 		LifecycleInvalidatedKeys:        lifecycleInvalidatedKeys,
 		CacheInactivityEvictionsTotal:   cacheInactivityEvictions,
-		CacheRefreshEvictionsTotal:      cacheRefreshEvictions,
-		CacheRefreshPreservedStaleTotal: cacheRefreshPreservedStale,
+		CacheRefreshTotal:               cacheRefreshTotal,
 		SnapshotDemandRevalidationTotal: snapshotDemandReval,
 		SnapshotOutageFallbackTotal:     snapshotOutageFallback,
+		SSESubscribeRejectedTotal:       sseSubRejected,
 	}, nil
 }

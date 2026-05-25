@@ -14,11 +14,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/launchdarkly/eventsource"
+	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
@@ -47,9 +48,10 @@ func run() error {
 		return fmt.Errorf("config: %w", err)
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	stdoutHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: cfg.LogLevel,
-	}))
+	})
+	logger := slog.New(stdoutHandler)
 	slog.SetDefault(logger)
 	slog.Info("starting sdk-proxy", slog.Any("config", cfg))
 
@@ -62,12 +64,24 @@ func run() error {
 	// arbitrary baggage headers would bloat every span.
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 
-	// Set up OTel metrics and traces. Gate both on OTEL_EXPORTER_OTLP_ENDPOINT; fall
-	// back to no-op so components can record telemetry unconditionally without nil checks.
+	// Set up OTel metrics, traces, and logs. Gate all three on OTEL_EXPORTER_OTLP_ENDPOINT;
+	// fall back to no-op so components can record telemetry unconditionally without nil checks.
+	// Stdout JSON logging is always active; the OTel log bridge is an additive second sink.
 	var meter = noop.NewMeterProvider().Meter("github.com/dynatrace/sdk-proxy")
 	var tracer = tracenoop.NewTracerProvider().Tracer("github.com/dynatrace/sdk-proxy")
 	if cfg.OTLPEnabled {
-		mp, err := metrics.NewProvider(ctx)
+		// Build the shared OTel resource once; all three signal providers attach it
+		// so Dynatrace correlates metrics, traces, and logs under the same service entity.
+		res, err := resource.New(ctx,
+			resource.WithAttributes(semconv.ServiceName("sdk-proxy")),
+			resource.WithFromEnv(),      // honours OTEL_RESOURCE_ATTRIBUTES, OTEL_SERVICE_NAME
+			resource.WithTelemetrySDK(), // adds telemetry.sdk.* attributes
+		)
+		if err != nil {
+			return fmt.Errorf("otel: build resource: %w", err)
+		}
+
+		mp, err := metrics.NewProvider(ctx, res)
 		if err != nil {
 			return fmt.Errorf("metrics: %w", err)
 		}
@@ -80,7 +94,7 @@ func run() error {
 		}()
 		meter = mp.Meter("github.com/dynatrace/sdk-proxy")
 
-		tp, err := tracing.NewProvider(ctx)
+		tp, err := tracing.NewProvider(ctx, res)
 		if err != nil {
 			return fmt.Errorf("tracing: %w", err)
 		}
@@ -92,7 +106,23 @@ func run() error {
 			}
 		}()
 		tracer = tp.Tracer("github.com/dynatrace/sdk-proxy")
-		logger.Info("tracing: enabled, exporting via OTLP/HTTP")
+
+		lp, err := telemetry.NewLogProvider(ctx, res)
+		if err != nil {
+			return fmt.Errorf("logs: %w", err)
+		}
+		defer func() {
+			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := lp.Shutdown(shutCtx); err != nil {
+				slog.Error("logs: shutdown failed", slog.String("error", err.Error()))
+			}
+		}()
+		bridge := otelslog.NewHandler("github.com/dynatrace/feature-management-sdk-proxy",
+			otelslog.WithLoggerProvider(lp))
+		logger = slog.New(telemetry.NewTeeHandler(stdoutHandler, bridge))
+		slog.SetDefault(logger)
+		logger.Info("telemetry: enabled, exporting metrics, traces, and logs via OTLP/HTTP")
 	}
 
 	inst, err := metrics.Register(meter)
@@ -141,26 +171,21 @@ func run() error {
 		)
 	}
 
-	// Classify the startup path and emit the metric.
+	// Classify the startup path and log it.
 	// oldest is the zero time when snapshotLoaded==0; Classify guards on loaded==0 before using it.
 	oldest, _ := snapshot.OldestCapturedAt(flagCache)
 	switch snapshot.Classify(cfg.SnapshotBackend != "", snapshotLoaded, snapshotLoadErr != nil, oldest, time.Now(), cfg.SnapshotMaxAge) {
 	case snapshot.CaseColdNoPersistence:
-		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", "cold")))
 		logger.Info("startup: no persistence configured, starting cold")
 	case snapshot.CaseSnapshotFresh:
-		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", "snapshot")))
 		logger.Info("startup: serving from fresh snapshot", slog.Int("count", snapshotLoaded))
 	case snapshot.CaseSnapshotStale:
-		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", "snapshot_stale")))
-		logger.Warn("startup: serving stale snapshot — oldest entry meets or exceeds SNAPSHOT_MAX_AGE",
+		logger.Warn("startup: serving stale snapshot: oldest entry meets or exceeds SNAPSHOT_MAX_AGE",
 			slog.Duration("age", time.Since(oldest)),
 			slog.Duration("max_age", cfg.SnapshotMaxAge))
 	case snapshot.CaseEmptyPersistenceCold:
-		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", "empty_persistence_cold")))
-		logger.Info("startup: persistence configured but store is empty — starting cold; snapshots will be written after first upstream fetch")
+		logger.Info("startup: persistence configured but store is empty, starting cold; snapshots will be written after first upstream fetch")
 	case snapshot.CaseBackendUnreachable:
-		inst.StartupPath.Add(ctx, 1, metric.WithAttributes(attribute.String("path", "backend_unreachable")))
 		return fmt.Errorf("startup: snapshot backend unreachable and no cached data to serve: %w", snapshotLoadErr)
 	}
 	snapshotReady = true
@@ -176,7 +201,11 @@ func run() error {
 				ResponseHeaderTimeout: 30 * time.Second,
 			},
 		}
-		sseManager = sse.New(sseClient, inst, logger)
+		sseManager = sse.New(sseClient, inst, logger, sse.Config{
+			FanoutCapPerKey:     cfg.SSEFanoutCapPerKey,
+			SubscribeRatePerSec: cfg.SSESubscribeRatePerSec,
+			SubscribeBurst:      cfg.SSESubscribeBurst,
+		})
 		sseManager.SetTracer(tracer)
 
 		// Wire lifecycle invalidation: on tokenRotated/stageDeleted/projectDeleted events,
@@ -362,21 +391,24 @@ func run() error {
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
-		// Drain in-flight HTTP requests first — counter.Increment is called
-		// during request handling, so the final billing flush must happen after.
-		if err := srv.Shutdown(context.Background()); err != nil {
-			slog.Warn("server: shutdown error", slog.String("error", err.Error()))
-		}
-		if startErr := <-errCh; startErr != nil {
-			slog.Warn("server: listen error", slog.String("error", startErr.Error()))
-		}
-
+		// Shut down SSE first — this closes all downstream streaming connections
+		// so the HTTP server drain below can complete without waiting for
+		// long-lived SSE connections to time out.
 		if sseManager != nil {
 			sseShutCtx, sseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer sseCancel()
 			if err := sseManager.Shutdown(sseShutCtx); err != nil {
 				slog.Warn("sse: shutdown timed out", slog.String("error", err.Error()))
 			}
+		}
+
+		// Drain in-flight HTTP requests — counter.Increment is called
+		// during request handling, so the final billing flush must happen after.
+		if err := srv.Shutdown(context.Background()); err != nil {
+			slog.Warn("server: shutdown error", slog.String("error", err.Error()))
+		}
+		if startErr := <-errCh; startErr != nil {
+			slog.Warn("server: listen error", slog.String("error", startErr.Error()))
 		}
 
 		if sweeperDone != nil {
