@@ -119,3 +119,26 @@ in-memory cache. See [ADR-0003](adr/0003-cross-proxy-snapshot-fallback.md) for t
 nothing newer in the store to fall back to. This is expected and acceptable.
 
 Metric: `proxy.snapshot.outage_fallback.total{result}`. See [telemetry.md](telemetry.md).
+
+## Authentication
+
+By default, the proxy pulls from the AWS S3 client's default credential chain, which includes environment variables,
+shared credentials files, and EC2/ECS metadata. The recommendation is to leave it to the environment to provide
+credentials when running in AWS.
+
+For overriding the destination bucket or providing static credentials, the following variables are supported:
+
+```bash
+SNAPSHOT_S3_BUCKET=my-proxy-snapshots
+SNAPSHOT_S3_REGION=us-east-1
+SNAPSHOT_S3_PREFIX=prod/            # optional prefix for snapshot keys in the bucket
+SNAPSHOT_S3_ACCESS_KEY_ID=AKIA...   # optional static credentials
+SNAPSHOT_S3_SECRET_ACCESS_KEY=...   # optional static credentials
+```
+
+For compatibility with Cloudflare R2, or other providers, the `SNAPSHOT_S3_ENDPOINT` variable is also supported to
+override the S3 endpoint URL:
+
+```bash
+SNAPSHOT_S3_ENDPOINT=https://<account_id>.r2.cloudflarestorage.com
+```
