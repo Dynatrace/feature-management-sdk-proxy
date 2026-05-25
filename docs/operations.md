@@ -178,7 +178,7 @@ gated on the snapshot load, which typically takes under a second for a healthy s
 
 ## Graceful Shutdown
 
-On `SIGTERM` or `SIGINT`, the proxy drains in order:
+On `SIGTERM`, `SIGINT`, or `SIGHUP`, the proxy drains in order:
 
 1. **HTTP server drains:** in-flight requests complete; new connections are rejected. Bounded by `SHUTDOWN_TIMEOUT` (
    default 30s).
@@ -186,8 +186,11 @@ On `SIGTERM` or `SIGINT`, the proxy drains in order:
 3. **Snapshot writer drains:** pending async writes flushed. Failed writes are logged and dropped.
 4. **Final usage flush:** pending usage records sent to the billing endpoint. 10-second deadline.
 
-The proxy always exits 0 on a signal-driven shutdown, even if non-critical teardown steps log errors. Exit code 1 means
-a startup failure or an unexpected listener error before any signal arrived.
+The proxy exits 0 on a normal signal-driven shutdown, even if non-critical teardown steps log errors. Exit code 1 means
+a startup failure or an unexpected listener error before any signal arrived. A **second signal received during
+graceful shutdown** forces an immediate exit with code `128 + signo` (e.g. `143` for `SIGTERM`); use this to escape a
+hung shutdown instead of `kill -9`. `SIGKILL` cannot be caught — the final usage flush and any queued snapshot writes
+are lost.
 
 ---
 
