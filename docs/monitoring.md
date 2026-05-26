@@ -134,6 +134,9 @@ are closed.
 
 - `0`: clean signal-driven shutdown. Expected behavior.
 - `1`: startup failure or unexpected listener error. Investigate logs.
+- `128 + signo` (e.g. `130`/`143`): a second signal was received during graceful shutdown, forcing immediate exit.
+  Indicates either an operator escaping a hung drain or a supervisor that re-sent the signal too aggressively. Pending
+  usage records and queued snapshot writes may have been lost.
 
 ---
 

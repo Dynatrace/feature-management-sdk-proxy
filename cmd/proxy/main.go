@@ -55,8 +55,44 @@ func run() error {
 	slog.SetDefault(logger)
 	slog.Info("starting sdk-proxy", slog.Any("config", cfg))
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	defer stop()
+	// Signal handling:
+	//
+	//   SIGTERM — orchestrator-initiated stop (Kubernetes, systemd, docker stop).
+	//             Triggers graceful shutdown bounded by cfg.ShutdownTimeout.
+	//   SIGINT  — interactive Ctrl-C in a terminal. Same graceful path as SIGTERM.
+	//   SIGHUP  — controlling terminal closed. Treated as graceful shutdown and
+	//             logged distinctly so operators can tell it apart from a
+	//             deliberate stop. (We do not use SIGHUP for config reload.)
+	//   SIGKILL/SIGSTOP — cannot be caught by any process; the kernel terminates
+	//             us immediately. In-flight requests are dropped, the final
+	//             billing flush is lost, and snapshots queued in memory are not
+	//             persisted. Operators should always prefer SIGTERM over `kill -9`.
+	//
+	// A second signal received during graceful shutdown forces an immediate exit
+	// so an operator can escape a hung shutdown without resorting to SIGKILL.
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		select {
+		case sig := <-sigCh:
+			slog.Info("signal: received, beginning graceful shutdown",
+				slog.String("signal", sig.String()))
+			cancel()
+		case <-ctx.Done():
+			return
+		}
+		// Second signal: force exit. Use conventional exit code 128+signo so
+		// process supervisors record the right termination reason.
+		sig := <-sigCh
+		slog.Warn("signal: received second signal, forcing immediate exit",
+			slog.String("signal", sig.String()))
+		os.Exit(exitCodeForSignal(sig))
+	}()
 
 	// Install W3C TraceContext propagator globally so incoming traceparent headers
 	// are honoured when extracting context in ServeHTTP handlers.
@@ -404,9 +440,13 @@ func run() error {
 
 		// Drain in-flight HTTP requests — counter.Increment is called
 		// during request handling, so the final billing flush must happen after.
-		if err := srv.Shutdown(context.Background()); err != nil {
+		// Bound by cfg.ShutdownTimeout so a stuck handler can't block forever;
+		// a second signal still escalates to immediate exit (see signal goroutine).
+		srvShutCtx, srvCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		if err := srv.Shutdown(srvShutCtx); err != nil {
 			slog.Warn("server: shutdown error", slog.String("error", err.Error()))
 		}
+		srvCancel()
 		if startErr := <-errCh; startErr != nil {
 			slog.Warn("server: listen error", slog.String("error", startErr.Error()))
 		}
@@ -440,6 +480,15 @@ const configHandlerPath = "/server/"
 
 const billingShutdownGrace = 10 * time.Second
 const snapshotShutdownGrace = 5 * time.Second
+
+// exitCodeForSignal returns the conventional shell exit code (128 + signal
+// number) for a POSIX signal. Falls back to 1 for non-Unix signal values.
+func exitCodeForSignal(sig os.Signal) int {
+	if s, ok := sig.(syscall.Signal); ok {
+		return 128 + int(s)
+	}
+	return 1
+}
 
 // initSnapshotWriter loads existing snapshots from store into flagCache, logs
 // errors, and returns the loaded count, a Writer ready to accept async writes,
