@@ -18,7 +18,7 @@ import "context"
 //
 //	{
 //	  "schema_version": 1,
-//	  "sdk_key_id":     "<public prefix of the SDK key; cache.PublicID(sdk_key)>",
+//	  "sdk_key_id":     "<public prefix of the SDK key; sdkkey.PublicID(sdk_key)>",
 //	  "request_count":  <int64; non-zero>,
 //	  "window_start":   "<RFC3339Nano UTC>",
 //	  "window_end":     "<RFC3339Nano UTC>",
@@ -52,7 +52,7 @@ import "context"
 // The originating SDK token authenticates the HTTP call via the Authorization
 // header. The proxy holds no separate billing credential. The Worker validates
 // that the Authorization token matches the sdk_key_id in the body by computing
-// cache.PublicID(token) server-side.
+// sdkkey.PublicID(token) server-side.
 //
 // # Back-pressure
 //

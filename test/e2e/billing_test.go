@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 )
 
 // TestBilling_CacheHit_IncrementsCounter verifies that a cache-hit request
@@ -77,7 +77,7 @@ func TestBilling_FlushDeliversCorrectSample(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("no Sample found for key_id=%s in billing calls", cache.PublicID(TestSDKKey))
+		t.Errorf("no Sample found for key_id=%s in billing calls", sdkkey.PublicID(TestSDKKey))
 	}
 }
 

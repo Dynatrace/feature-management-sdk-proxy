@@ -24,6 +24,7 @@ import (
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/middleware"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/proxy"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/server"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/snapshot"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/sse"
@@ -231,9 +232,9 @@ func New(t *testing.T, opts Options) (*Harness, error) {
 
 	// API routes with trace propagation middleware.
 	api := router.Group("/", middleware.TracePropagation())
-	api.GET(sse.HandlerPath, sseHandler.Handle)
-	api.GET(configHandlerPath+":file", proxyHandler.Handle)
-	api.HEAD(configHandlerPath+":file", proxyHandler.Handle)
+	api.GET(sse.HandlerPath, sdkkey.FromStreamID(), sseHandler.Handle)
+	api.GET(configHandlerPath+":file", sdkkey.FromPathFile(), proxyHandler.Handle)
+	api.HEAD(configHandlerPath+":file", sdkkey.FromPathFile(), proxyHandler.Handle)
 	router.NoRoute(func(c *gin.Context) {
 		c.String(http.StatusNotFound, "404 page not found\n")
 	})
@@ -297,7 +298,7 @@ func (h *Harness) ConfigPath(sdkKey string) string {
 
 // SSEPath returns the proxy SSE path for the given SDK key using stream_id.
 func (h *Harness) SSEPath(sdkKey string) string {
-	return sse.HandlerPath + "?stream_id=" + cache.PublicID(sdkKey)
+	return sse.HandlerPath + "?stream_id=" + sdkkey.PublicID(sdkKey)
 }
 
 // GetConfig makes a GET request to the proxy's config endpoint for sdkKey.

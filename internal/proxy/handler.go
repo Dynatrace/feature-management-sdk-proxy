@@ -19,6 +19,7 @@ import (
 
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/sse"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/telemetry"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/tracing"
@@ -122,32 +123,28 @@ func (h *Handler) SetRewriteSSEURLs(enabled bool) {
 }
 
 // Handle is the native Gin handler for the proxy config endpoint.
-// It extracts the SDK key from the :file path parameter, serves from cache
+// It reads the SDK key injected by FromPathFile middleware, serves from cache
 // on hit, or fetches from upstream CDN on miss.
 //
 // Route registration should use:
 //
-//	router.GET("/server/:file", proxyHandler.Handle)
-//	router.HEAD("/server/:file", proxyHandler.Handle)
+//	router.GET("/server/:file", sdkkey.FromPathFile(), proxyHandler.Handle)
+//	router.HEAD("/server/:file", sdkkey.FromPathFile(), proxyHandler.Handle)
 //
 // The TracePropagation middleware must be applied upstream so
 // c.Request.Context() already contains the extracted W3C trace context.
 func (h *Handler) Handle(c *gin.Context) {
-	file := c.Param("file")
-	sdkKey, ok := extractSDKKeyFromFile(file)
-	if !ok {
-		c.String(http.StatusBadRequest, "path must end with /<sdk_key>.json\n")
-		return
-	}
+	// k is pre-extracted and injected by FromPathFile middleware.
+	k, _ := sdkkey.KeyFromContext(c)
+	sdkKey := k.Raw()
+	key := k.PublicID()
 
-	target, ok := h.buildTarget(sdkKey)
+	target, ok := h.buildTarget(k)
 	if !ok {
-		h.logger.WarnContext(c.Request.Context(), "proxy: unrecognized SDK key format", slog.String("sdk_key_public_id", cache.PublicID(sdkKey)))
+		h.logger.WarnContext(c.Request.Context(), "proxy: unrecognized SDK key format", slog.String("sdk_key_public_id", key))
 		c.String(http.StatusBadRequest, "unrecognized SDK key format: must be {token}.{platform}_{geo}_{publicRandom}.{secret}_{sha1}\n")
 		return
 	}
-
-	key := cache.PublicID(sdkKey)
 
 	// Create the request span. W3C trace context was already extracted by the
 	// TracePropagation middleware, so c.Request.Context() has the parent trace.
@@ -211,13 +208,15 @@ func (h *Handler) serveCacheHit(ctx context.Context, c *gin.Context, entry cache
 // Returns "hit" on success or "upstream_error" if the entry was evicted (503
 // already written).
 func (h *Handler) serveFromCache(ctx context.Context, c *gin.Context, entry cache.Entry, sdkKey string) string {
-	key := cache.PublicID(sdkKey)
+	key := sdkkey.PublicID(sdkKey)
 
 	wasSnapshotLoaded := entry.FetchURL == ""
 	if wasSnapshotLoaded {
-		if target, ok := h.buildTarget(sdkKey); ok {
-			entry.FetchURL = target
-			h.cache.Set(key, entry)
+		if parsedKey, ok := sdkkey.ParseFull(sdkKey); ok {
+			if target, ok2 := h.buildTarget(parsedKey); ok2 {
+				entry.FetchURL = target
+				h.cache.Set(key, entry)
+			}
 		}
 	}
 
@@ -597,28 +596,13 @@ func (f *Fetcher) Fetch(ctx context.Context, _ string, fetchURL, etag string) (c
 	}, nil
 }
 
-// buildTarget derives the geo-bound CDN URL for an SDK key.
-// Returns ("", false) if the SDK key format is not recognized.
-func (h *Handler) buildTarget(sdkKey string) (string, bool) {
-	geo, ok := ExtractGeo(sdkKey)
-	if !ok {
+// buildTarget derives the geo-bound CDN URL for a parsed SDK key.
+// Returns ("", false) if the key is not a full key (missing private segment).
+func (h *Handler) buildTarget(k sdkkey.Key) (string, bool) {
+	if !k.IsFull() {
 		return "", false
 	}
-	return "https://cdn." + geo + "." + h.cdnBaseDomain + "/server/" + sdkKey + ".json", true
-}
-
-// ExtractGeo parses the geo segment from an SDK key in the format
-// {token}.{platform}_{geo}_{publicRandom}.{secret}_{sha1}.
-// Returns ("", false) for any other format. The geo is always [a-z]{2} per the
-// full-key regex, so it is safe to embed in derived upstream URLs.
-func ExtractGeo(sdkKey string) (string, bool) {
-	if !cache.ValidateFullKey(sdkKey) {
-		return "", false
-	}
-	// second dot-segment: {platform}_{geo}_{publicRandom}
-	dotParts := strings.SplitN(sdkKey, ".", 3)
-	underParts := strings.SplitN(dotParts[1], "_", 3)
-	return underParts[1], true
+	return "https://cdn." + k.Geo() + "." + h.cdnBaseDomain + "/server/" + k.Raw() + ".json", true
 }
 
 // sanitizeErr strips request URL values from *url.Error to prevent raw SDK
@@ -629,20 +613,6 @@ func sanitizeErr(err error) error {
 		return fmt.Errorf("%s upstream: %w", ue.Op, ue.Err)
 	}
 	return err
-}
-
-// extractSDKKeyFromFile returns the SDK key from a route parameter value
-// (e.g. "dt01.server_us_...json" → the key without ".json").
-// Returns ("", false) if the parameter is malformed.
-func extractSDKKeyFromFile(file string) (string, bool) {
-	if !strings.HasSuffix(file, ".json") {
-		return "", false
-	}
-	key := strings.TrimSuffix(file, ".json")
-	if key == "" {
-		return "", false
-	}
-	return key, true
 }
 
 func copyHeader(dst, src http.Header) {
@@ -679,7 +649,7 @@ func derivedScheme(r *http.Request) string {
 // config payload. The scheme and host are derived from the incoming request,
 // so no static PROXY_PUBLIC_URL configuration is required.
 //
-// keyID is the SDK key public identifier (cache.PublicID(sdkKey)) — the raw SDK key must
+// keyID is the SDK key public identifier (sdkkey.PublicID(sdkKey)) — the raw SDK key must
 // never appear in the rewritten URL (logs, browser history, reverse proxies).
 //
 // r.Host is client-controlled, but the URL is returned only to the same client

@@ -14,7 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
-	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 )
 
 // S3Store implements Store against any S3-compatible object storage service
@@ -90,7 +90,7 @@ func (s *S3Store) objectKey(keyID string) string {
 
 // Put writes the snapshot body to the bucket under the key ID.
 func (s *S3Store) Put(ctx context.Context, keyID string, body []byte) error {
-	if !cache.IsValidID(keyID) {
+	if !sdkkey.IsValidID(keyID) {
 		return fmt.Errorf("snapshot: s3: invalid key ID %q", keyID)
 	}
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
@@ -107,7 +107,7 @@ func (s *S3Store) Put(ctx context.Context, keyID string, body []byte) error {
 
 // Get retrieves the snapshot body for the given key ID.
 func (s *S3Store) Get(ctx context.Context, keyID string) ([]byte, error) {
-	if !cache.IsValidID(keyID) {
+	if !sdkkey.IsValidID(keyID) {
 		return nil, fmt.Errorf("snapshot: s3: invalid key ID %q", keyID)
 	}
 	resp, err := s.client.GetObject(ctx, &s3.GetObjectInput{
@@ -161,7 +161,7 @@ func extractPublicID(objectKey, prefix string) string {
 	name := strings.TrimPrefix(objectKey, prefix)
 	name = strings.TrimSuffix(name, ".json")
 	// Guard against nested slashes or non-matching key IDs (e.g. legacy hex files).
-	if strings.ContainsRune(name, '/') || !cache.IsValidID(name) {
+	if strings.ContainsRune(name, '/') || !sdkkey.IsValidID(name) {
 		return ""
 	}
 	return name
@@ -170,7 +170,7 @@ func extractPublicID(objectKey, prefix string) string {
 // Delete removes the snapshot object for the given key ID.
 // Returns nil when the object does not exist (idempotent).
 func (s *S3Store) Delete(ctx context.Context, keyID string) error {
-	if !cache.IsValidID(keyID) {
+	if !sdkkey.IsValidID(keyID) {
 		return fmt.Errorf("snapshot: s3: invalid key ID %q", keyID)
 	}
 	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{

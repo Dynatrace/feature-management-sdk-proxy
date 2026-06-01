@@ -29,6 +29,7 @@ import (
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/middleware"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/proxy"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/server"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/snapshot"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/sse"
@@ -299,17 +300,16 @@ func run() error {
 	// Handlers in this group receive extracted trace context via c.Request.Context().
 	api := router.Group("/", middleware.TracePropagation())
 
-	// SSE streaming endpoint — native Gin handler.
-	api.GET(sse.HandlerPath, sseHandler.Handle)
+	// SSE streaming endpoint — stream_id query param validated and injected by middleware.
+	api.GET(sse.HandlerPath, sdkkey.FromStreamID(), sseHandler.Handle)
 
-	// Proxy config endpoint — accepts GET and HEAD; uses :file param to match
-	// the /server/{sdk_key}.json path structure.
-	api.GET(configHandlerPath+":file", proxyHandler.Handle)
-	api.HEAD(configHandlerPath+":file", proxyHandler.Handle)
+	// Proxy config endpoint — SDK key extracted from :file param and injected by middleware.
+	api.GET(configHandlerPath+":file", sdkkey.FromPathFile(), proxyHandler.Handle)
+	api.HEAD(configHandlerPath+":file", sdkkey.FromPathFile(), proxyHandler.Handle)
 
-	// Evaluation metrics passthrough — transparent reverse proxy to the upstream
-	// metrics ingest service. See docs/adr/0004-evaluation-metrics-reverse-proxy.md.
-	api.POST("/v1/metrics", evalMetricsHandler.Handle)
+	// Evaluation metrics passthrough — Bearer token extracted and injected by middleware.
+	// See docs/adr/0004-evaluation-metrics-reverse-proxy.md.
+	api.POST("/v1/metrics", sdkkey.FromBearerToken(), evalMetricsHandler.Handle)
 
 	// Catch-all: return 404 for unmatched routes.
 	router.NoRoute(func(c *gin.Context) {

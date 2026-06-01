@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 )
 
 // LocalStore implements Store against a local directory.
@@ -29,7 +29,7 @@ func NewLocalStore(dir string) (*LocalStore, error) {
 
 // Put writes body to <dir>/<keyID>.json atomically via a unique temp file + rename.
 func (s *LocalStore) Put(_ context.Context, keyID string, body []byte) error {
-	if !cache.IsValidID(keyID) {
+	if !sdkkey.IsValidID(keyID) {
 		return fmt.Errorf("snapshot: local: invalid key ID %q", keyID)
 	}
 	dst := filepath.Join(s.dir, keyID+".json")
@@ -61,7 +61,7 @@ func (s *LocalStore) Put(_ context.Context, keyID string, body []byte) error {
 
 // Get reads the snapshot body for the given key ID.
 func (s *LocalStore) Get(_ context.Context, keyID string) ([]byte, error) {
-	if !cache.IsValidID(keyID) {
+	if !sdkkey.IsValidID(keyID) {
 		return nil, fmt.Errorf("snapshot: local: invalid key ID %q", keyID)
 	}
 	data, err := os.ReadFile(filepath.Join(s.dir, keyID+".json"))
@@ -89,7 +89,7 @@ func (s *LocalStore) List(_ context.Context) ([]string, error) {
 			continue
 		}
 		stem := strings.TrimSuffix(name, ".json")
-		if !cache.IsValidID(stem) {
+		if !sdkkey.IsValidID(stem) {
 			continue
 		}
 		keys = append(keys, stem)
@@ -100,7 +100,7 @@ func (s *LocalStore) List(_ context.Context) ([]string, error) {
 // Delete removes the snapshot file for the given key ID.
 // Returns nil when the file does not exist (idempotent).
 func (s *LocalStore) Delete(_ context.Context, keyID string) error {
-	if !cache.IsValidID(keyID) {
+	if !sdkkey.IsValidID(keyID) {
 		return fmt.Errorf("snapshot: local: invalid key ID %q", keyID)
 	}
 	err := os.Remove(filepath.Join(s.dir, keyID+".json"))

@@ -5,9 +5,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
-	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,36 +26,6 @@ const RefreshIntervalConnected = 10 * time.Minute
 // RefreshIntervalDisconnected is the polling interval when SSE is unavailable
 // or disabled. Polling is the only update mechanism, so the interval is short.
 const RefreshIntervalDisconnected = 10 * time.Second
-
-var (
-	// publicIDRe matches a valid SDK key public identifier: {token}.{platform}_{geo}_{publicRandom}
-	publicIDRe = regexp.MustCompile(`^dt[0-9]{2}\.(web|mobile|server)_[a-z]{2}_[a-zA-Z0-9]{10}$`)
-	// fullKeyRe matches a valid full SDK key: {token}.{platform}_{geo}_{publicRandom}.{secret}_{sha1}
-	fullKeyRe = regexp.MustCompile(`^dt[0-9]{2}\.(?:web|mobile|server)_[a-z]{2}_[a-zA-Z0-9]{10}\.[a-f0-9]{32}_[a-f0-9]{10,}$`)
-)
-
-// PublicID returns the log-safe public prefix of an SDK key.
-// It splits on "." and drops the last segment (the private segment).
-// The raw SDK key must never be logged; use this function when logging key context.
-func PublicID(sdkKey string) string {
-	i := strings.LastIndex(sdkKey, ".")
-	if i < 0 {
-		return ""
-	}
-	return sdkKey[:i]
-}
-
-// IsValidID reports whether s is a valid SDK key public identifier:
-// {token}.{platform}_{geo}_{publicRandom}
-func IsValidID(s string) bool {
-	return publicIDRe.MatchString(s)
-}
-
-// ValidateFullKey reports whether s is a well-formed full SDK key:
-// {token}.{platform}_{geo}_{publicRandom}.{secret}_{sha1}
-func ValidateFullKey(s string) bool {
-	return fullKeyRe.MatchString(s)
-}
 
 // RefreshIntervalProvider returns the appropriate polling interval for a given
 // cache key. Implementations are expected to consult SSE connection state.
@@ -82,7 +50,7 @@ func (e Entry) IsStale(now time.Time, interval time.Duration) bool {
 	return now.Sub(e.FetchedAt) >= interval
 }
 
-// Cache is a thread-safe in-memory store keyed by SDK key public prefix (cache.PublicID(sdk_key)).
+// Cache is a thread-safe in-memory store keyed by SDK key public prefix (sdkkey.PublicID(sdk_key)).
 //
 // Last-access tracking: each entry carries a last-access timestamp stored as an
 // atomic.Int64 (Unix nanoseconds). The pointer into lastAccess is read under
@@ -229,7 +197,7 @@ type FetchResult struct {
 }
 
 // Fetcher is satisfied by anything that can revalidate a cache entry upstream.
-// keyID is cache.PublicID(sdkKey) — used for telemetry only, never the raw key.
+// keyID is sdkkey.PublicID(sdkKey) — used for telemetry only, never the raw key.
 // fetchURL is the full upstream URL (including path and query); etag is the
 // previously cached ETag value, which should be sent as If-None-Match.
 type Fetcher interface {
@@ -238,7 +206,7 @@ type Fetcher interface {
 
 // RefreshObserver is notified when the background refresher fetches a new
 // payload from upstream (200 response). It is never called for 304 responses
-// or fetch errors. keyID is the SDK key public identifier (cache.PublicID(sdkKey)).
+// or fetch errors. keyID is the SDK key public identifier (sdkkey.PublicID(sdkKey)).
 type RefreshObserver interface {
 	OnRefreshed(keyID string, payload []byte)
 }

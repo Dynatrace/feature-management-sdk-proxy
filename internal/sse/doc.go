@@ -33,7 +33,7 @@
 // eventsource.Server.Unregister.
 //
 // Handler serves GET /sse for SDK clients. The stream_id query parameter
-// carries the SDK key public identifier (cache.PublicID(sdkKey)) — the raw SDK key must never
+// carries the SDK key public identifier (sdkkey.PublicID(sdkKey)) — the raw SDK key must never
 // appear in this URL. The handler gates on cache presence (412 if the config
 // has not been fetched yet), then delegates to the eventsource.Server's handler
 // for that channel. It never opens an upstream SSE connection; that is handled

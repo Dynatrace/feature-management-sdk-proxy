@@ -12,7 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
-	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 )
 
 func init() {
@@ -46,10 +46,12 @@ func newRedirectingClient(target *httptest.Server) *http.Client {
 	}
 }
 
-// ginContext creates a *gin.Context for POST /v1/metrics.
+// ginContext creates a *gin.Context for POST /v1/metrics with
+// FromBearerToken middleware applied (extracts Bearer token into context).
 func ginContext(w *httptest.ResponseRecorder, r *http.Request) *gin.Context {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = r
+	sdkkey.FromBearerToken()(c)
 	return c
 }
 
@@ -393,7 +395,7 @@ func TestHandle_RawSDKKeyNotLeakedInLogs(t *testing.T) {
 	if strings.Contains(logs, testSDKKeyUS) {
 		t.Error("raw SDK key appeared in log output")
 	}
-	keyID := cache.PublicID(testSDKKeyUS)
+	keyID := sdkkey.PublicID(testSDKKeyUS)
 	if !strings.Contains(logs, keyID) {
 		t.Errorf("expected public ID %q in log output, got: %s", keyID, logs)
 	}
@@ -422,29 +424,6 @@ func TestHandle_WrongMethod_Returns405(t *testing.T) {
 		router.ServeHTTP(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed {
 			t.Errorf("method %s: expected 405, got %d", method, rec.Code)
-		}
-	}
-}
-
-// --- extractBearer unit tests ---
-
-func TestExtractBearer(t *testing.T) {
-	cases := []struct {
-		header    string
-		wantToken string
-		wantOK    bool
-	}{
-		{"Bearer mytoken", "mytoken", true},
-		{"Bearer  spaced  ", "spaced", true},
-		{"Basic abc123", "", false},
-		{"", "", false},
-		{"Bearer ", "", false},
-		{"bearer mytoken", "", false}, // case-sensitive per spec
-	}
-	for _, tc := range cases {
-		token, ok := extractBearer(tc.header)
-		if ok != tc.wantOK || token != tc.wantToken {
-			t.Errorf("extractBearer(%q) = (%q, %v), want (%q, %v)", tc.header, token, ok, tc.wantToken, tc.wantOK)
 		}
 	}
 }

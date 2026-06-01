@@ -8,8 +8,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 )
 
 // Lifecycle event type strings. These are placeholders until the upstream
@@ -156,7 +156,7 @@ func (h *LifecycleHandler) parseKeyIDs(evt Event) ([]string, bool) {
 	var ids []string
 
 	for _, keyID := range d.SDKKeyIDs {
-		if !cache.IsValidID(keyID) {
+		if !sdkkey.IsValidID(keyID) {
 			h.logger.Warn("sse: skipping invalid sdkKeyHash in lifecycle event",
 				slog.String("event_type", evt.EventType),
 			)
@@ -166,8 +166,8 @@ func (h *LifecycleHandler) parseKeyIDs(evt Event) ([]string, bool) {
 	}
 
 	for _, key := range d.SDKKeys {
-		id := cache.PublicID(key)
-		if !cache.IsValidID(id) {
+		id := sdkkey.PublicID(key)
+		if !sdkkey.IsValidID(id) {
 			h.logger.Warn("sse: skipping sdkKey with invalid public prefix in lifecycle event",
 				slog.String("event_type", evt.EventType),
 			)

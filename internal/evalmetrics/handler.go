@@ -17,20 +17,19 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
-	"github.com/dynatrace/feature-management-sdk-proxy/internal/proxy"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/tracing"
 )
 
 const (
 	resultForwarded       = "forwarded"
 	resultBadRequest      = "bad_request"
-	resultUnauthorized    = "unauthorized"
 	resultPayloadTooLarge = "payload_too_large"
 	resultUpstreamError   = "upstream_error"
 	resultBadGateway      = "bad_gateway"
 	resultInternalError   = "internal_error"
+	resultUnauthorized    = "unauthorized"
 )
 
 // hopByHopHeaders must not be forwarded between proxy hops (RFC 7230 §6.1).
@@ -88,7 +87,7 @@ func (h *Handler) SetMaxRequestBytes(n int64) {
 //
 // Route registration:
 //
-//	api.POST("/v1/metrics", evalMetricsHandler.Handle)
+//	api.POST("/v1/metrics", sdkkey.FromBearerToken(), evalMetricsHandler.Handle)
 func (h *Handler) Handle(c *gin.Context) {
 	start := time.Now()
 
@@ -100,21 +99,16 @@ func (h *Handler) Handle(c *gin.Context) {
 		))
 	defer span.End()
 
-	bearerToken, ok := extractBearer(c.GetHeader("Authorization"))
-	if !ok {
-		span.SetAttributes(attribute.String("result", resultUnauthorized))
-		h.record(ctx, resultUnauthorized, start)
-		c.String(http.StatusUnauthorized, "Authorization: Bearer <sdk_key> required\n")
-		return
+	// key is pre-extracted and injected by FromBearerToken middleware.
+	key, _ := sdkkey.KeyFromContext(c)
+	if key.Platform() != sdkkey.PlatformServer {
+		c.String(http.StatusUnauthorized, resultUnauthorized)
 	}
+	span.SetAttributes(tracing.SDKKeyPublicID(key.PublicID()))
 
-	keyID := cache.PublicID(bearerToken)
-	span.SetAttributes(tracing.SDKKeyPublicID(keyID))
-
-	geo, ok := proxy.ExtractGeo(bearerToken)
-	if !ok {
+	if !key.IsFull() {
 		h.logger.WarnContext(ctx, "evalmetrics: unrecognized SDK key format",
-			slog.String("sdk_key_public_id", keyID),
+			slog.String("sdk_key_public_id", key.PublicID()),
 		)
 		span.SetAttributes(attribute.String("result", resultBadRequest))
 		h.record(ctx, resultBadRequest, start)
@@ -132,7 +126,7 @@ func (h *Handler) Handle(c *gin.Context) {
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, h.maxRequestBytes+1))
 	if err != nil {
 		h.logger.ErrorContext(ctx, "evalmetrics: read request body failed",
-			slog.String("sdk_key_public_id", keyID),
+			slog.String("sdk_key_public_id", key.PublicID()),
 			slog.String("error", err.Error()),
 		)
 		span.SetAttributes(attribute.String("result", resultInternalError))
@@ -147,12 +141,12 @@ func (h *Handler) Handle(c *gin.Context) {
 		return
 	}
 
-	target := "https://metrics." + geo + "." + h.metricsBaseDomain + "/v1/metrics"
+	target := fmt.Sprintf("https://metrics.%s.%s/v1/metrics", key.Geo(), h.metricsBaseDomain)
 
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		h.logger.ErrorContext(ctx, "evalmetrics: build upstream request failed",
-			slog.String("sdk_key_public_id", keyID),
+			slog.String("sdk_key_public_id", key.PublicID()),
 			slog.String("error", err.Error()),
 		)
 		span.RecordError(err)
@@ -162,7 +156,7 @@ func (h *Handler) Handle(c *gin.Context) {
 		return
 	}
 
-	upstreamReq.Header.Set("Authorization", "Bearer "+bearerToken)
+	upstreamReq.Header.Set("Authorization", "Bearer "+key.Raw())
 	if ct := c.GetHeader("Content-Type"); ct != "" {
 		upstreamReq.Header.Set("Content-Type", ct)
 	}
@@ -172,7 +166,7 @@ func (h *Handler) Handle(c *gin.Context) {
 	if err != nil {
 		sanitized := sanitizeErr(err)
 		h.logger.WarnContext(ctx, "evalmetrics: upstream request failed",
-			slog.String("sdk_key_public_id", keyID),
+			slog.String("sdk_key_public_id", key.PublicID()),
 			slog.String("error", sanitized.Error()),
 		)
 		span.RecordError(sanitized)
@@ -192,20 +186,6 @@ func (h *Handler) Handle(c *gin.Context) {
 	copyHeader(c.Writer.Header(), resp.Header)
 	c.Writer.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(c.Writer, resp.Body)
-}
-
-// extractBearer returns the token from an "Authorization: Bearer <token>" header.
-// Returns ("", false) if the header is absent or has a different scheme.
-func extractBearer(header string) (string, bool) {
-	const prefix = "Bearer "
-	if !strings.HasPrefix(header, prefix) {
-		return "", false
-	}
-	token := strings.TrimSpace(header[len(prefix):])
-	if token == "" {
-		return "", false
-	}
-	return token, true
 }
 
 // classifyStatus maps an upstream HTTP status to a result label.

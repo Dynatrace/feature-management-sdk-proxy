@@ -15,6 +15,7 @@ import (
 
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/telemetry"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/tracing"
 )
@@ -81,11 +82,13 @@ func (h *Handler) SetTracer(t trace.Tracer) {
 	h.tracer = t
 }
 
-// Handle is the native Gin handler for the SSE endpoint. It validates the
-// stream_id query parameter, gates on cache presence, and delegates to the
-// eventsource.Server for downstream SSE streaming.
+// Handle is the native Gin handler for the SSE endpoint. It reads the public
+// SDK key ID injected by FromStreamID middleware, gates on cache presence, and
+// delegates to the eventsource.Server for downstream SSE streaming.
 //
-// Route registration should use: router.GET(sse.HandlerPath, sseHandler.Handle)
+// Route registration should use:
+//
+//	router.GET(sse.HandlerPath, sdkkey.FromStreamID(), sseHandler.Handle)
 func (h *Handler) Handle(c *gin.Context) {
 	if h.disabled {
 		h.logger.DebugContext(c.Request.Context(), "sse: SSE disabled — rejecting client connection with 501")
@@ -93,21 +96,8 @@ func (h *Handler) Handle(c *gin.Context) {
 		return
 	}
 
-	streamID := c.Query("stream_id")
-	if streamID == "" {
-		c.String(http.StatusBadRequest, "missing stream_id query parameter\n")
-		return
-	}
-
-	if !cache.IsValidID(streamID) {
-		h.logger.WarnContext(c.Request.Context(), "sse: invalid stream_id format",
-			slog.Int("len", len(streamID)),
-		)
-		c.String(http.StatusBadRequest, "invalid stream_id: must be a valid SDK key public prefix\n")
-		return
-	}
-
-	keyID := streamID
+	// keyID is pre-validated and injected by FromStreamID middleware.
+	keyID, _ := sdkkey.PubID(c)
 
 	// Create the setup span. W3C trace context was already extracted by the
 	// TracePropagation middleware, so c.Request.Context() has the parent trace.
