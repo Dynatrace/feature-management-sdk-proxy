@@ -101,9 +101,6 @@ func (h *Handler) Handle(c *gin.Context) {
 
 	// key is pre-extracted and injected by FromBearerToken middleware.
 	key, _ := sdkkey.KeyFromContext(c)
-	if key.Platform() != sdkkey.PlatformServer {
-		c.String(http.StatusUnauthorized, resultUnauthorized)
-	}
 	span.SetAttributes(tracing.SDKKeyPublicID(key.PublicID()))
 
 	if !key.IsFull() {
@@ -113,6 +110,17 @@ func (h *Handler) Handle(c *gin.Context) {
 		span.SetAttributes(attribute.String("result", resultBadRequest))
 		h.record(ctx, resultBadRequest, start)
 		c.String(http.StatusBadRequest, "unrecognized SDK key format\n")
+		return
+	}
+
+	if key.Platform() != sdkkey.PlatformServer {
+		h.logger.WarnContext(ctx, "evalmetrics: non-server SDK key rejected",
+			slog.String("sdk_key_public_id", key.PublicID()),
+			slog.String("platform", key.Platform()),
+		)
+		span.SetAttributes(attribute.String("result", resultUnauthorized))
+		h.record(ctx, resultUnauthorized, start)
+		c.String(http.StatusUnauthorized, "SDK key platform not authorized for /v1/metrics\n")
 		return
 	}
 

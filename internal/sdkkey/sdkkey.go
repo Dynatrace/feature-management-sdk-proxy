@@ -12,9 +12,12 @@ var (
 	fullKeyRe = regexp.MustCompile(`^dt[0-9]{2}\.(?:web|mobile|server)_[a-z]{2}_[a-zA-Z0-9]{10}\.[a-f0-9]{32}_[a-f0-9]{10,}$`)
 )
 
-const PlatformServer = "server"
-const PlatformWeb = "web"
-const PlatformMobile = "mobile"
+// Platform constants matching the platform segment of an SDK key.
+const (
+	PlatformServer = "server"
+	PlatformWeb    = "web"
+	PlatformMobile = "mobile"
+)
 
 // Key represents a parsed SDK key — either a full key (with private segments) or
 // a public-only ID. It provides structured access to all components without
