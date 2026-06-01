@@ -175,7 +175,7 @@ Do not route SDK traffic to a pod before `/readyz` returns 200. An unready proxy
 
 ## Evaluation Metrics Proxy
 
-SDKs with `proxyUrl` set route `POST /v1/metrics` calls through the proxy to the upstream metrics ingest service.
+SDKs with `configOrigin` set route `POST /v1/metrics` calls through the proxy to the upstream metrics ingest service.
 The proxy is a transparent pass-through: it forwards the body and Bearer token unchanged and returns the upstream
 response verbatim.
 
