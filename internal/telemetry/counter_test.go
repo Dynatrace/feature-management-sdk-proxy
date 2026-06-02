@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 )
 
 func TestCounter_ZeroState_DrainReturnsNil(t *testing.T) {
@@ -31,8 +31,8 @@ func TestCounter_SingleIncrement(t *testing.T) {
 	if s.SDKKey != key {
 		t.Errorf("SDKKey = %q, want %q", s.SDKKey, key)
 	}
-	if s.KeyID != cache.PublicID(key) {
-		t.Errorf("KeyHash = %q, want %q", s.KeyID, cache.PublicID(key))
+	if s.KeyID != sdkkey.PublicID(key) {
+		t.Errorf("KeyHash = %q, want %q", s.KeyID, sdkkey.PublicID(key))
 	}
 }
 
@@ -121,7 +121,7 @@ func TestCounter_KeyHash_MatchesCacheKey(t *testing.T) {
 	if len(samples) != 1 {
 		t.Fatalf("want 1 sample, got %d", len(samples))
 	}
-	want := cache.PublicID(key)
+	want := sdkkey.PublicID(key)
 	if samples[0].KeyID != want {
 		t.Errorf("KeyHash = %q, want cache.Key(%q) = %q", samples[0].KeyID, key, want)
 	}
@@ -225,7 +225,7 @@ func TestCounter_IncrementByHash_AccumulatesCount(t *testing.T) {
 func TestCounter_Increment_RepairsEmptyRawKey(t *testing.T) {
 	c := NewCounter()
 	const key = "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
-	keyHash := cache.PublicID(key)
+	keyHash := sdkkey.PublicID(key)
 
 	// Establish entry via IncrementByHash (no raw key).
 	c.IncrementByHash(keyHash)
@@ -253,7 +253,7 @@ func TestCounter_Increment_RepairsEmptyRawKey(t *testing.T) {
 func TestCounter_IncrementByHash_AfterIncrement_KeepsRawKey(t *testing.T) {
 	c := NewCounter()
 	const key = "dt01.server_eu_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
-	keyHash := cache.PublicID(key)
+	keyHash := sdkkey.PublicID(key)
 
 	// HTTP path first — rawKey set.
 	c.Increment(key)

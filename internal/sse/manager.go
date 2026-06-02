@@ -17,6 +17,7 @@ import (
 
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 )
 
 // Admission result reasons — used in log entries and metric labels.
@@ -115,16 +116,16 @@ func (m *Manager) OnConfigCached(ctx context.Context, sdkKey string, payload []b
 	sseURL, inactivitySec, ok := ExtractSSEURL(payload)
 	if !ok {
 		m.logger.Debug("sse: no SSE entry in config, skipping upstream connection",
-			slog.String("sdk_key_public_id", cache.PublicID(sdkKey)),
+			slog.String("sdk_key_public_id", sdkkey.PublicID(sdkKey)),
 		)
 		return
 	}
-	m.ensureConn(ctx, cache.PublicID(sdkKey), sseURL, inactivitySec)
+	m.ensureConn(ctx, sdkkey.PublicID(sdkKey), sseURL, inactivitySec)
 }
 
 // OnRefreshed implements cache.RefreshObserver. It is called by the background
 // refresher when a 200 response updates the cached payload (never on 304).
-// keyID is cache.PublicID(sdkKey).
+// keyID is sdkkey.PublicID(sdkKey).
 func (m *Manager) OnRefreshed(keyID string, payload []byte) {
 	sseURL, inactivitySec, ok := ExtractSSEURL(payload)
 	if !ok {

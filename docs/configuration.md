@@ -17,6 +17,15 @@ SDK key's region segment:
 https://cdn.{region}.{CDN_BASE_DOMAIN}/server/{sdk_key}.json
 ```
 
+This value also drives the upstream metrics ingest host for the `POST /v1/metrics` reverse proxy:
+
+```
+https://metrics.{region}.{CDN_BASE_DOMAIN}/v1/metrics
+```
+
+No separate env var is needed for the metrics endpoint: both CDN and metrics URLs share the same base domain and the
+same geo segment from the SDK key.
+
 Valid value: letters, digits, dots, and hyphens only (no scheme (`https://`), no path, no port).
 
 Override this to target a custom CDN environment.
@@ -291,17 +300,17 @@ rejected at startup: the sweeper runs every hour, so shorter values would never 
 
 ---
 
-### `UPSTREAM_MAX_RESPONSE_BYTES`
+### `MAX_BODY_BYTES`
 
 **Optional.** Default: `10485760` (10 MiB).
 
-Maximum number of bytes the proxy will read from a single upstream CDN response. If the response body exceeds this
-limit, the request is rejected with a `502 Bad Gateway` and the entry is not cached, preventing unbounded memory growth
-from a misbehaving or malicious upstream.
+Maximum number of bytes the proxy will read or accept for any body: upstream CDN responses (rejected with `502 Bad
+Gateway` if exceeded, entry not cached) and inbound `POST /v1/metrics` request bodies (rejected with `413 Payload Too
+Large` if exceeded). Prevents unbounded memory growth from misbehaving upstreams or oversized client payloads.
 
 ```bash
-UPSTREAM_MAX_RESPONSE_BYTES=10485760   # 10 MiB (default)
-UPSTREAM_MAX_RESPONSE_BYTES=52428800   # 50 MiB
+MAX_BODY_BYTES=10485760   # 10 MiB (default)
+MAX_BODY_BYTES=52428800   # 50 MiB
 ```
 
 Must be a positive integer. Values below `1` are rejected at startup.

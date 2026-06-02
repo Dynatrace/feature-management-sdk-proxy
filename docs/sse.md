@@ -170,10 +170,10 @@ All limits are evaluated before a connection is accepted. Rejected requests are 
 complete setup and begin streaming count toward your usage. This means a misconfigured or aggressive client hitting
 the rate limit won't inflate your SDK usage costs.
 
-| Limit           | Env var                      | Default | Description                                                                       |
-|-----------------|------------------------------|---------|-----------------------------------------------------------------------------------|
-| Fan-out cap     | `SSE_FANOUT_CAP_PER_KEY`     | 1000    | Maximum concurrent downstream SSE connections per key. 0 disables the cap.       |
-| Subscribe rate  | `SSE_SUBSCRIBE_RATE_PER_SEC` | 20      | Sustained rate (per second) for new subscribe admits per key.                     |
+| Limit           | Env var                      | Default | Description                                                                                                                                                     |
+|-----------------|------------------------------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Fan-out cap     | `SSE_FANOUT_CAP_PER_KEY`     | 1000    | Maximum concurrent downstream SSE connections per key. 0 disables the cap.                                                                                      |
+| Subscribe rate  | `SSE_SUBSCRIBE_RATE_PER_SEC` | 20      | Sustained rate (per second) for new subscribe admits per key.                                                                                                   |
 | Subscribe burst | `SSE_SUBSCRIBE_BURST`        | 100     | Token-bucket burst capacity. Covers startup spikes before the sustained rate applies. See [configuration.md](configuration.md#sse_subscribe_burst) for details. |
 
 Requests rejected by either limit return **429 Too Many Requests** with `Retry-After: 1`. The rejection reason
@@ -183,8 +183,8 @@ create unbounded cardinality.
 
 ### Metrics
 
-| Metric                                | Type          | Labels                                    | Description                                                                  |
-|---------------------------------------|---------------|-------------------------------------------|------------------------------------------------------------------------------|
-| `proxy.sse.connections`               | UpDownCounter | `sdk_key_public_id`, `direction`, `state` | Active SSE connections. `direction=upstream`: one per SDK key; `direction=downstream`: one per connected SDK client. |
-| `proxy.sse.upstream.events`           | Counter       | `sdk_key_public_id`, `result`             | Upstream events received. `result`: `forwarded`                              |
-| `proxy.sse.subscribe.rejected_total`  | Counter       | `reason`                                  | Subscribe requests rejected by per-key limits. `reason`: `rate_limit`, `fanout_cap` |
+| Metric                               | Type          | Labels                                    | Description                                                                                                          |
+|--------------------------------------|---------------|-------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| `proxy.sse.connections`              | UpDownCounter | `sdk_key_public_id`, `direction`, `state` | Active SSE connections. `direction=upstream`: one per SDK key; `direction=downstream`: one per connected SDK client. |
+| `proxy.sse.upstream.events`          | Counter       | `sdk_key_public_id`, `result`             | Upstream events received. `result`: `forwarded`                                                                      |
+| `proxy.sse.subscribe.rejected_total` | Counter       | `reason`                                  | Subscribe requests rejected by per-key limits. `reason`: `rate_limit`, `fanout_cap`                                  |

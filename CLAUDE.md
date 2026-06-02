@@ -80,9 +80,10 @@ SDK Proxy is a single Go binary with four core components:
 | **SSE fan-out**          | Maintains one upstream SSE connection per SDK key; re-broadcasts `refetchEvaluation` events (OFREP ADR-0008) to all connected clients via `GET /sse`. See [`docs/sse.md`](docs/sse.md).     |
 | **Usage telemetry**      | Increments a per-SDK-token counter on every request; batch-flushes to the billing endpoint on a configurable interval. See [`docs/telemetry.md`](docs/telemetry.md).                        |
 | **Snapshot persistence** | Optional. Writes cache entries to S3-compatible object storage (or local file) asynchronously after each update; loaded on startup to survive restarts. Skipped entirely if not configured. |
+| **Evaluation metrics passthrough** | Transparent reverse proxy for `POST /v1/metrics`. Forwards SDK evaluation metrics to `https://metrics.<geo>.<CDN_BASE_DOMAIN>/v1/metrics`. See [`docs/adr/0004-evaluation-metrics-reverse-proxy.md`](docs/adr/0004-evaluation-metrics-reverse-proxy.md). |
 
-**Data flow:** SDK → proxy (HTTP config + SSE) → Cloudflare CDN (config fetch on miss) / upstream SSE service (one
-connection per SDK key) → billing endpoint (periodic flush).
+**Data flow:** SDK → proxy (HTTP config + SSE + eval metrics) → Cloudflare CDN (config fetch on miss) / upstream SSE service (one
+connection per SDK key) → billing endpoint (periodic flush) / metrics ingest service (`POST /v1/metrics`).
 
 > ⚠️ Keep this section current. When you add or change a component, update this table and the data flow description.
 

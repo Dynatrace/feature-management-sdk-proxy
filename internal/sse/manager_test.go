@@ -14,6 +14,7 @@ import (
 
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 )
 
 func newTestInstruments(t *testing.T) *metrics.Instruments {
@@ -150,7 +151,7 @@ func TestManager_OnRefreshed_SameURLIsNoop(t *testing.T) {
 	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", payload)
 	time.Sleep(300 * time.Millisecond)
 
-	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	m.OnRefreshed(keyHash, payload) // same URL
 
 	time.Sleep(300 * time.Millisecond)
@@ -179,7 +180,7 @@ func TestManager_Publish_DeliversEvent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	// Subscribe a downstream client via the eventsource server.
 	downstreamSrv := httptest.NewServer(m.esServer.Handler(keyHash))
@@ -282,7 +283,7 @@ func TestManager_Close_CancelsUpstreamConn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", configWithSSEURL(srv.URL))
 	time.Sleep(500 * time.Millisecond)
 
@@ -365,7 +366,7 @@ func TestManager_RefreshInterval_Connected(t *testing.T) {
 		m.Shutdown(ctx) //nolint:errcheck
 	}()
 
-	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	m.OnConfigCached(context.Background(), "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", configWithSSEURL(srv.URL+"/sse"))
 
 	// Wait for the read loop to enter streaming state.
@@ -388,7 +389,7 @@ func TestManager_RefreshInterval_Connected(t *testing.T) {
 func TestManager_RefreshInterval_AfterClose(t *testing.T) {
 	m := newTestManager(t, nil)
 	defer m.esServer.Close()
-	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	m.mu.Lock()
 	m.conns[keyHash] = &keyState{}
@@ -403,7 +404,7 @@ func TestManager_RefreshInterval_AfterClose(t *testing.T) {
 func TestManager_HasSubscribers_NoSubscribers(t *testing.T) {
 	m := newTestManager(t, nil)
 	defer m.esServer.Close()
-	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	if m.HasSubscribers(keyHash) {
 		t.Error("expected false for key with no subscribers")
@@ -421,7 +422,7 @@ func TestManager_HasSubscribers_UnknownKey(t *testing.T) {
 func TestManager_HasSubscribers_WithSubscriber(t *testing.T) {
 	m := newTestManager(t, nil)
 	defer m.esServer.Close()
-	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	admitted, _ := m.AdmitSubscriber(keyHash)
 	if !admitted {
@@ -437,7 +438,7 @@ func TestManager_HasSubscribers_WithSubscriber(t *testing.T) {
 func TestManager_HasSubscribers_AfterDecrement(t *testing.T) {
 	m := newTestManager(t, nil)
 	defer m.esServer.Close()
-	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	m.AdmitSubscriber(keyHash)
 	m.DecrementSubscribers(keyHash)
@@ -452,7 +453,7 @@ func TestManager_HasSubscribers_AfterDecrement(t *testing.T) {
 func TestManager_AdmitSubscriber_NoLimits_AlwaysAdmits(t *testing.T) {
 	m := New(nil, newTestInstruments(t), slog.Default(), Config{})
 	defer m.esServer.Close()
-	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	for range 50 {
 		admitted, reason := m.AdmitSubscriber(key)
@@ -466,7 +467,7 @@ func TestManager_AdmitSubscriber_FanoutCap_Enforced(t *testing.T) {
 	const maxConn = 3
 	m := New(nil, newTestInstruments(t), slog.Default(), Config{FanoutCapPerKey: maxConn})
 	defer m.esServer.Close()
-	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	for range maxConn {
 		admitted, _ := m.AdmitSubscriber(key)
@@ -488,7 +489,7 @@ func TestManager_AdmitSubscriber_FanoutCap_ResetsAfterDecrement(t *testing.T) {
 	const maxConn = 2
 	m := New(nil, newTestInstruments(t), slog.Default(), Config{FanoutCapPerKey: maxConn})
 	defer m.esServer.Close()
-	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	m.AdmitSubscriber(key)
 	m.AdmitSubscriber(key)
@@ -510,7 +511,7 @@ func TestManager_AdmitSubscriber_RateLimit_Enforced(t *testing.T) {
 	// Burst of 1: first admit passes, second is immediately rejected.
 	m := New(nil, newTestInstruments(t), slog.Default(), Config{SubscribeRatePerSec: 1, SubscribeBurst: 1})
 	defer m.esServer.Close()
-	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	admitted, _ := m.AdmitSubscriber(key)
 	if !admitted {
@@ -531,8 +532,8 @@ func TestManager_AdmitSubscriber_IsolatedPerKey(t *testing.T) {
 	m := New(nil, newTestInstruments(t), slog.Default(), Config{FanoutCapPerKey: maxConn})
 	defer m.esServer.Close()
 	// Two keys with distinct public IDs (different token prefix).
-	key1 := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
-	key2 := cache.PublicID("dt02.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key1 := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key2 := sdkkey.PublicID("dt02.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 
 	// Fill key1's cap.
 	admitted, _ := m.AdmitSubscriber(key1)

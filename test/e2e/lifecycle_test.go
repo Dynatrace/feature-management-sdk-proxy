@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/sse"
 )
 
@@ -30,7 +30,7 @@ func TestLifecycle_TokenRotated_InvalidatesKey(t *testing.T) {
 		"upstream SSE connection not established",
 	)
 
-	keyHash := cache.PublicID(TestSDKKey)
+	keyHash := sdkkey.PublicID(TestSDKKey)
 
 	// Send tokenRotated lifecycle event for the key hash.
 	payload := lifecyclePayload(keyHash)
@@ -66,7 +66,7 @@ func TestLifecycle_StageDeleted_InvalidatesKey(t *testing.T) {
 		"upstream SSE connection not established",
 	)
 
-	keyHash := cache.PublicID(TestSDKKey)
+	keyHash := sdkkey.PublicID(TestSDKKey)
 	payload := lifecyclePayload(keyHash)
 	h.SSE.SendEvent(FormatEvent(sse.EventTypeStageDeleted, payload))
 
@@ -92,7 +92,7 @@ func TestLifecycle_ProjectDeleted_InvalidatesKey(t *testing.T) {
 		"upstream SSE connection not established",
 	)
 
-	keyHash := cache.PublicID(TestSDKKey)
+	keyHash := sdkkey.PublicID(TestSDKKey)
 	payload := lifecyclePayload(keyHash)
 	h.SSE.SendEvent(FormatEvent(sse.EventTypeProjectDeleted, payload))
 
@@ -122,8 +122,8 @@ func TestLifecycle_Invalidation_SiblingUnaffected(t *testing.T) {
 		"expected 2 upstream SSE connections before sending lifecycle event",
 	)
 
-	keyHash1 := cache.PublicID(TestSDKKey)
-	keyHash2 := cache.PublicID(TestSDKKey2)
+	keyHash1 := sdkkey.PublicID(TestSDKKey)
+	keyHash2 := sdkkey.PublicID(TestSDKKey2)
 
 	// Invalidate only key1.
 	payload := lifecyclePayload(keyHash1)
@@ -157,7 +157,7 @@ func TestLifecycle_RawSDKKey_AlsoInvalidates(t *testing.T) {
 		"upstream SSE connection not established",
 	)
 
-	keyHash := cache.PublicID(TestSDKKey)
+	keyHash := sdkkey.PublicID(TestSDKKey)
 	payload := rawKeyPayload(TestSDKKey)
 	h.SSE.SendEvent(FormatEvent(sse.EventTypeTokenRotated, payload))
 

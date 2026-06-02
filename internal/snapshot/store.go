@@ -5,7 +5,7 @@ import "context"
 // Store is the backend-agnostic persistence interface for snapshot objects.
 // Implementations must be safe for concurrent use.
 //
-// keyID is the SDK key public identifier (cache.PublicID(sdk_key)).
+// keyID is the SDK key public identifier (sdkkey.PublicID(sdk_key)).
 // Raw SDK keys must never appear here.
 type Store interface {
 	// Put writes the snapshot body for the given key ID, overwriting any

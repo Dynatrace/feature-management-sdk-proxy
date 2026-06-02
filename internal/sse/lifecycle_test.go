@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 )
 
 type mockInvalidator struct {
@@ -134,9 +134,9 @@ func TestLifecycleHandler_SDKKeys_PublicIDExtracted(t *testing.T) {
 		t.Fatalf("expected 1 invalidation, got %v", calls)
 	}
 	// The public ID must be valid and the private segment must be stripped.
-	want := cache.PublicID(fullKey)
-	if calls[0] != want || !cache.IsValidID(calls[0]) {
-		t.Errorf("public ID = %q, want %q (valid: %v)", calls[0], want, cache.IsValidID(calls[0]))
+	want := sdkkey.PublicID(fullKey)
+	if calls[0] != want || !sdkkey.IsValidID(calls[0]) {
+		t.Errorf("public ID = %q, want %q (valid: %v)", calls[0], want, sdkkey.IsValidID(calls[0]))
 	}
 }
 
@@ -298,8 +298,8 @@ func TestIsValidID(t *testing.T) {
 		"dt99.web_ap_xXxXxXxXxX",
 	}
 	for _, h := range valid {
-		if !cache.IsValidID(h) {
-			t.Errorf("cache.IsValidID(%q) = false, want true", h)
+		if !sdkkey.IsValidID(h) {
+			t.Errorf("sdkkey.IsValidID(%q) = false, want true", h)
 		}
 	}
 	invalid := []string{
@@ -311,8 +311,8 @@ func TestIsValidID(t *testing.T) {
 		"dt01.server_US_ab3xy9kp2q",
 	}
 	for _, h := range invalid {
-		if cache.IsValidID(h) {
-			t.Errorf("cache.IsValidID(%q) = true, want false", h)
+		if sdkkey.IsValidID(h) {
+			t.Errorf("sdkkey.IsValidID(%q) = true, want false", h)
 		}
 	}
 }

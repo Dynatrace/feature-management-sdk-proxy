@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 )
 
 // TestCache_Miss_FetchesUpstream verifies that a cold request triggers one
@@ -25,7 +26,7 @@ func TestCache_Miss_FetchesUpstream(t *testing.T) {
 		t.Errorf("CDN calls = %d, want 1", got)
 	}
 
-	keyHash := cache.PublicID(TestSDKKey)
+	keyHash := sdkkey.PublicID(TestSDKKey)
 	if _, ok := h.Cache.Get(keyHash); !ok {
 		t.Error("cache: entry not found after cold fetch")
 	}
@@ -106,7 +107,7 @@ func TestCache_DifferentKeys_IndependentEntries(t *testing.T) {
 	drainBody(t, resp1)
 
 	// Key 2 must still be absent.
-	keyHash2 := cache.PublicID(TestSDKKey2)
+	keyHash2 := sdkkey.PublicID(TestSDKKey2)
 	if _, ok := h.Cache.Get(keyHash2); ok {
 		t.Error("key2 found in cache before any request for it")
 	}
@@ -123,7 +124,7 @@ func TestCache_TTLRefresh_ResetsOnRevalidation(t *testing.T) {
 	assertStatus(t, resp, http.StatusOK)
 	drainBody(t, resp)
 
-	keyHash := cache.PublicID(TestSDKKey)
+	keyHash := sdkkey.PublicID(TestSDKKey)
 	entry, ok := h.Cache.Get(keyHash)
 	if !ok {
 		t.Fatal("cache entry missing after cold fetch")

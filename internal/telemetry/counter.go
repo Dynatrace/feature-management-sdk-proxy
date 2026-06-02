@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 )
 
 type entry struct {
@@ -53,7 +53,7 @@ func NewCounter() *Counter {
 // If an entry already exists with an empty rawKey (created by IncrementByHash),
 // Increment repairs it so the entry becomes eligible for billing flush.
 func (c *Counter) Increment(sdkKey string) {
-	keyID := cache.PublicID(sdkKey)
+	keyID := sdkkey.PublicID(sdkKey)
 
 	c.mu.RLock()
 	e, ok := c.entries[keyID]

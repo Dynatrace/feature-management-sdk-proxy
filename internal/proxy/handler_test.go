@@ -18,6 +18,7 @@ import (
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/telemetry"
 )
 
@@ -26,12 +27,13 @@ func init() {
 }
 
 // ginContext creates a *gin.Context backed by the given recorder and request,
-// with the :file route parameter extracted from the URL path.
+// with the :file route parameter set and FromPathFile middleware applied.
 func ginContext(w *httptest.ResponseRecorder, r *http.Request) *gin.Context {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = r
 	if file, ok := strings.CutPrefix(r.URL.Path, "/server/"); ok {
 		c.Params = gin.Params{{Key: "file", Value: file}}
+		sdkkey.FromPathFile()(c)
 	}
 	return c
 }
@@ -121,7 +123,7 @@ func TestHandler_CacheMiss_PopulatesCache(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
 	h.Handle(ginContext(rec, req))
 
-	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	entry, ok := c.Get(key)
 	if !ok {
 		t.Fatal("expected cache to be populated after miss")
@@ -255,7 +257,7 @@ func TestHandler_CacheHit_ServesFromCache_NoUpstreamCall(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{"foo":true}}`),
 		ETag:      `"v1"`,
@@ -286,7 +288,7 @@ func TestHandler_CacheHit_ETagMatch_Returns304(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{}}`),
 		ETag:      `"abc123"`,
@@ -318,7 +320,7 @@ func TestHandler_CacheHit_ETagMismatch_Returns200WithPayload(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{"updated":true}}`),
 		ETag:      `"v2"`,
@@ -347,7 +349,7 @@ func TestHandler_CacheHit_NoETag_Returns200(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{}}`),
 		ETag:      "", // no ETag stored
@@ -455,7 +457,7 @@ func TestHandler_HEAD_CacheHit_NoBody(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{}}`),
 		ETag:      `"v1"`,
@@ -507,9 +509,9 @@ func TestExtractSDKKeyFromFile(t *testing.T) {
 		{"", "", false},
 	}
 	for _, tc := range cases {
-		key, ok := extractSDKKeyFromFile(tc.file)
+		key, ok := sdkkey.FromFileName(tc.file)
 		if ok != tc.wantOK || key != tc.wantKey {
-			t.Errorf("extractSDKKeyFromFile(%q) = (%q, %v), want (%q, %v)", tc.file, key, ok, tc.wantKey, tc.wantOK)
+			t.Errorf("sdkkey.FromFileName(%q) = (%q, %v), want (%q, %v)", tc.file, key, ok, tc.wantKey, tc.wantOK)
 		}
 	}
 }
@@ -528,16 +530,20 @@ func TestExtractGeo(t *testing.T) {
 		{"", "", false},
 	}
 	for _, tc := range cases {
-		geo, ok := extractGeo(tc.sdkKey)
+		geo, ok := sdkkey.ExtractGeo(tc.sdkKey)
 		if ok != tc.wantOK || geo != tc.wantGeo {
-			t.Errorf("extractGeo(%q) = (%q, %v), want (%q, %v)", tc.sdkKey, geo, ok, tc.wantGeo, tc.wantOK)
+			t.Errorf("sdkkey.ExtractGeo(%q) = (%q, %v), want (%q, %v)", tc.sdkKey, geo, ok, tc.wantGeo, tc.wantOK)
 		}
 	}
 }
 
 func TestBuildTarget_ConstructsGeoBoundURL(t *testing.T) {
 	h := &Handler{cdnBaseDomain: "fm.dynatracelabs.com"}
-	got, ok := h.buildTarget("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	k, ok := sdkkey.ParseFull("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	if !ok {
+		t.Fatal("ParseFull failed for valid SDK key")
+	}
+	got, ok := h.buildTarget(k)
 	if !ok {
 		t.Fatal("buildTarget returned ok=false for valid SDK key")
 	}
@@ -559,7 +565,7 @@ func TestHandler_CacheHit_RewritesSSEURL(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(testPayloadWithSSE),
 		ETag:      `"v1"`,
@@ -580,7 +586,7 @@ func TestHandler_CacheHit_RewritesSSEURL(t *testing.T) {
 	if strings.Contains(body, "upstream.sse.example.com") {
 		t.Errorf("response still contains upstream SSE URL: %q", body)
 	}
-	wantStreamID := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	wantStreamID := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	if !strings.Contains(body, "proxy.example.com/sse?stream_id="+wantStreamID) {
 		t.Errorf("response missing proxy SSE URL with stream_id, got: %q", body)
 	}
@@ -610,7 +616,7 @@ func TestHandler_CacheMiss_RewritesSSEURLInResponse_StoresRawInCache(t *testing.
 
 	// Response served to SDK should have the proxy SSE URL with stream_id.
 	body := rec.Body.String()
-	wantStreamID := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	wantStreamID := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	if strings.Contains(body, "upstream.sse.example.com") {
 		t.Errorf("response still contains upstream SSE URL: %q", body)
 	}
@@ -622,7 +628,7 @@ func TestHandler_CacheMiss_RewritesSSEURLInResponse_StoresRawInCache(t *testing.
 	}
 
 	// Cache must store raw upstream bytes so the SSE manager can dial the real upstream.
-	keyHash := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	entry, ok := c.Get(keyHash)
 	if !ok {
 		t.Fatal("expected cache populated after miss")
@@ -640,7 +646,7 @@ func TestHandler_NoSSEEntry_PayloadServedByteIdentical(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(testPayloadNoSSE),
 		FetchedAt: time.Now(),
@@ -668,7 +674,7 @@ func TestHandler_HEAD_NoSSERewrite(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(testPayloadWithSSE),
 		ETag:      `"v1"`,
@@ -697,7 +703,7 @@ func TestHandler_SSEDisabled_NoRewrite(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(testPayloadWithSSE),
 		ETag:      `"v1"`,
@@ -775,7 +781,7 @@ func TestHandler_MalformedHostHeader_FallsBackToUnknown(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(testPayloadWithSSE),
 		FetchedAt: time.Now(),
@@ -812,7 +818,7 @@ func TestHandler_Rewrite_StreamIDFormat(t *testing.T) {
 	// Use a different geo (eu) to verify geo-specific routing works.
 	c := cache.New()
 	sdkKey := "dt01.server_eu_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
-	key := cache.PublicID(sdkKey)
+	key := sdkkey.PublicID(sdkKey)
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{},"eventStreams":[{"type":"sse","url":"https://upstream.sse.example.com/stream","inactivityDelaySec":60}]}`),
 		FetchedAt: time.Now(),
@@ -844,7 +850,7 @@ func TestHandler_Rewrite_HTTPSSchemeFromXForwardedProto(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	key := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	key := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	c.Set(key, cache.Entry{
 		Payload:   []byte(testPayloadWithSSE),
 		FetchedAt: time.Now(),
@@ -859,7 +865,7 @@ func TestHandler_Rewrite_HTTPSSchemeFromXForwardedProto(t *testing.T) {
 	h.Handle(ginContext(rec, req))
 
 	body := rec.Body.String()
-	wantStreamID := cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
+	wantStreamID := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
 	if !strings.Contains(body, "https://proxy.example.com/sse?stream_id="+wantStreamID) {
 		t.Errorf("expected https URL with stream_id in rewritten URL, got: %q", body)
 	}
@@ -912,7 +918,7 @@ func TestHandler_Counter_IncrementOnCacheHit(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	c.Set(cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"), cache.Entry{
+	c.Set(sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"), cache.Entry{
 		Payload:   []byte(`{"flags":{}}`),
 		FetchedAt: time.Now(),
 		FetchURL:  "https://cdn.us.fm.test/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json",
@@ -959,7 +965,7 @@ func TestHandler_Counter_IncrementOnHEAD(t *testing.T) {
 	defer upstream.Close()
 
 	c := cache.New()
-	c.Set(cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"), cache.Entry{
+	c.Set(sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"), cache.Entry{
 		Payload:   []byte(`{"flags":{}}`),
 		FetchedAt: time.Now(),
 		FetchURL:  "https://cdn.us.fm.test/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json",
@@ -1083,7 +1089,7 @@ func TestHandler_CacheMiss_InvokesSnapshotNotifier(t *testing.T) {
 	if len(notifier.calls) != 1 {
 		t.Fatalf("expected 1 snapshot notifier call, got %d", len(notifier.calls))
 	}
-	if got := notifier.calls[0].keyHash; got != cache.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a") {
+	if got := notifier.calls[0].keyHash; got != sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a") {
 		t.Errorf("wrong keyHash: got %q", got)
 	}
 	if got := notifier.calls[0].etag; got != `"v1"` {
@@ -1099,7 +1105,7 @@ func TestHandler_SnapshotRestoredEntry_HydratesFetchURL(t *testing.T) {
 
 	c := cache.New()
 	sdkKey := "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a"
-	key := cache.PublicID(sdkKey)
+	key := sdkkey.PublicID(sdkKey)
 	c.Set(key, cache.Entry{
 		Payload:   []byte(`{"flags":{}}`),
 		ETag:      `"v1"`,
@@ -1753,7 +1759,7 @@ func TestHandler_ColdFetch_OversizeResponse_Returns502(t *testing.T) {
 		t.Errorf("expected 502, got %d", rec.Code)
 	}
 
-	key := cache.PublicID(testSDKKey)
+	key := sdkkey.PublicID(testSDKKey)
 	if _, ok := c.Get(key); ok {
 		t.Error("oversized response must not be stored in cache")
 	}

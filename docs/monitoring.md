@@ -173,3 +173,23 @@ readinessProbe:
 ```
 
 Do not route SDK traffic to a pod before `/readyz` returns 200. An unready proxy may serve stale or empty responses.
+
+---
+
+## Evaluation Metrics Proxy
+
+SDKs with `configOrigin` set route `POST /v1/metrics` calls through the proxy to the upstream metrics ingest service.
+The proxy is a transparent pass-through: it forwards the body and Bearer token unchanged and returns the upstream
+response verbatim.
+
+**What to watch:**
+
+- `proxy.metrics.requests.total{result="bad_gateway"}` — transport failures between the proxy and the upstream
+  metrics service. A sustained non-zero rate indicates a connectivity problem.
+- `proxy.metrics.requests.total{result="upstream_error"}` — 4xx/5xx responses from the upstream. These are
+  generally SDK-side errors (malformed payloads, invalid tokens); a sudden spike may indicate an API contract change.
+- `proxy.metrics.forward.latency_seconds` — end-to-end latency of the upstream POST call. Elevated p95 latency
+  alongside normal CDN fetch latency suggests the metrics endpoint is under load or degraded independently.
+
+**Normal behavior:** `result="forwarded"` is the dominant label. Expect `result="unauthorized"` or
+`result="bad_request"` in small quantities during SDK key rotation or misconfiguration; these never reach upstream.
