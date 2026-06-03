@@ -44,7 +44,22 @@ func main() {
 	}
 }
 
+// banner is printed once at startup. Disable by setting DT_FM_NO_BANNER to any value
+const banner = `
+     --------
+   --------===
+  ++++    ====   ░█▀▄░█░█░█▀█░█▀█░▀█▀░█▀▄░█▀█░█▀▀░█▀▀
+  ++++    ====   ░█░█░░█░░█░█░█▀█░░█░░█▀▄░█▀█░█░░░█▀▀
+  +++#####===    ░▀▀░░░▀░░▀░▀░▀░▀░░▀░░▀░▀░▀░▀░▀▀▀░▀▀▀
+   ######==      Feature Management SDK Proxy
+   
+`
+
 func run() error {
+	if _, hide := os.LookupEnv("DT_FM_NO_BANNER"); !hide {
+		fmt.Fprint(os.Stdout, banner)
+	}
+
 	cfg, err := config.FromEnv()
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
