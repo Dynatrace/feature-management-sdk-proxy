@@ -81,9 +81,13 @@ SDK Proxy is a single Go binary with four core components:
 | **Usage telemetry**      | Increments a per-SDK-token counter on every request; batch-flushes to the billing endpoint on a configurable interval. See [`docs/telemetry.md`](docs/telemetry.md).                        |
 | **Snapshot persistence** | Optional. Writes cache entries to S3-compatible object storage (or local file) asynchronously after each update; loaded on startup to survive restarts. Skipped entirely if not configured. |
 | **Evaluation metrics passthrough** | Transparent reverse proxy for `POST /v1/metrics`. Forwards SDK evaluation metrics to `https://metrics.<geo>.<CDN_BASE_DOMAIN>/v1/metrics`. See [`docs/adr/0004-evaluation-metrics-reverse-proxy.md`](docs/adr/0004-evaluation-metrics-reverse-proxy.md). |
+| **Static (offline) config source** | Optional (`CONFIG_SOURCE=static`). Serves per-flag-set slices of a single local flagd JSON file from an in-memory snapshot; reloads by polling the file. No CDN, no upstream SSE, no snapshot. In `internal/staticsource`. See [`docs/static-source.md`](docs/static-source.md) and [`docs/adr/0005-offline-static-file-config-source.md`](docs/adr/0005-offline-static-file-config-source.md). |
 
-**Data flow:** SDK → proxy (HTTP config + SSE + eval metrics) → Cloudflare CDN (config fetch on miss) / upstream SSE service (one
-connection per SDK key) → billing endpoint (periodic flush) / metrics ingest service (`POST /v1/metrics`).
+**Data flow (CDN mode, default):** SDK → proxy (HTTP config + SSE + eval metrics) → Cloudflare CDN (config fetch on miss) /
+upstream SSE service (one connection per SDK key) → billing endpoint (periodic flush) / metrics ingest service (`POST /v1/metrics`).
+
+**Data flow (static mode, `CONFIG_SOURCE=static`):** SDK → proxy (HTTP config from in-memory file snapshot; `/sse` → 501; eval
+metrics → `OFFLINE_METRICS_UPSTREAM_URL` if set) ← local flagd file (polled for changes). No Dynatrace CDN or SSE connectivity.
 
 > ⚠️ Keep this section current. When you add or change a component, update this table and the data flow description.
 
@@ -135,6 +139,14 @@ These are load-bearing constraints — do not break them without an explicit des
 - **Non-empty error on uncached miss during outage**: do not return an empty config. An empty response is
   indistinguishable from a legitimately empty flag set. When the CDN returns a 5xx, forward its code to the SDK client.
   When the CDN is unreachable (network error), return 503. Never return an empty body.
+- **Static (offline) config source** (`CONFIG_SOURCE=static`): the `flagSetId` is a per-flag flagd `metadata`
+  property whose value is a *full SDK key*, matched exactly against the key in the request path. Resolution mirrors
+  flagd inheritance: per-flag `metadata.flagSetId` else the top-level default; flags with neither are never served.
+  The backing file contains full keys (private segments) — it is operator-authored input; logs/metrics use
+  `PublicID` only, and the file is never persisted or logged. The served per-set document omits `eventStreams`.
+  Reloads are fail-safe (parse/read errors keep the last-good snapshot); the initial load is fatal on failure.
+  Static mode is mutually exclusive with `SNAPSHOT_BACKEND` and forces upstream SSE off. See
+  [`docs/static-source.md`](docs/static-source.md).
 
 ### Observability
 

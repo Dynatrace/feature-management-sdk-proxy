@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -98,6 +99,30 @@ type Config struct {
 	// bodies (rejected with 413 if exceeded). Prevents unbounded memory growth.
 	// Env: MAX_BODY_BYTES, default 10485760 (10 MiB).
 	MaxBodyBytes int64
+
+	// ConfigSource selects where flag configs are served from: "cdn" (default,
+	// fetch-on-miss from the Dynatrace CDN) or "static" (a single offline flagd
+	// JSON file). In "static" mode the CDN is never contacted, upstream SSE is
+	// disabled, and config updates are driven by changes to the backing file.
+	// Env: CONFIG_SOURCE, default "cdn".
+	ConfigSource string
+
+	// StaticFilePath is the absolute path to the single flagd JSON file that backs
+	// config in "static" mode. Required when ConfigSource == "static"; ignored
+	// otherwise. Env: STATIC_FILE_PATH.
+	StaticFilePath string
+
+	// StaticFilePollInterval is how often the static-source watcher checks the
+	// backing file for changes. Range: >= 1s, default 10s. Ignored unless
+	// ConfigSource == "static". Env: STATIC_FILE_POLL_INTERVAL.
+	StaticFilePollInterval time.Duration
+
+	// OfflineMetricsUpstreamURL is the full upstream URL that POST /v1/metrics is
+	// forwarded to in "static" mode. When empty, the metrics passthrough is
+	// disabled (501). There is no geo segment to derive a host from in static
+	// mode, so the full URL is configured explicitly. Ignored unless
+	// ConfigSource == "static". Env: OFFLINE_METRICS_UPSTREAM_URL.
+	OfflineMetricsUpstreamURL string
 }
 
 // LogValue implements slog.LogValuer. Secrets emit [REDACTED] automatically
@@ -129,6 +154,15 @@ func (c Config) LogValue() slog.Value {
 		slog.Duration("snapshot_max_age", c.SnapshotMaxAge),
 		slog.Duration("cache_inactivity_evict_after", c.CacheInactivityEvictAfter),
 		slog.Int64("max_body_bytes", c.MaxBodyBytes),
+		slog.String("config_source", c.ConfigSource),
+	}
+	if c.ConfigSource == configSourceStatic {
+		attrs = append(attrs,
+			slog.String("static_file_path", c.StaticFilePath),
+			slog.Duration("static_file_poll_interval", c.StaticFilePollInterval),
+			// The upstream URL is not a secret; log it (or "disabled" when unset).
+			slog.String("offline_metrics_upstream_url", orDisabled(c.OfflineMetricsUpstreamURL)),
+		)
 	}
 	if c.SnapshotBackend == snapshotBackendS3 {
 		attrs = append(attrs,
@@ -150,7 +184,18 @@ const (
 	defaultCDNBaseDomain = "fm.dynatrace.com"
 	snapshotBackendS3    = "s3"
 	snapshotBackendLocal = "local"
+	configSourceCDN      = "cdn"
+	configSourceStatic   = "static"
 )
+
+// orDisabled returns s, or the literal "disabled" when s is empty. Used for
+// log fields where an unset optional value is more meaningful as "disabled".
+func orDisabled(s string) string {
+	if s == "" {
+		return "disabled"
+	}
+	return s
+}
 
 // FromEnv loads configuration from environment variables.
 // All variables have safe defaults.
@@ -170,6 +215,8 @@ func FromEnv() (Config, error) {
 		SSEFanoutCapPerKey:        1000,
 		SSESubscribeRatePerSec:    20,
 		SSESubscribeBurst:         100,
+		ConfigSource:              configSourceCDN,
+		StaticFilePollInterval:    10 * time.Second,
 	}
 
 	if v := os.Getenv("PORT"); v != "" {
@@ -352,5 +399,76 @@ func FromEnv() (Config, error) {
 		cfg.SSESubscribeBurst = n
 	}
 
+	if v := os.Getenv("CONFIG_SOURCE"); v != "" {
+		if v != configSourceCDN && v != configSourceStatic {
+			return Config{}, fmt.Errorf("invalid CONFIG_SOURCE %q: must be %q or %q", v, configSourceCDN, configSourceStatic)
+		}
+		cfg.ConfigSource = v
+	}
+
+	staticFilePath := os.Getenv("STATIC_FILE_PATH")
+	offlineMetricsURL := os.Getenv("OFFLINE_METRICS_UPSTREAM_URL")
+	staticPollInterval := os.Getenv("STATIC_FILE_POLL_INTERVAL")
+
+	if cfg.ConfigSource == configSourceStatic {
+		if staticFilePath == "" {
+			return Config{}, errors.New("STATIC_FILE_PATH is required when CONFIG_SOURCE=static")
+		}
+		if !filepath.IsAbs(staticFilePath) {
+			return Config{}, fmt.Errorf("invalid STATIC_FILE_PATH %q: must be an absolute path", staticFilePath)
+		}
+		cfg.StaticFilePath = staticFilePath
+
+		// The static file is the sole source of truth in this mode; snapshot
+		// persistence would be a second, conflicting source. Reject the combination.
+		if cfg.SnapshotBackend != "" {
+			return Config{}, errors.New("SNAPSHOT_BACKEND cannot be combined with CONFIG_SOURCE=static: the static file is the source of truth")
+		}
+
+		if staticPollInterval != "" {
+			d, err := time.ParseDuration(staticPollInterval)
+			if err != nil || d < time.Second {
+				return Config{}, fmt.Errorf("invalid STATIC_FILE_POLL_INTERVAL %q: must be a duration >= 1s (e.g. 10s)", staticPollInterval)
+			}
+			cfg.StaticFilePollInterval = d
+		}
+
+		if offlineMetricsURL != "" {
+			if err := validateUpstreamURL(offlineMetricsURL); err != nil {
+				return Config{}, fmt.Errorf("invalid OFFLINE_METRICS_UPSTREAM_URL %q: %w", offlineMetricsURL, err)
+			}
+			cfg.OfflineMetricsUpstreamURL = offlineMetricsURL
+		}
+	} else {
+		// CDN mode: reject static-only variables so a misplaced setting is loud
+		// rather than silently ignored (mirrors the SNAPSHOT_MAX_AGE guard).
+		if staticFilePath != "" {
+			return Config{}, errors.New("STATIC_FILE_PATH is set but CONFIG_SOURCE is not \"static\" — it has no effect")
+		}
+		if offlineMetricsURL != "" {
+			return Config{}, errors.New("OFFLINE_METRICS_UPSTREAM_URL is set but CONFIG_SOURCE is not \"static\" — it has no effect")
+		}
+		if staticPollInterval != "" {
+			return Config{}, errors.New("STATIC_FILE_POLL_INTERVAL is set but CONFIG_SOURCE is not \"static\" — it has no effect")
+		}
+	}
+
 	return cfg, nil
+}
+
+// validateUpstreamURL reports whether s is an absolute http(s) URL with a host,
+// suitable as a forwarding target. It rejects relative URLs, missing hosts, and
+// non-http schemes.
+func validateUpstreamURL(s string) error {
+	u, err := url.Parse(s)
+	if err != nil {
+		return fmt.Errorf("must be a valid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return errors.New("must use the http or https scheme")
+	}
+	if u.Host == "" {
+		return errors.New("must include a host")
+	}
+	return nil
 }

@@ -521,3 +521,107 @@ func TestConfig_LogValue_ZeroValue(t *testing.T) {
 		t.Errorf("expected port key in log output: %s", out)
 	}
 }
+
+func TestFromEnv_ConfigSource_DefaultsToCDN(t *testing.T) {
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ConfigSource != "cdn" {
+		t.Errorf("ConfigSource = %q, want \"cdn\"", cfg.ConfigSource)
+	}
+}
+
+func TestFromEnv_StaticMode_Valid(t *testing.T) {
+	t.Setenv("CONFIG_SOURCE", "static")
+	t.Setenv("STATIC_FILE_PATH", "/etc/flags/flags.json")
+	t.Setenv("STATIC_FILE_POLL_INTERVAL", "5s")
+	t.Setenv("OFFLINE_METRICS_UPSTREAM_URL", "https://metrics.us.fm.dynatrace.com/v1/metrics")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ConfigSource != "static" {
+		t.Errorf("ConfigSource = %q, want \"static\"", cfg.ConfigSource)
+	}
+	if cfg.StaticFilePath != "/etc/flags/flags.json" {
+		t.Errorf("StaticFilePath = %q", cfg.StaticFilePath)
+	}
+	if cfg.StaticFilePollInterval != 5*time.Second {
+		t.Errorf("StaticFilePollInterval = %v, want 5s", cfg.StaticFilePollInterval)
+	}
+	if cfg.OfflineMetricsUpstreamURL != "https://metrics.us.fm.dynatrace.com/v1/metrics" {
+		t.Errorf("OfflineMetricsUpstreamURL = %q", cfg.OfflineMetricsUpstreamURL)
+	}
+}
+
+func TestFromEnv_StaticMode_DefaultPollInterval(t *testing.T) {
+	t.Setenv("CONFIG_SOURCE", "static")
+	t.Setenv("STATIC_FILE_PATH", "/etc/flags/flags.json")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.StaticFilePollInterval != 10*time.Second {
+		t.Errorf("StaticFilePollInterval = %v, want 10s", cfg.StaticFilePollInterval)
+	}
+}
+
+func TestFromEnv_StaticMode_Errors(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+	}{
+		{"missing path", map[string]string{"CONFIG_SOURCE": "static"}},
+		{"relative path", map[string]string{"CONFIG_SOURCE": "static", "STATIC_FILE_PATH": "flags.json"}},
+		{"with snapshot backend", map[string]string{"CONFIG_SOURCE": "static", "STATIC_FILE_PATH": "/f.json", "SNAPSHOT_BACKEND": "local", "SNAPSHOT_LOCAL_DIR": "/snap"}},
+		{"poll too short", map[string]string{"CONFIG_SOURCE": "static", "STATIC_FILE_PATH": "/f.json", "STATIC_FILE_POLL_INTERVAL": "500ms"}},
+		{"bad metrics url", map[string]string{"CONFIG_SOURCE": "static", "STATIC_FILE_PATH": "/f.json", "OFFLINE_METRICS_UPSTREAM_URL": "not-a-url"}},
+		{"metrics url no scheme", map[string]string{"CONFIG_SOURCE": "static", "STATIC_FILE_PATH": "/f.json", "OFFLINE_METRICS_UPSTREAM_URL": "metrics.example.com/v1/metrics"}},
+		{"invalid source", map[string]string{"CONFIG_SOURCE": "file"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			if _, err := FromEnv(); err == nil {
+				t.Errorf("expected error for %s", tc.name)
+			}
+		})
+	}
+}
+
+func TestFromEnv_StaticVars_RejectedInCDNMode(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		val  string
+	}{
+		{"static file path", "STATIC_FILE_PATH", "/f.json"},
+		{"offline metrics url", "OFFLINE_METRICS_UPSTREAM_URL", "https://x/v1/metrics"},
+		{"static poll interval", "STATIC_FILE_POLL_INTERVAL", "5s"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(tc.env, tc.val)
+			if _, err := FromEnv(); err == nil {
+				t.Errorf("expected error when %s set in CDN mode", tc.env)
+			}
+		})
+	}
+}
+
+func TestConfig_LogValue_StaticMode(t *testing.T) {
+	cfg := Config{ConfigSource: "static", StaticFilePath: "/etc/flags.json", StaticFilePollInterval: 10 * time.Second}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	logger.Info("test", slog.Any("config", cfg))
+	out := buf.String()
+	for _, want := range []string{`"config_source":"static"`, `"static_file_path":"/etc/flags.json"`, `"offline_metrics_upstream_url":"disabled"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %s in log output: %s", want, out)
+		}
+	}
+}

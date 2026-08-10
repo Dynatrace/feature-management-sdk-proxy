@@ -427,3 +427,78 @@ func TestHandle_WrongMethod_Returns405(t *testing.T) {
 		}
 	}
 }
+
+// --- Static (offline) mode: explicit upstream URL ---
+
+// ginContextNoKey creates a *gin.Context for POST /v1/metrics without applying
+// SDK-key middleware — the static handler forwards the Authorization header
+// verbatim and does not require a parseable key.
+func ginContextNoKey(w *httptest.ResponseRecorder, r *http.Request) *gin.Context {
+	c, _ := gin.CreateTestContext(w)
+	c.Request = r
+	return c
+}
+
+func TestHandleStatic_ForwardsToExplicitURL(t *testing.T) {
+	var gotAuth, gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, `{"accepted":true}`)
+	}))
+	defer upstream.Close()
+
+	// The target URL's path must be preserved; the redirecting client only
+	// rewrites scheme+host.
+	h, err := NewStatic("https://ignored.example.com/v1/metrics", newRedirectingClient(upstream), nil, slog.Default(), testTracer)
+	if err != nil {
+		t.Fatalf("NewStatic: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/metrics", strings.NewReader(`{}`))
+	// Any bearer token — even a non-full-key / non-server key — is forwarded verbatim.
+	req.Header.Set("Authorization", "Bearer some-flag-set-id")
+	h.Handle(ginContextNoKey(rec, req))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rec.Code)
+	}
+	if gotAuth != "Bearer some-flag-set-id" {
+		t.Errorf("Authorization forwarded = %q, want verbatim", gotAuth)
+	}
+	if gotPath != "/v1/metrics" {
+		t.Errorf("upstream path = %q, want /v1/metrics", gotPath)
+	}
+}
+
+func TestHandleStatic_MissingAuthorization_Returns401_NoUpstreamCall(t *testing.T) {
+	called := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer upstream.Close()
+
+	h, err := NewStatic("https://x.example.com/v1/metrics", newRedirectingClient(upstream), nil, slog.Default(), testTracer)
+	if err != nil {
+		t.Fatalf("NewStatic: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/metrics", strings.NewReader(`{}`))
+	h.Handle(ginContextNoKey(rec, req))
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+	if called {
+		t.Error("upstream must not be called when Authorization is missing")
+	}
+}
+
+func TestNewStatic_EmptyURL_Errors(t *testing.T) {
+	if _, err := NewStatic("", http.DefaultClient, nil, slog.Default(), testTracer); err == nil {
+		t.Error("expected error for empty upstream URL")
+	}
+}

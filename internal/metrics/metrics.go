@@ -28,6 +28,8 @@ const (
 	SSESubscribeRejectedTotal       = "proxy.sse.subscribe.rejected_total"
 	EvalMetricsRequestsTotal        = "proxy.metrics.requests.total"
 	EvalMetricsForwardLatency       = "proxy.metrics.forward.latency_seconds"
+	StaticReloadTotal               = "proxy.static.reload.total"
+	StaticFlagSets                  = "proxy.static.flag_sets"
 )
 
 // Instruments holds every OTel instrument the proxy emits. Obtain one via Register.
@@ -113,6 +115,16 @@ type Instruments struct {
 	// EvalMetricsForwardLatency records wall-clock duration of the upstream POST /v1/metrics
 	// call from request entry to response written, in seconds.
 	EvalMetricsForwardLatency metric.Float64Histogram
+
+	// StaticReloadTotal counts static-source file reload attempts labeled by
+	// result (loaded/unchanged/parse_error/read_error). Emitted only in
+	// CONFIG_SOURCE=static mode.
+	StaticReloadTotal metric.Int64Counter
+
+	// StaticFlagSets reports the number of distinct flag sets currently served
+	// from the static source. Synchronous gauge: updated after each successful
+	// (re)load. Emitted only in CONFIG_SOURCE=static mode.
+	StaticFlagSets metric.Int64Gauge
 }
 
 // Register creates all metric instruments against meter. Call once at startup and
@@ -280,6 +292,22 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("metrics: register %s: %w", EvalMetricsForwardLatency, err)
 	}
 
+	staticReloadTotal, err := meter.Int64Counter(StaticReloadTotal,
+		metric.WithDescription("Static-source file reload attempts by result (loaded/unchanged/parse_error/read_error)"),
+		metric.WithUnit("{reload}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", StaticReloadTotal, err)
+	}
+
+	staticFlagSets, err := meter.Int64Gauge(StaticFlagSets,
+		metric.WithDescription("Number of distinct flag sets currently served from the static source"),
+		metric.WithUnit("{flag_set}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: register %s: %w", StaticFlagSets, err)
+	}
+
 	return &Instruments{
 		RequestsTotal:                   reqTotal,
 		SSEConnections:                  sseConns,
@@ -301,5 +329,7 @@ func Register(meter metric.Meter) (*Instruments, error) {
 		SSESubscribeRejectedTotal:       sseSubRejected,
 		EvalMetricsRequestsTotal:        evalMetricsReqTotal,
 		EvalMetricsForwardLatency:       evalMetricsLatency,
+		StaticReloadTotal:               staticReloadTotal,
+		StaticFlagSets:                  staticFlagSets,
 	}, nil
 }

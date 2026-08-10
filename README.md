@@ -12,6 +12,8 @@ regardless of fleet size.
 - You need resilience against CDN outages: the proxy continues serving cached configs even when upstream is unreachable.
 - You want faster restarts with [snapshot persistence](#snapshot-persistence): new replicas come up warm without hitting
   the CDN.
+- You need a **fully offline** deployment: serve flag config from a single local file with no Dynatrace connectivity at
+  all. See [Static (offline) config source](docs/static-source.md).
 
 ## How It Works
 

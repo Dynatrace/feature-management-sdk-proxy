@@ -56,6 +56,13 @@ type Handler struct {
 	logger            *slog.Logger
 	tracer            trace.Tracer
 	maxRequestBytes   int64
+
+	// staticUpstreamURL, when non-empty, switches Handle into offline mode: the
+	// request is forwarded to this exact URL, skipping SDK-key geo derivation and
+	// the full-key / server-platform checks (an offline flagSetId carries no geo).
+	// The incoming Authorization header and body are still forwarded verbatim.
+	// Set in CONFIG_SOURCE=static mode.
+	staticUpstreamURL string
 }
 
 const defaultMaxRequestBytes = 10 * 1024 * 1024 // 10 MiB
@@ -74,6 +81,25 @@ func New(metricsBaseDomain string, client *http.Client, inst *metrics.Instrument
 		logger:            logger,
 		tracer:            t,
 		maxRequestBytes:   defaultMaxRequestBytes,
+	}, nil
+}
+
+// NewStatic constructs a Handler for CONFIG_SOURCE=static mode. Every POST
+// /v1/metrics is forwarded to upstreamURL verbatim (Authorization header and
+// body unchanged); no geo derivation or SDK-key format checks are applied,
+// because an offline flagSetId carries no geo segment. upstreamURL must be a
+// full absolute URL (validated by config.FromEnv).
+func NewStatic(upstreamURL string, client *http.Client, inst *metrics.Instruments, logger *slog.Logger, t trace.Tracer) (*Handler, error) {
+	if upstreamURL == "" {
+		return nil, errors.New("evalmetrics: static upstream URL must not be empty")
+	}
+	return &Handler{
+		client:            client,
+		inst:              inst,
+		logger:            logger,
+		tracer:            t,
+		maxRequestBytes:   defaultMaxRequestBytes,
+		staticUpstreamURL: upstreamURL,
 	}, nil
 }
 
@@ -99,13 +125,19 @@ func (h *Handler) Handle(c *gin.Context) {
 		))
 	defer span.End()
 
+	if h.staticUpstreamURL != "" {
+		h.handleStatic(ctx, c, span, start)
+		return
+	}
+
 	// key is pre-extracted and injected by FromBearerToken middleware.
 	key, _ := sdkkey.KeyFromContext(c)
-	span.SetAttributes(tracing.SDKKeyPublicID(key.PublicID()))
+	keyID := key.PublicID()
+	span.SetAttributes(tracing.SDKKeyPublicID(keyID))
 
 	if !key.IsFull() {
 		h.logger.WarnContext(ctx, "evalmetrics: unrecognized SDK key format",
-			slog.String("sdk_key_public_id", key.PublicID()),
+			slog.String("sdk_key_public_id", keyID),
 		)
 		span.SetAttributes(attribute.String("result", resultBadRequest))
 		h.record(ctx, resultBadRequest, start)
@@ -115,7 +147,7 @@ func (h *Handler) Handle(c *gin.Context) {
 
 	if key.Platform() != sdkkey.PlatformServer {
 		h.logger.WarnContext(ctx, "evalmetrics: non-server SDK key rejected",
-			slog.String("sdk_key_public_id", key.PublicID()),
+			slog.String("sdk_key_public_id", keyID),
 			slog.String("platform", key.Platform()),
 		)
 		span.SetAttributes(attribute.String("result", resultUnauthorized))
@@ -124,6 +156,30 @@ func (h *Handler) Handle(c *gin.Context) {
 		return
 	}
 
+	target := fmt.Sprintf("https://metrics.%s.%s/v1/metrics", key.Geo(), h.metricsBaseDomain)
+	h.forward(ctx, c, span, start, target, "Bearer "+key.Raw(), keyID)
+}
+
+// handleStatic serves POST /v1/metrics in CONFIG_SOURCE=static mode. It skips
+// all SDK-key parsing and forwards the request to the configured upstream URL
+// with the incoming Authorization header verbatim. A missing Authorization
+// header is rejected so anonymous traffic is never forwarded upstream.
+func (h *Handler) handleStatic(ctx context.Context, c *gin.Context, span trace.Span, start time.Time) {
+	authorization := c.GetHeader("Authorization")
+	if authorization == "" {
+		span.SetAttributes(attribute.String("result", resultUnauthorized))
+		h.record(ctx, resultUnauthorized, start)
+		c.String(http.StatusUnauthorized, "Authorization header required\n")
+		return
+	}
+	h.forward(ctx, c, span, start, h.staticUpstreamURL, authorization, "")
+}
+
+// forward reads the request body (capped at maxRequestBytes), POSTs it to target
+// with the given Authorization header, forwards the caller's other headers, and
+// writes the upstream response back verbatim. keyIDForLog is the SDK key public
+// id for structured log fields, or "" when unavailable (static mode).
+func (h *Handler) forward(ctx context.Context, c *gin.Context, span trace.Span, start time.Time, target, authorization, keyIDForLog string) {
 	if c.Request.ContentLength > h.maxRequestBytes {
 		span.SetAttributes(attribute.String("result", resultPayloadTooLarge))
 		h.record(ctx, resultPayloadTooLarge, start)
@@ -134,7 +190,7 @@ func (h *Handler) Handle(c *gin.Context) {
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, h.maxRequestBytes+1))
 	if err != nil {
 		h.logger.ErrorContext(ctx, "evalmetrics: read request body failed",
-			slog.String("sdk_key_public_id", key.PublicID()),
+			slog.String("sdk_key_public_id", keyIDForLog),
 			slog.String("error", err.Error()),
 		)
 		span.SetAttributes(attribute.String("result", resultInternalError))
@@ -149,12 +205,10 @@ func (h *Handler) Handle(c *gin.Context) {
 		return
 	}
 
-	target := fmt.Sprintf("https://metrics.%s.%s/v1/metrics", key.Geo(), h.metricsBaseDomain)
-
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		h.logger.ErrorContext(ctx, "evalmetrics: build upstream request failed",
-			slog.String("sdk_key_public_id", key.PublicID()),
+			slog.String("sdk_key_public_id", keyIDForLog),
 			slog.String("error", err.Error()),
 		)
 		span.RecordError(err)
@@ -164,7 +218,7 @@ func (h *Handler) Handle(c *gin.Context) {
 		return
 	}
 
-	upstreamReq.Header.Set("Authorization", "Bearer "+key.Raw())
+	upstreamReq.Header.Set("Authorization", authorization)
 	if ct := c.GetHeader("Content-Type"); ct != "" {
 		upstreamReq.Header.Set("Content-Type", ct)
 	}
@@ -174,7 +228,7 @@ func (h *Handler) Handle(c *gin.Context) {
 	if err != nil {
 		sanitized := sanitizeErr(err)
 		h.logger.WarnContext(ctx, "evalmetrics: upstream request failed",
-			slog.String("sdk_key_public_id", key.PublicID()),
+			slog.String("sdk_key_public_id", keyIDForLog),
 			slog.String("error", sanitized.Error()),
 		)
 		span.RecordError(sanitized)

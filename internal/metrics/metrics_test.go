@@ -40,4 +40,8 @@ func TestRegister_NoopMeter(t *testing.T) {
 	inst.CacheRefreshTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "evicted"), attribute.String("status_code", "404")))
 	inst.SnapshotDemandRevalidationTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "not_modified")))
 	inst.SnapshotOutageFallbackTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "loaded")))
+	inst.EvalMetricsRequestsTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "forwarded")))
+	inst.EvalMetricsForwardLatency.Record(ctx, 0.25, metric.WithAttributes(result))
+	inst.StaticReloadTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "loaded")))
+	inst.StaticFlagSets.Record(ctx, 3)
 }

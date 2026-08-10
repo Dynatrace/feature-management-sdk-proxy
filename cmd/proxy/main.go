@@ -33,6 +33,7 @@ import (
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/server"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/snapshot"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/sse"
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/staticsource"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/telemetry"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/tracing"
 )
@@ -185,6 +186,23 @@ func run() error {
 
 	flagCache := cache.New()
 
+	// staticMode selects the offline single-file config source instead of the CDN.
+	// In static mode there is no CDN fetch, no snapshot persistence, no upstream
+	// SSE, no background refresher, and no inactivity sweeper: config is loaded
+	// from a file and reloaded when that file changes.
+	staticMode := cfg.ConfigSource == "static"
+
+	// Data-source-specific handlers and readiness, resolved by the branch below.
+	// configHandler serves GET/HEAD /server/:file; metricsRouteHandler serves
+	// POST /v1/metrics (nil → the route returns 501). readyFunc gates /readyz.
+	var (
+		configHandler       gin.HandlerFunc
+		metricsRouteHandler gin.HandlerFunc
+		staticStore         *staticsource.Store
+		staticWatcher       *staticsource.Watcher
+		refreshFetcher      cache.Fetcher // CDN mode only; consumed by the background refresher
+	)
+
 	// --- Snapshot persistence (optional) ---
 	//
 	// Build the store and load snapshots synchronously before starting the HTTP
@@ -224,29 +242,36 @@ func run() error {
 		)
 	}
 
-	// Classify the startup path and log it.
-	// oldest is the zero time when snapshotLoaded==0; Classify guards on loaded==0 before using it.
-	oldest, _ := snapshot.OldestCapturedAt(flagCache)
-	switch snapshot.Classify(cfg.SnapshotBackend != "", snapshotLoaded, snapshotLoadErr != nil, oldest, time.Now(), cfg.SnapshotMaxAge) {
-	case snapshot.CaseColdNoPersistence:
-		logger.Info("startup: no persistence configured, starting cold")
-	case snapshot.CaseSnapshotFresh:
-		logger.Info("startup: serving from fresh snapshot", slog.Int("count", snapshotLoaded))
-	case snapshot.CaseSnapshotStale:
-		logger.Warn("startup: serving stale snapshot: oldest entry meets or exceeds SNAPSHOT_MAX_AGE",
-			slog.Duration("age", time.Since(oldest)),
-			slog.Duration("max_age", cfg.SnapshotMaxAge))
-	case snapshot.CaseEmptyPersistenceCold:
-		logger.Info("startup: persistence configured but store is empty, starting cold; snapshots will be written after first upstream fetch")
-	case snapshot.CaseBackendUnreachable:
-		return fmt.Errorf("startup: snapshot backend unreachable and no cached data to serve: %w", snapshotLoadErr)
+	// readyFunc gates /readyz and /healthz. In CDN mode it tracks snapshot load
+	// completion; in static mode it is reassigned to the static store's Loaded.
+	readyFunc := func() bool { return snapshotReady }
+
+	// Classify the startup path and log it (CDN mode only). In static mode the
+	// snapshot backend is disabled by config validation, so this does not apply.
+	if !staticMode {
+		// oldest is the zero time when snapshotLoaded==0; Classify guards on loaded==0 before using it.
+		oldest, _ := snapshot.OldestCapturedAt(flagCache)
+		switch snapshot.Classify(cfg.SnapshotBackend != "", snapshotLoaded, snapshotLoadErr != nil, oldest, time.Now(), cfg.SnapshotMaxAge) {
+		case snapshot.CaseColdNoPersistence:
+			logger.Info("startup: no persistence configured, starting cold")
+		case snapshot.CaseSnapshotFresh:
+			logger.Info("startup: serving from fresh snapshot", slog.Int("count", snapshotLoaded))
+		case snapshot.CaseSnapshotStale:
+			logger.Warn("startup: serving stale snapshot: oldest entry meets or exceeds SNAPSHOT_MAX_AGE",
+				slog.Duration("age", time.Since(oldest)),
+				slog.Duration("max_age", cfg.SnapshotMaxAge))
+		case snapshot.CaseEmptyPersistenceCold:
+			logger.Info("startup: persistence configured but store is empty, starting cold; snapshots will be written after first upstream fetch")
+		case snapshot.CaseBackendUnreachable:
+			return fmt.Errorf("startup: snapshot backend unreachable and no cached data to serve: %w", snapshotLoadErr)
+		}
+		snapshotReady = true
 	}
-	snapshotReady = true
 
 	// SSE manager uses a dedicated client with no overall timeout — SSE connections
 	// are long-lived. ResponseHeaderTimeout guards the initial handshake.
 	var sseManager *sse.Manager
-	if !cfg.SSEDisabled {
+	if !staticMode && !cfg.SSEDisabled {
 		sseClient := &http.Client{
 			Transport: &http.Transport{
 				DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
@@ -280,50 +305,87 @@ func run() error {
 	logReporter := telemetry.NewLogReporter(logger, cfg.ProxyInstanceID)
 	flusher := telemetry.NewFlusher(counter, logReporter, telemetry.NewBoundedRetryBuffer(cfg.BillingRetryBufferSize, inst, logger), inst, cfg.BillingFlushInterval, logger)
 
-	// snapshotWriter is nil when persistence is disabled; proxy.New accepts nil.
-	// Both clients wrap the transport with tracing.NewTransport so CDN HTTP calls
-	// appear as child spans of proxy.cold_fetch and proxy.refresh_fetch respectively.
-	proxyClient := &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: tracing.NewTransport(nil, tracer),
-	}
-
-	// Background and demand refresher uses a separate 5s client — intentionally shorter
-	// than the minimum poll interval (10s) to prevent overlapping requests.
-	refreshClient := &http.Client{
-		Timeout:   5 * time.Second,
-		Transport: tracing.NewTransport(nil, tracer),
-	}
-	refreshFetcher := proxy.NewFetcher(refreshClient, logger, cfg.MaxBodyBytes)
-
-	proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, snapshotWriter, refreshFetcher, inst, counter, logger, tracer)
-	if err != nil {
-		return fmt.Errorf("proxy: %w", err)
-	}
-	proxyHandler.SetMaxResponseBytes(cfg.MaxBodyBytes)
-	proxyHandler.SetRewriteSSEURLs(!cfg.SSEDisabled)
-	proxyHandler.SetEvictor(func(keyID string) {
-		if sseManager != nil {
-			sseManager.Close(keyID)
+	if staticMode {
+		// --- Static single-file config source ---
+		// Load the file synchronously; a failure here is fatal (no config to serve),
+		// mirroring CaseBackendUnreachable in CDN mode.
+		staticStore = staticsource.New()
+		staticWatcher = staticsource.NewWatcher(staticStore, cfg.StaticFilePath, cfg.StaticFilePollInterval, cfg.MaxBodyBytes, inst, logger)
+		if err := staticWatcher.LoadInitial(ctx); err != nil {
+			return fmt.Errorf("startup: static config load failed: %w", err)
 		}
-		if snapshotWriter != nil {
-			snapshotWriter.OnInvalidated(keyID)
+		readyFunc = staticStore.Loaded
+		logger.Info("startup: serving from static config file",
+			slog.String("path", cfg.StaticFilePath),
+			slog.Int("flag_sets", staticStore.FlagSetCount()),
+		)
+
+		configHandler = staticsource.NewHandler(staticStore, inst, counter, logger, tracer).Handle
+
+		// Metrics passthrough forwards to an explicit upstream URL; disabled (501)
+		// when OFFLINE_METRICS_UPSTREAM_URL is unset (metricsRouteHandler stays nil).
+		if cfg.OfflineMetricsUpstreamURL != "" {
+			evalMetricsClient := &http.Client{
+				Timeout:   30 * time.Second,
+				Transport: tracing.NewTransport(nil, tracer),
+			}
+			staticMetrics, err := evalmetrics.NewStatic(cfg.OfflineMetricsUpstreamURL, evalMetricsClient, inst, logger, tracer)
+			if err != nil {
+				return fmt.Errorf("evalmetrics: %w", err)
+			}
+			staticMetrics.SetMaxRequestBytes(cfg.MaxBodyBytes)
+			metricsRouteHandler = staticMetrics.Handle
 		}
-	})
+	} else {
+		// --- CDN config source (default) ---
+		// snapshotWriter is nil when persistence is disabled; proxy.New accepts nil.
+		// Both clients wrap the transport with tracing.NewTransport so CDN HTTP calls
+		// appear as child spans of proxy.cold_fetch and proxy.refresh_fetch respectively.
+		proxyClient := &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: tracing.NewTransport(nil, tracer),
+		}
 
-	// Evaluation metrics reverse proxy: dedicated client with tracing transport.
-	evalMetricsClient := &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: tracing.NewTransport(nil, tracer),
-	}
-	evalMetricsHandler, err := evalmetrics.New(cfg.CDNBaseDomain, evalMetricsClient, inst, logger, tracer)
-	if err != nil {
-		return fmt.Errorf("evalmetrics: %w", err)
-	}
-	evalMetricsHandler.SetMaxRequestBytes(cfg.MaxBodyBytes)
+		// Background and demand refresher uses a separate 5s client — intentionally shorter
+		// than the minimum poll interval (10s) to prevent overlapping requests.
+		refreshClient := &http.Client{
+			Timeout:   5 * time.Second,
+			Transport: tracing.NewTransport(nil, tracer),
+		}
+		refreshFetcher = proxy.NewFetcher(refreshClient, logger, cfg.MaxBodyBytes)
 
-	// Pass the eventsource.Server and Manager to the handler. When SSE is disabled,
-	// sseManager is nil and NewHandler treats a nil esServer as disabled (501).
+		proxyHandler, err := proxy.New(cfg.CDNBaseDomain, proxyClient, flagCache, sseManager, snapshotWriter, refreshFetcher, inst, counter, logger, tracer)
+		if err != nil {
+			return fmt.Errorf("proxy: %w", err)
+		}
+		proxyHandler.SetMaxResponseBytes(cfg.MaxBodyBytes)
+		proxyHandler.SetRewriteSSEURLs(!cfg.SSEDisabled)
+		proxyHandler.SetEvictor(func(keyID string) {
+			if sseManager != nil {
+				sseManager.Close(keyID)
+			}
+			if snapshotWriter != nil {
+				snapshotWriter.OnInvalidated(keyID)
+			}
+		})
+		configHandler = proxyHandler.Handle
+
+		// Evaluation metrics reverse proxy: dedicated client with tracing transport.
+		evalMetricsClient := &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: tracing.NewTransport(nil, tracer),
+		}
+		evalMetricsHandler, err := evalmetrics.New(cfg.CDNBaseDomain, evalMetricsClient, inst, logger, tracer)
+		if err != nil {
+			return fmt.Errorf("evalmetrics: %w", err)
+		}
+		evalMetricsHandler.SetMaxRequestBytes(cfg.MaxBodyBytes)
+		metricsRouteHandler = evalMetricsHandler.Handle
+	}
+
+	// Pass the eventsource.Server and Manager to the handler. When SSE is disabled
+	// (or in static mode), sseManager is nil and NewHandler treats a nil esServer
+	// as disabled (501).
 	var esServer *eventsource.Server
 	var sseTracker sse.SubscriberTracker
 	if sseManager != nil {
@@ -333,8 +395,9 @@ func run() error {
 	sseHandler := sse.NewHandler(flagCache, esServer, sseTracker, inst, counter, logger, 15*time.Second, configHandlerPath)
 	sseHandler.SetTracer(tracer)
 
-	// ReadyFunc gates /ready on snapshot load completion.
-	probeHandlers := health.New(func() bool { return snapshotReady }, logger)
+	// probeHandlers gates /readyz + /healthz via readyFunc: snapshot load in CDN
+	// mode, static file load in static mode.
+	probeHandlers := health.New(readyFunc, logger)
 
 	// Gin engine with recovery middleware (panic → 500 instead of crash).
 	// Release mode suppresses Gin's debug-level route registration logs.
@@ -354,13 +417,21 @@ func run() error {
 	// SSE streaming endpoint — stream_id query param validated and injected by middleware.
 	api.GET(sse.HandlerPath, sdkkey.FromStreamID(), sseHandler.Handle)
 
-	// Proxy config endpoint — SDK key extracted from :file param and injected by middleware.
-	api.GET(configHandlerPath+":file", sdkkey.FromPathFile(), proxyHandler.Handle)
-	api.HEAD(configHandlerPath+":file", sdkkey.FromPathFile(), proxyHandler.Handle)
+	// Config endpoint — SDK key extracted from :file param and injected by middleware.
+	// configHandler is the CDN proxy handler or the static-source handler.
+	api.GET(configHandlerPath+":file", sdkkey.FromPathFile(), configHandler)
+	api.HEAD(configHandlerPath+":file", sdkkey.FromPathFile(), configHandler)
 
 	// Evaluation metrics passthrough — Bearer token extracted and injected by middleware.
-	// See docs/adr/0004-evaluation-metrics-reverse-proxy.md.
-	api.POST("/v1/metrics", sdkkey.FromBearerToken(), evalMetricsHandler.Handle)
+	// See docs/adr/0004-evaluation-metrics-reverse-proxy.md. In static mode with no
+	// OFFLINE_METRICS_UPSTREAM_URL configured, metricsRouteHandler is nil → 501.
+	if metricsRouteHandler != nil {
+		api.POST("/v1/metrics", sdkkey.FromBearerToken(), metricsRouteHandler)
+	} else {
+		api.POST("/v1/metrics", func(c *gin.Context) {
+			c.String(http.StatusNotImplemented, "metrics passthrough is disabled (set OFFLINE_METRICS_UPSTREAM_URL to enable)\n")
+		})
+	}
 
 	// Catch-all: return 404 for unmatched routes.
 	router.NoRoute(func(c *gin.Context) {
@@ -377,42 +448,52 @@ func run() error {
 		return fmt.Errorf("server: %w", err)
 	}
 
-	// Build the observer slice explicitly to avoid typed-nil interfaces: a
-	// (*sse.Manager)(nil) passed as RefreshObserver would satisfy != nil but panic
-	// when OnRefreshed is called.
-	var refreshObservers []cache.RefreshObserver
-	if sseManager != nil {
-		refreshObservers = append(refreshObservers, sseManager)
-	}
-	if snapshotWriter != nil {
-		refreshObservers = append(refreshObservers, snapshotWriter)
-	}
-	refresher := cache.NewRefresherWithObservers(flagCache, refreshFetcher, logger, refreshObservers...)
-	if sseManager != nil {
-		refresher.SetIntervalProvider(sseManager)
-	}
-	refresher.SetTracer(tracer)
-	refresher.SetInstruments(inst)
-	// sseManager and snapshotWriter are fully initialized before this point;
-	// the closure captures are stable for the lifetime of the refresher.
-	refresher.SetEvictor(func(keyID string) {
+	// Background CDN refresher (CDN mode only). In static mode the file watcher
+	// (started below) is the sole update mechanism — there is no upstream to poll.
+	if !staticMode {
+		// Build the observer slice explicitly to avoid typed-nil interfaces: a
+		// (*sse.Manager)(nil) passed as RefreshObserver would satisfy != nil but panic
+		// when OnRefreshed is called.
+		var refreshObservers []cache.RefreshObserver
 		if sseManager != nil {
-			sseManager.Close(keyID)
+			refreshObservers = append(refreshObservers, sseManager)
 		}
 		if snapshotWriter != nil {
-			snapshotWriter.OnInvalidated(keyID)
+			refreshObservers = append(refreshObservers, snapshotWriter)
 		}
-	})
-	if snapshotStore != nil {
-		refresher.SetRefreshFailureObserver(snapshot.NewFallback(snapshotStore, flagCache, inst, logger))
+		refresher := cache.NewRefresherWithObservers(flagCache, refreshFetcher, logger, refreshObservers...)
+		if sseManager != nil {
+			refresher.SetIntervalProvider(sseManager)
+		}
+		refresher.SetTracer(tracer)
+		refresher.SetInstruments(inst)
+		// sseManager and snapshotWriter are fully initialized before this point;
+		// the closure captures are stable for the lifetime of the refresher.
+		refresher.SetEvictor(func(keyID string) {
+			if sseManager != nil {
+				sseManager.Close(keyID)
+			}
+			if snapshotWriter != nil {
+				snapshotWriter.OnInvalidated(keyID)
+			}
+		})
+		if snapshotStore != nil {
+			refresher.SetRefreshFailureObserver(snapshot.NewFallback(snapshotStore, flagCache, inst, logger))
+		}
+		go refresher.Run(ctx)
 	}
-	go refresher.Run(ctx)
+
+	// Static-source file watcher (static mode only): polls the backing file and
+	// reloads the in-memory snapshot on change.
+	if staticMode {
+		go staticWatcher.Run(ctx)
+	}
 
 	// Inactivity sweeper: evict cache entries (cache + SSE + snapshot) that have
 	// had no HTTP access and no active SSE subscribers for longer than
 	// CacheInactivityEvictAfter. Disabled when CacheInactivityEvictAfter == 0.
 	var sweeperDone chan struct{}
-	if cfg.CacheInactivityEvictAfter > 0 {
+	if !staticMode && cfg.CacheInactivityEvictAfter > 0 {
 		var liveness cache.Liveness = cache.LivenessFunc(func(string) bool { return false })
 		if sseManager != nil {
 			liveness = sseManager

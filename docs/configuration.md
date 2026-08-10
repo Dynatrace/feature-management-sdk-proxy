@@ -199,6 +199,73 @@ SSE_SUBSCRIBE_BURST=100
 
 ---
 
+## Static (Offline) Config Source Variables
+
+These variables select and configure the offline single-file config source. See
+[static-source.md](static-source.md) for the full guide.
+
+### `CONFIG_SOURCE`
+
+**Optional.** Default: `cdn`.
+
+Selects where flag configs are served from.
+
+| Value    | Source                                                                                       |
+|----------|----------------------------------------------------------------------------------------------|
+| `cdn`    | Fetch on cache miss from the Dynatrace CDN (default behavior).                               |
+| `static` | Serve from a single local flagd JSON file. No CDN fetch, no upstream SSE, no snapshot layer. |
+
+```bash
+CONFIG_SOURCE=static
+```
+
+In `static` mode, upstream SSE is always disabled (`GET /sse` returns 501), the background
+refresher and inactivity sweeper do not run, and `SNAPSHOT_BACKEND` must not be set.
+
+---
+
+### `STATIC_FILE_PATH`
+
+**Required when `CONFIG_SOURCE=static`.**
+
+Absolute path to the single flagd JSON file that backs all config. The proxy loads it at startup
+(a failure is fatal) and watches it for changes. Must be an absolute path.
+
+```bash
+STATIC_FILE_PATH=/config/flags.json
+```
+
+---
+
+### `STATIC_FILE_POLL_INTERVAL`
+
+**Optional.** Default: `10s`. Minimum: `1s`.
+
+How often the watcher checks the backing file for changes. On each tick it compares the file's
+mtime and size, then a content hash, and rebuilds the in-memory snapshot only when the content
+actually changed. Ignored unless `CONFIG_SOURCE=static`.
+
+```bash
+STATIC_FILE_POLL_INTERVAL=10s
+```
+
+---
+
+### `OFFLINE_METRICS_UPSTREAM_URL`
+
+**Optional.** Default: unset (metrics passthrough disabled).
+
+Full upstream URL that `POST /v1/metrics` is forwarded to in static mode. There is no geo segment
+to derive a host from offline, so the complete URL is configured explicitly. When set, the request
+body and `Authorization` header are forwarded verbatim. When unset, `POST /v1/metrics` returns
+`501`. Ignored unless `CONFIG_SOURCE=static`.
+
+```bash
+OFFLINE_METRICS_UPSTREAM_URL=https://metrics.us.fm.dynatrace.com/v1/metrics
+```
+
+---
+
 ## Billing Variables
 
 ### `BILLING_FLUSH_INTERVAL`
