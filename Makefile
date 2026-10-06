@@ -1,4 +1,4 @@
-.PHONY: build test test-int vet lint lint-md docker clean
+.PHONY: build test test-int vet lint lint-md helm-lint docker clean
 
 build:
 	go build -o sdk-proxy ./cmd/proxy
@@ -17,6 +17,10 @@ lint:
 
 lint-md:
 	npx markdownlint-cli2 "**/*.md"
+
+helm-lint:
+	helm lint charts/sdk-proxy
+	helm template sdk-proxy charts/sdk-proxy > /dev/null
 
 docker:
 	docker build -t sdk-proxy .

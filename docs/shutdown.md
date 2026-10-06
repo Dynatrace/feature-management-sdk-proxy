@@ -34,6 +34,17 @@ shutdown without resorting to `SIGKILL`. The forced exit uses the conventional U
 Usage counts are incremented during request handling (step 1), so the final flush (step 4) is guaranteed to capture all
 counts from requests that completed before the server stopped.
 
+## Orchestrator Grace Period
+
+The worst-case shutdown is `SHUTDOWN_TIMEOUT` + 5s (SSE) + snapshot drain + 10s (usage flush). Give the orchestrator
+more time than that before it sends `SIGKILL`:
+
+| Runtime        | Setting                                           | Default | Recommended (with `SHUTDOWN_TIMEOUT=30s`) |
+|----------------|---------------------------------------------------|---------|-------------------------------------------|
+| Kubernetes     | `terminationGracePeriodSeconds`                   | 30s     | 60s (Helm chart default)                  |
+| Docker         | `docker run --stop-timeout` / `docker stop -t`    | 10s     | 60                                        |
+| Docker Compose | `stop_grace_period`                               | 10s     | `60s`                                     |
+
 ## Always Exit 0 on Signal-Driven Shutdown
 
 The proxy exits 0 on a normal signal-driven shutdown, even if non-critical teardown steps log errors. Process

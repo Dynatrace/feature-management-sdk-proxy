@@ -1,0 +1,188 @@
+# Default values for sdk-proxy. Commented config values show the proxy defaults.
+# Full environment variable reference: docs/configuration.md
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/dynatrace/feature-management-sdk-proxy
+  pullPolicy: IfNotPresent
+  # Defaults to "v" + the chart appVersion (release images use the git tag).
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# The proxy holds no credentials of its own (SDK tokens are passed through from
+# each request). A ServiceAccount is only needed for workload identity, e.g. IRSA
+# annotations granting S3 access for snapshot persistence.
+serviceAccount:
+  create: true
+  annotations: {}
+  # eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/sdk-proxy-snapshots
+  name: ""
+  automountServiceAccountToken: false
+
+# Port the proxy listens on. Rendered as the PORT env var.
+containerPort: 8080
+
+# Proxy configuration rendered into a ConfigMap and loaded as environment
+# variables. Keys are env var names; values must be strings. Unset keys use the
+# proxy's built-in defaults. PORT and PROXY_INSTANCE_ID are managed by the chart.
+config:
+  LOG_LEVEL: "INFO"
+  # SHUTDOWN_TIMEOUT must stay below terminationGracePeriodSeconds (see below).
+  SHUTDOWN_TIMEOUT: "30s"
+  # CDN_BASE_DOMAIN: "fm.dynatrace.com"
+  # SSE_DISABLED: "false"
+  # SSE_FANOUT_CAP_PER_KEY: "1000"
+  # SSE_SUBSCRIBE_RATE_PER_SEC: "20"
+  # SSE_SUBSCRIBE_BURST: "100"
+  # LIFECYCLE_KEYS_CAP: "10000"
+  # BILLING_FLUSH_INTERVAL: "60s"
+  # BILLING_RETRY_BUFFER_SIZE: "1000"
+  # CACHE_INACTIVITY_EVICT_AFTER: "48h"
+  # MAX_BODY_BYTES: "10485760"
+
+# OpenTelemetry export. Telemetry is disabled (noop providers) unless endpoint is set.
+otel:
+  endpoint: ""
+  # serviceName: sdk-proxy
+  serviceName: ""
+  # e.g. "deployment.environment=prod"
+  resourceAttributes: ""
+  # e.g. "parentbased_traceidratio"
+  tracesSampler: ""
+  tracesSamplerArg: ""
+
+# Snapshot persistence. See docs/snapshot.md.
+snapshot:
+  # "" (disabled), "s3", or "local".
+  backend: ""
+  maxAge: ""
+  writeQueueSize: ""
+
+  s3:
+    bucket: ""
+    region: ""
+    # Override for S3-compatible stores (MinIO, Ceph, ...).
+    endpoint: ""
+    prefix: ""
+    # Static credentials. Prefer workload identity (serviceAccount.annotations).
+    # Use an existing Secret with keys `accessKey` and `secretKey`...
+    existingSecret: ""
+    # ...or have the chart create one from these values.
+    accessKey: ""
+    secretKey: ""
+
+  # Local backend is intended for single-replica deployments. With more than one
+  # replica the volume must support ReadWriteMany.
+  local:
+    dir: /snapshots
+    persistence:
+      existingClaim: ""
+      storageClass: ""
+      accessModes:
+        - ReadWriteOnce
+      size: 1Gi
+
+# Extra environment variables (list of EnvVar) and envFrom sources.
+extraEnv: []
+extraEnvFrom: []
+extraVolumes: []
+extraVolumeMounts: []
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+  # With multiple replicas, an SDK's config fetch and its /sse subscription may
+  # land on different pods; a pod that has not cached the key answers /sse with
+  # 412 and the SDK retries. ClientIP affinity keeps an SDK pinned to one pod.
+  sessionAffinity: None
+  sessionAffinityConfig: {}
+
+ingress:
+  enabled: false
+  className: ""
+  # /sse is a long-lived Server-Sent Events stream: disable response buffering
+  # and raise read timeouts on your ingress controller, e.g. for ingress-nginx:
+  #   nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  annotations: {}
+  hosts:
+    - host: sdk-proxy.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+livenessProbe:
+  httpGet:
+    path: /livez
+    port: http
+  periodSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: http
+  initialDelaySeconds: 2
+  periodSeconds: 5
+  failureThreshold: 3
+
+# Snapshot load from a large store can take a while; startupProbe gates liveness.
+startupProbe:
+  httpGet:
+    path: /livez
+    port: http
+  periodSeconds: 2
+  failureThreshold: 30
+
+# Shutdown drains HTTP (SHUTDOWN_TIMEOUT, default 30s), SSE (5s), the snapshot
+# queue, and a final usage flush (10s). Keep this above the sum.
+terminationGracePeriodSeconds: 60
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  # targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+  # minAvailable: 1
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+priorityClassName: ""

@@ -1,0 +1,55 @@
+{{- include "sdk-proxy.validate" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sdk-proxy.fullname" . }}
+  labels:
+    {{- include "sdk-proxy.labels" . | nindent 4 }}
+data:
+  PORT: {{ .Values.containerPort | quote }}
+  {{- range $k, $v := .Values.config }}
+  {{- if not (kindIs "invalid" $v) }}
+  {{ $k }}: {{ $v | toString | quote }}
+  {{- end }}
+  {{- end }}
+  {{- with .Values.otel }}
+  {{- if .endpoint }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .endpoint | quote }}
+  {{- end }}
+  {{- if .serviceName }}
+  OTEL_SERVICE_NAME: {{ .serviceName | quote }}
+  {{- end }}
+  {{- if .resourceAttributes }}
+  OTEL_RESOURCE_ATTRIBUTES: {{ .resourceAttributes | quote }}
+  {{- end }}
+  {{- if .tracesSampler }}
+  OTEL_TRACES_SAMPLER: {{ .tracesSampler | quote }}
+  {{- end }}
+  {{- if .tracesSamplerArg }}
+  OTEL_TRACES_SAMPLER_ARG: {{ .tracesSamplerArg | toString | quote }}
+  {{- end }}
+  {{- end }}
+  {{- with .Values.snapshot }}
+  {{- if .backend }}
+  SNAPSHOT_BACKEND: {{ .backend | quote }}
+  {{- if .maxAge }}
+  SNAPSHOT_MAX_AGE: {{ .maxAge | quote }}
+  {{- end }}
+  {{- if .writeQueueSize }}
+  SNAPSHOT_WRITE_QUEUE_SIZE: {{ .writeQueueSize | toString | quote }}
+  {{- end }}
+  {{- end }}
+  {{- if eq .backend "s3" }}
+  SNAPSHOT_S3_BUCKET: {{ .s3.bucket | quote }}
+  SNAPSHOT_S3_REGION: {{ .s3.region | quote }}
+  {{- if .s3.endpoint }}
+  SNAPSHOT_S3_ENDPOINT: {{ .s3.endpoint | quote }}
+  {{- end }}
+  {{- if .s3.prefix }}
+  SNAPSHOT_S3_PREFIX: {{ .s3.prefix | quote }}
+  {{- end }}
+  {{- end }}
+  {{- if eq .backend "local" }}
+  SNAPSHOT_LOCAL_DIR: {{ .local.dir | quote }}
+  {{- end }}
+  {{- end }}

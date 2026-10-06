@@ -2,9 +2,10 @@
 
 ## Requirements
 
-- Go 1.24+
+- Go 1.26+
 - [golangci-lint](https://golangci-lint.run/usage/install/) for linting
 - Docker (optional, for building the OCI image)
+- [Helm](https://helm.sh/docs/intro/install/) 3.x (optional, for linting the chart in `charts/sdk-proxy`)
 
 ## Build & Test
 
@@ -15,6 +16,7 @@ make test-int    # integration tests (requires no external services; mocks are i
 make vet         # go vet
 make lint        # golangci-lint (must pass before merge)
 make docker      # build the OCI image
+make helm-lint   # lint and render the Helm chart
 ```
 
 All integration tests are tagged `//go:build integration` and live under `test/e2e/`. They use in-process mocks for the

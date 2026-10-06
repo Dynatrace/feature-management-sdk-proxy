@@ -1,0 +1,24 @@
+{{- if and (eq .Values.snapshot.backend "local") (not .Values.snapshot.local.persistence.existingClaim) }}
+{{- $p := .Values.snapshot.local.persistence }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "sdk-proxy.snapshotClaimName" . }}
+  labels:
+    {{- include "sdk-proxy.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml $p.accessModes | nindent 4 }}
+  {{- if $p.storageClass }}
+  {{- if eq "-" $p.storageClass }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ $p.storageClass | quote }}
+  {{- end }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $p.size | quote }}
+{{- end }}

@@ -27,6 +27,14 @@ services:
 
       # ── SSE ─────────────────────────────────────────────────────────────────
       # SSE_DISABLED: "false"   # set "true" to fall back to polling-only mode (10 s interval)
+      # SSE_FANOUT_CAP_PER_KEY: "1000"      # max downstream subscribers per SDK key (0 = unlimited)
+      # SSE_SUBSCRIBE_RATE_PER_SEC: "20"    # per-key subscribe rate limit
+      # SSE_SUBSCRIBE_BURST: "100"          # per-key subscribe burst
+      # LIFECYCLE_KEYS_CAP: "10000"         # max keys per lifecycle event
+
+      # ── Cache / requests ────────────────────────────────────────────────────
+      # CACHE_INACTIVITY_EVICT_AFTER: 48h   # evict keys idle for longer than this
+      # MAX_BODY_BYTES: "10485760"          # max upstream config / metrics body size
 
       # ── Billing ─────────────────────────────────────────────────────────────
       # BILLING_FLUSH_INTERVAL: 60s      # how often SDK usage counters flush to billing (min 10s)
@@ -39,6 +47,7 @@ services:
       # SNAPSHOT_BACKEND: local
       # SNAPSHOT_LOCAL_DIR: /snapshots   # must be an absolute path
       # SNAPSHOT_MAX_AGE: 24h            # snapshots older than this are served stale and refreshed
+      # SNAPSHOT_WRITE_QUEUE_SIZE: "256"
 
       # ── Snapshot persistence — S3-compatible object storage ──────────────────
       # Uncomment to persist snapshots to AWS S3, MinIO, Ceph, or GCS (S3 compat).
@@ -63,11 +72,35 @@ services:
       # OTEL_TRACES_SAMPLER: parentbased_always_on
       # OTEL_TRACES_SAMPLER_ARG: ""   # e.g. "0.1" for 10 % sampling with traceidratio
 
-    # Mount a volume when using SNAPSHOT_BACKEND=local.
+    # Mount a volume when using SNAPSHOT_BACKEND=local. New named volumes are
+    # owned by root; the snapshots-init service below hands it to the image's
+    # nonroot user (65532) so the proxy can write snapshots.
     # volumes:
     #   - snapshots:/snapshots
+    # depends_on:
+    #   snapshots-init:
+    #     condition: service_completed_successfully
 
     restart: unless-stopped
+
+    # Docker's default stop grace period is 10 s, shorter than SHUTDOWN_TIMEOUT.
+    # Allow time for the HTTP drain, SSE close, snapshot drain, and final usage
+    # flush before Docker sends SIGKILL.
+    stop_grace_period: 60s
+
+    # The image is distroless and only writes to the snapshot volume (if any).
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # Uncomment when using SNAPSHOT_BACKEND=local.
+  # snapshots-init:
+  #   image: busybox:1.37
+  #   command: ["chown", "65532:65532", "/snapshots"]
+  #   volumes:
+  #     - snapshots:/snapshots
 
 # Uncomment when using SNAPSHOT_BACKEND=local.
 # volumes:

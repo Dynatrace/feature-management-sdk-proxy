@@ -57,38 +57,34 @@ The proxy listens on `:8080` by default.
 
 ### Docker
 
-```bash
-docker build -t sdk-proxy .
+Release images are published to `ghcr.io/dynatrace/feature-management-sdk-proxy` (tags: `vX.Y.Z`, `latest`) for
+`linux/amd64` and `linux/arm64`.
 
+```bash
 docker run --rm \
   -p 8080:8080 \
-  sdk-proxy
+  --stop-timeout 60 \
+  ghcr.io/dynatrace/feature-management-sdk-proxy:latest
 ```
 
-### Kubernetes
+`--stop-timeout 60` gives the proxy time to drain and flush usage records on shutdown; Docker's 10s default is shorter
+than `SHUTDOWN_TIMEOUT`. To build the image locally instead, run `make docker` (tags it `sdk-proxy`).
 
-```yaml
-containers:
-  - name: sdk-proxy
-    image: sdk-proxy
-    ports:
-      - containerPort: 8080
-    env:
-      - name: PROXY_INSTANCE_ID
-        valueFrom:
-          fieldRef:
-            fieldPath: metadata.name
-    livenessProbe:
-      httpGet:
-        path: /livez
-        port: 8080
-    readinessProbe:
-      httpGet:
-        path: /readyz
-        port: 8080
-      initialDelaySeconds: 2
-      periodSeconds: 5
+A Docker Compose example with snapshot persistence and telemetry options is in
+[examples/docker-compose.example.yml](examples/docker-compose.example.yml).
+
+### Kubernetes (Helm)
+
+```bash
+helm install sdk-proxy ./charts/sdk-proxy --namespace sdk-proxy --create-namespace
 ```
+
+The chart wires the health probes, sets `PROXY_INSTANCE_ID` to the pod name, sizes the termination grace period for a
+clean shutdown, and runs the container as non-root with a read-only root filesystem. Snapshot persistence (S3 or local
+PVC), OpenTelemetry export, ingress, autoscaling, and a PodDisruptionBudget are configured through values. See
+[charts/sdk-proxy/README.md](charts/sdk-proxy/README.md).
+
+For plain manifests, see [examples/kubernetes.example.yml](examples/kubernetes.example.yml).
 
 ## SDK Configuration
 

@@ -60,6 +60,7 @@ make test           # unit tests
 make test-int       # integration tests (spins up in-process mocks)
 make lint           # golangci-lint
 make docker         # build OCI image
+make helm-lint      # lint + render the Helm chart (charts/sdk-proxy)
 ```
 
 Or directly via Go toolchain:

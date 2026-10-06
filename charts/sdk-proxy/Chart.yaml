@@ -1,0 +1,14 @@
+apiVersion: v2
+name: sdk-proxy
+description: Dynatrace Feature Management SDK Proxy — caching, SSE fan-out proxy for Feature Management SDKs
+type: application
+version: 0.1.0
+appVersion: "0.2.0"
+home: https://github.com/Dynatrace/feature-management-sdk-proxy
+sources:
+  - https://github.com/Dynatrace/feature-management-sdk-proxy
+keywords:
+  - feature-flags
+  - openfeature
+  - flagd
+  - dynatrace
