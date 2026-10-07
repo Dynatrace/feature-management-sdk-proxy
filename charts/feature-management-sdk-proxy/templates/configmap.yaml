@@ -1,0 +1,64 @@
+{{- include "fmsp.validate" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "fmsp.fullname" . }}
+  labels:
+    {{- include "fmsp.labels" . | nindent 4 }}
+data:
+  PORT: {{ .Values.containerPort | quote }}
+  LOG_LEVEL: {{ .Values.logLevel | quote }}
+  SHUTDOWN_TIMEOUT: {{ .Values.shutdownTimeout | quote }}
+  {{- with .Values.cdnBaseDomain }}
+  CDN_BASE_DOMAIN: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.sse }}
+  {{- if not .enabled }}
+  SSE_DISABLED: "true"
+  {{- end }}
+  {{- if not (kindIs "invalid" .fanoutCapPerKey) }}
+  SSE_FANOUT_CAP_PER_KEY: {{ .fanoutCapPerKey | toString | quote }}
+  {{- end }}
+  {{- if not (kindIs "invalid" .subscribeRatePerSec) }}
+  SSE_SUBSCRIBE_RATE_PER_SEC: {{ .subscribeRatePerSec | toString | quote }}
+  {{- end }}
+  {{- if not (kindIs "invalid" .subscribeBurst) }}
+  SSE_SUBSCRIBE_BURST: {{ .subscribeBurst | toString | quote }}
+  {{- end }}
+  {{- end }}
+  {{- with .Values.otel }}
+  {{- with .endpoint }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ . | quote }}
+  {{- end }}
+  {{- with .serviceName }}
+  OTEL_SERVICE_NAME: {{ . | quote }}
+  {{- end }}
+  {{- with .resourceAttributes }}
+  OTEL_RESOURCE_ATTRIBUTES: {{ . | quote }}
+  {{- end }}
+  {{- with .tracesSampler }}
+  OTEL_TRACES_SAMPLER: {{ . | quote }}
+  {{- end }}
+  {{- with .tracesSamplerArg }}
+  OTEL_TRACES_SAMPLER_ARG: {{ . | toString | quote }}
+  {{- end }}
+  {{- end }}
+  {{- with .Values.snapshot }}
+  {{- if .enabled }}
+  SNAPSHOT_BACKEND: "s3"
+  SNAPSHOT_S3_BUCKET: {{ .s3.bucket | quote }}
+  SNAPSHOT_S3_REGION: {{ .s3.region | quote }}
+  {{- with .s3.endpoint }}
+  SNAPSHOT_S3_ENDPOINT: {{ . | quote }}
+  {{- end }}
+  {{- with .s3.prefix }}
+  SNAPSHOT_S3_PREFIX: {{ . | quote }}
+  {{- end }}
+  {{- with .maxAge }}
+  SNAPSHOT_MAX_AGE: {{ . | quote }}
+  {{- end }}
+  {{- if not (kindIs "invalid" .writeQueueSize) }}
+  SNAPSHOT_WRITE_QUEUE_SIZE: {{ .writeQueueSize | toString | quote }}
+  {{- end }}
+  {{- end }}
+  {{- end }}

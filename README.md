@@ -76,27 +76,30 @@ A Docker Compose example with snapshot persistence and telemetry options is in
 ### Kubernetes (Helm)
 
 ```bash
-helm install sdk-proxy ./charts/sdk-proxy --namespace sdk-proxy --create-namespace
+helm install sdk-proxy ./charts/feature-management-sdk-proxy --namespace sdk-proxy --create-namespace
 ```
 
 The chart wires the health probes, sets `PROXY_INSTANCE_ID` to the pod name, sizes the termination grace period for a
 clean shutdown, and runs the container as non-root with a read-only root filesystem. Snapshot persistence (S3 or local
 PVC), OpenTelemetry export, ingress, autoscaling, and a PodDisruptionBudget are configured through values. See
-[charts/sdk-proxy/README.md](charts/sdk-proxy/README.md).
+[charts/feature-management-sdk-proxy/README.md](charts/feature-management-sdk-proxy/README.md), which also lists the
+required egress and an optional NetworkPolicy.
 
 For plain manifests, see [examples/kubernetes.example.yml](examples/kubernetes.example.yml).
 
 ## SDK Configuration
 
-Point your SDK at the proxy by setting `proxyUrl` in the SDK provider config:
+Point your server SDK at the proxy by setting `configOrigin` to the proxy's base URL, for example with the Java
+provider:
 
-```json
-{
-  "proxyUrl": "http://sdk-proxy:8080"
-}
+```java
+DynatraceProviderOptions options = DynatraceProviderOptions.builder()
+    .configOrigin("http://sdk-proxy:8080")
+    .build();
 ```
 
-No other SDK configuration is needed.
+The SDK then fetches config from `/server/{sdk_key}.json`, follows the rewritten SSE URL to `/sse`, and sends
+evaluation metrics to `/v1/metrics`, all on the proxy. No other SDK configuration is needed.
 
 ## Snapshot Persistence
 

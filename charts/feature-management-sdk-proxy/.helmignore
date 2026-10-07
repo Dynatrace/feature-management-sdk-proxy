@@ -8,3 +8,7 @@
 *~
 .idea/
 .vscode/
+# Development-only files
+/tests/
+/ci/
+README.md.gotmpl

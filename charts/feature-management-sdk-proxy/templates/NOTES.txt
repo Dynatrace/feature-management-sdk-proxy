@@ -1,0 +1,29 @@
+Feature Management SDK Proxy {{ include "fmsp.imageTag" . }} deployed as {{ include "fmsp.fullname" . }} in namespace {{ .Release.Namespace }}.
+
+Point Feature Management server SDKs at the proxy with configOrigin:
+
+  http://{{ include "fmsp.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+{{- if .Values.ingress.enabled }}
+
+External URL(s):
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- end }}
+
+Check readiness:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "fmsp.fullname" . }} {{ .Values.service.port }}
+  curl -i http://localhost:{{ .Values.service.port }}/readyz
+
+Snapshot persistence: {{ if .Values.snapshot.enabled }}s3://{{ .Values.snapshot.s3.bucket }}/{{ .Values.snapshot.s3.prefix }}{{ else }}disabled (pods start cold){{ end }}
+Telemetry export:     {{ if .Values.otel.endpoint }}{{ .Values.otel.endpoint }}{{ else }}disabled (set otel.endpoint){{ end }}
+{{- if .Values.networkPolicy.enabled }}
+NetworkPolicy:        enabled (DNS{{ if .Values.networkPolicy.egress.https }} + HTTPS 443{{ end }} egress{{ with .Values.networkPolicy.extraEgress }} + {{ len . }} extra rule(s){{ end }})
+{{- end }}
+{{- if and (gt (int .Values.replicaCount) 1) (eq .Values.service.sessionAffinity "None") }}
+
+Note: with multiple replicas and no session affinity, an SDK's /sse subscription may
+reach a pod that has not cached its config yet and receive 412 (the SDK retries).
+Consider service.sessionAffinity=ClientIP or snapshot.enabled=true to keep pods warm.
+{{- end }}

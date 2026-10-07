@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: "{{ include "sdk-proxy.fullname" . }}-test-readyz"
+  name: "{{ include "fmsp.fullname" . }}-test-readyz"
   labels:
-    {{- include "sdk-proxy.labels" . | nindent 4 }}
+    {{- include "fmsp.labels" . | nindent 4 }}
   annotations:
     "helm.sh/hook": test
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
@@ -17,7 +17,7 @@ spec:
   containers:
     - name: wget
       image: busybox:1.37
-      command: ["wget", "-q", "-O-", "http://{{ include "sdk-proxy.fullname" . }}:{{ .Values.service.port }}/readyz"]
+      command: ["wget", "-q", "-O-", "http://{{ include "fmsp.fullname" . }}:{{ .Values.service.port }}/readyz"]
       securityContext:
         allowPrivilegeEscalation: false
         readOnlyRootFilesystem: true

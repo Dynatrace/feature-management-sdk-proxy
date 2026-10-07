@@ -48,6 +48,8 @@
   "ignores": [
     ".beads/**",
     ".claude/**",
-    "vendor/**"
+    "vendor/**",
+    // helm-docs output (generated from README.md.gotmpl; its values table isn't aligned)
+    "charts/*/README.md"
   ]
 }

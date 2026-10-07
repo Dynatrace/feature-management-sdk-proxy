@@ -2,16 +2,16 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "sdk-proxy.fullname" . }}
+  name: {{ include "fmsp.fullname" . }}
   labels:
-    {{- include "sdk-proxy.labels" . | nindent 4 }}
+    {{- include "fmsp.labels" . | nindent 4 }}
 spec:
-  {{- if hasKey .Values.podDisruptionBudget "minAvailable" }}
+  {{- if not (kindIs "invalid" .Values.podDisruptionBudget.minAvailable) }}
   minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
   {{- else }}
   maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
   {{- end }}
   selector:
     matchLabels:
-      {{- include "sdk-proxy.selectorLabels" . | nindent 6 }}
+      {{- include "fmsp.selectorLabels" . | nindent 6 }}
 {{- end }}

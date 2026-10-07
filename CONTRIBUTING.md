@@ -5,7 +5,10 @@
 - Go 1.26+
 - [golangci-lint](https://golangci-lint.run/usage/install/) for linting
 - Docker (optional, for building the OCI image)
-- [Helm](https://helm.sh/docs/intro/install/) 3.x (optional, for linting the chart in `charts/sdk-proxy`)
+- For chart work in `charts/feature-management-sdk-proxy` (optional): [Helm](https://helm.sh/docs/intro/install/),
+  [chart-testing](https://github.com/helm/chart-testing) (`ct`), the
+  [helm-unittest](https://github.com/helm-unittest/helm-unittest) plugin, and
+  [helm-docs](https://github.com/norwoodj/helm-docs)
 
 ## Build & Test
 
@@ -16,7 +19,9 @@ make test-int    # integration tests (requires no external services; mocks are i
 make vet         # go vet
 make lint        # golangci-lint (must pass before merge)
 make docker      # build the OCI image
-make helm-lint   # lint and render the Helm chart
+make helm-lint   # ct lint the Helm chart
+make helm-test   # helm-unittest suites
+make helm-docs   # regenerate the chart README from values.yaml
 ```
 
 All integration tests are tagged `//go:build integration` and live under `test/e2e/`. They use in-process mocks for the

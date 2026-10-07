@@ -60,7 +60,9 @@ make test           # unit tests
 make test-int       # integration tests (spins up in-process mocks)
 make lint           # golangci-lint
 make docker         # build OCI image
-make helm-lint      # lint + render the Helm chart (charts/sdk-proxy)
+make helm-lint      # ct lint the Helm chart (charts/feature-management-sdk-proxy)
+make helm-test      # helm-unittest suites
+make helm-docs      # regenerate the chart README (don't hand-edit it)
 ```
 
 Or directly via Go toolchain:
@@ -123,7 +125,7 @@ These are load-bearing constraints — do not break them without an explicit des
 - **SSE after config**: upstream SSE connections are only opened after the config for that SDK key is cached. Never open
   an upstream SSE connection for a key whose config has never been fetched.
 - **Proxy SSE endpoint**: `GET /sse?stream_id={public_id}`. The `stream_id` is `cache.PublicID(sdkKey)` — the public
-  prefix only, never the raw key. No Authorization header is required or accepted. SDKs with `proxyUrl` configured use
+  prefix only, never the raw key. No Authorization header is required or accepted. SDKs with `configOrigin` set to the proxy use
   this endpoint — the SSE URL embedded in the flagd config JSON is ignored.
 - **Dynamic cache poll interval**: while an upstream SSE connection is actively streaming for a key, the background
   refresher polls at 10 min (`RefreshIntervalConnected`); when disconnected, reconnecting, or SSE is disabled, it polls

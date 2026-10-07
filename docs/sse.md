@@ -43,8 +43,8 @@ opens an upstream SSE connection. Subsequent `GET /sse` requests for that key su
 
 **Expected provider behavior:**
 
-A provider that receives 412 at cold start should retry the SSE connection after fetching the config. Providers using
-the `proxyUrl` configuration option retrieve the config (which includes the rewritten SSE URL) before opening the SSE
+A provider that receives 412 at cold start should retry the SSE connection after fetching the config. Providers with
+`configOrigin` pointing at the proxy retrieve the config (which includes the rewritten SSE URL) before opening the SSE
 connection, so they naturally follow the correct sequence. A provider that opens the SSE connection before the config
 fetch will receive 412 and should back off briefly before retrying; the proxy will be ready as soon as one flag
 evaluation triggers a config fetch.
@@ -77,8 +77,8 @@ The proxy separates the SSE connection into two independent legs.
 
 SDK providers connect to the proxy's `/sse` endpoint using the `stream_id` embedded in the flagd config they received
 from `GET /server/{sdk_key}.json`. The proxy rewrites the `eventStreamEndpoint` URL in the flagd config payload to point
-at itself, replacing the original upstream URL with `{proxy_base}/sse?stream_id={public_id}`. Providers that use the
-`proxyUrl` option follow this URL automatically.
+at itself, replacing the original upstream URL with `{proxy_base}/sse?stream_id={public_id}`. Providers with
+`configOrigin` pointing at the proxy follow this URL automatically.
 
 **Leg 2: Proxy to Upstream** (one connection per SDK key)
 

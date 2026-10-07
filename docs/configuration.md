@@ -504,8 +504,9 @@ SNAPSHOT_MAX_AGE=24h
 
 ## Kubernetes Deployment
 
-Use the Helm chart in [`charts/sdk-proxy`](../charts/sdk-proxy/README.md). Its `config`, `otel`, and `snapshot` values
-map onto the variables above; `PORT` and `PROXY_INSTANCE_ID` are set by the chart. For plain manifests, see
+Use the Helm chart in [`charts/feature-management-sdk-proxy`](../charts/feature-management-sdk-proxy/README.md). Its
+typed values (`logLevel`, `sse`, `otel`, `snapshot`, ...) map onto the variables above, other variables go in
+`extraEnv`, and `PORT` and `PROXY_INSTANCE_ID` are set by the chart. For plain manifests, see
 [`examples/kubernetes.example.yml`](../examples/kubernetes.example.yml).
 
 Whichever you use, set `terminationGracePeriodSeconds` above `SHUTDOWN_TIMEOUT` plus about 15s (see

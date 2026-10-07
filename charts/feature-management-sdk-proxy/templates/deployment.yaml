@@ -1,38 +1,31 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "sdk-proxy.fullname" . }}
+  name: {{ include "fmsp.fullname" . }}
   labels:
-    {{- include "sdk-proxy.labels" . | nindent 4 }}
+    {{- include "fmsp.labels" . | nindent 4 }}
 spec:
-  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
-  {{- end }}
   selector:
     matchLabels:
-      {{- include "sdk-proxy.selectorLabels" . | nindent 6 }}
+      {{- include "fmsp.selectorLabels" . | nindent 6 }}
   strategy:
-    {{- if and (eq .Values.snapshot.backend "local") (not (has "ReadWriteMany" .Values.snapshot.local.persistence.accessModes)) }}
-    # A ReadWriteOnce snapshot volume can't be attached to old and new pods at once.
-    type: Recreate
-    {{- else }}
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 25%
+      maxSurge: 1
       maxUnavailable: 0
-    {{- end }}
   template:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        {{- if include "sdk-proxy.s3SecretName" . }}
+        {{- if include "fmsp.credentialsSecretName" . }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "sdk-proxy.labels" . | nindent 8 }}
+        {{- include "fmsp.labels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -41,7 +34,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "sdk-proxy.serviceAccountName" . }}
+      serviceAccountName: {{ include "fmsp.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
       {{- with .Values.priorityClassName }}
       priorityClassName: {{ . }}
@@ -51,7 +44,7 @@ spec:
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       containers:
         - name: sdk-proxy
-          image: "{{ .Values.image.repository }}:{{ include "sdk-proxy.imageTag" . }}"
+          image: {{ include "fmsp.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
@@ -61,7 +54,7 @@ spec:
               protocol: TCP
           envFrom:
             - configMapRef:
-                name: {{ include "sdk-proxy.fullname" . }}
+                name: {{ include "fmsp.fullname" . }}
             {{- with .Values.extraEnvFrom }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -70,8 +63,7 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            {{- with include "sdk-proxy.s3SecretName" . }}
-            {{- if eq $.Values.snapshot.backend "s3" }}
+            {{- with include "fmsp.credentialsSecretName" . }}
             - name: SNAPSHOT_S3_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
@@ -82,7 +74,6 @@ spec:
                 secretKeyRef:
                   name: {{ . }}
                   key: secretKey
-            {{- end }}
             {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
@@ -101,26 +92,13 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if or (eq .Values.snapshot.backend "local") .Values.extraVolumeMounts }}
+          {{- with .Values.extraVolumeMounts }}
           volumeMounts:
-            {{- if eq .Values.snapshot.backend "local" }}
-            - name: snapshots
-              mountPath: {{ .Values.snapshot.local.dir }}
-            {{- end }}
-            {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
-            {{- end }}
           {{- end }}
-      {{- if or (eq .Values.snapshot.backend "local") .Values.extraVolumes }}
+      {{- with .Values.extraVolumes }}
       volumes:
-        {{- if eq .Values.snapshot.backend "local" }}
-        - name: snapshots
-          persistentVolumeClaim:
-            claimName: {{ include "sdk-proxy.snapshotClaimName" . }}
-        {{- end }}
-        {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
-        {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

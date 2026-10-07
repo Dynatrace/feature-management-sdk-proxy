@@ -1,8 +1,8 @@
 # Example Kubernetes deployment of the sdk-proxy container image.
 #
-# For most deployments prefer the Helm chart in charts/sdk-proxy, which renders
+# For most deployments prefer the Helm chart in charts/feature-management-sdk-proxy, which renders
 # an equivalent (and validated) set of resources:
-#   helm install sdk-proxy ./charts/sdk-proxy
+#   helm install sdk-proxy ./charts/feature-management-sdk-proxy
 #
 # This file is a single multi-document manifest. Apply it with:
 #   kubectl apply -f kubernetes.example.yml
@@ -195,7 +195,7 @@ spec:
   # sessionAffinity: ClientIP
   ports:
     - name: http
-      port: 8080   # SDKs use proxyUrl: http://sdk-proxy:8080
+      port: 8080   # SDKs use configOrigin: http://sdk-proxy:8080
       targetPort: http
       protocol: TCP
   type: ClusterIP
