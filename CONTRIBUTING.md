@@ -59,6 +59,21 @@ One logical change per commit. Keep PRs small and focused.
 
 Never commit directly to `main`.
 
+## Releasing
+
+Releases are cut by [release-please](https://github.com/googleapis/release-please). On every push to `main` it opens
+or updates a release PR from the conventional commits since the last tag (`feat` bumps the minor version, `fix` the
+patch, while the version is below 1.0). Merging that PR:
+
+- updates `CHANGELOG.md` and `.release-please-manifest.json`,
+- sets the Helm chart's `version` and `appVersion` in `charts/feature-management-sdk-proxy/Chart.yaml` to the release
+  version (the chart is released in lockstep with the proxy),
+- tags `vX.Y.Z` and creates the GitHub release, then GoReleaser attaches the binaries and pushes the image to
+  `ghcr.io/dynatrace/feature-management-sdk-proxy`.
+
+Don't push release tags or edit the chart version by hand. To force a specific version, add a `Release-As: X.Y.Z`
+footer to a commit on `main`.
+
 ## Issue Tracking
 
 This project uses **beads** for issue tracking. Run `bd prime` for the full workflow reference.
