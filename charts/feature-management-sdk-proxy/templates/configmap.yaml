@@ -45,15 +45,7 @@ data:
   {{- end }}
   {{- with .Values.snapshot }}
   {{- if .enabled }}
-  SNAPSHOT_BACKEND: "s3"
-  SNAPSHOT_S3_BUCKET: {{ .s3.bucket | quote }}
-  SNAPSHOT_S3_REGION: {{ .s3.region | quote }}
-  {{- with .s3.endpoint }}
-  SNAPSHOT_S3_ENDPOINT: {{ . | quote }}
-  {{- end }}
-  {{- with .s3.prefix }}
-  SNAPSHOT_S3_PREFIX: {{ . | quote }}
-  {{- end }}
+  SNAPSHOT_URL: {{ .url | quote }}
   {{- with .maxAge }}
   SNAPSHOT_MAX_AGE: {{ . | quote }}
   {{- end }}

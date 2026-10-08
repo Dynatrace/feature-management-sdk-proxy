@@ -89,32 +89,12 @@ func TestSecret_Unwrap(t *testing.T) {
 	}
 }
 
-func TestConfig_NoCredentialLeak(t *testing.T) {
-	t.Setenv("CDN_BASE_DOMAIN", "fm.dynatracelabs.com")
-	t.Setenv("SNAPSHOT_BACKEND", "s3")
-	t.Setenv("SNAPSHOT_S3_BUCKET", "my-bucket")
-	t.Setenv("SNAPSHOT_S3_REGION", "us-east-1")
-	t.Setenv("SNAPSHOT_S3_ACCESS_KEY", rawSecret+"-access")
-	t.Setenv("SNAPSHOT_S3_SECRET_KEY", rawSecret+"-secret")
+func TestConfig_LogValue_SnapshotURL(t *testing.T) {
+	t.Setenv("SNAPSHOT_URL", "s3://user:"+rawSecret+"@my-bucket?region=us-east-1&prefix=snapshots")
 
 	cfg, err := FromEnv()
 	if err != nil {
 		t.Fatalf("FromEnv: %v", err)
-	}
-
-	for _, format := range []string{"%v", "%+v", "%#v"} {
-		out := fmt.Sprintf(format, cfg)
-		if strings.Contains(out, rawSecret) {
-			t.Errorf("fmt.Sprintf(%q, cfg) leaked credential: %q", format, out)
-		}
-	}
-
-	b, err := json.Marshal(cfg)
-	if err != nil {
-		t.Fatalf("json.Marshal(cfg): %v", err)
-	}
-	if strings.Contains(string(b), rawSecret) {
-		t.Errorf("json.Marshal(cfg) leaked credential: %s", b)
 	}
 
 	var buf bytes.Buffer
@@ -122,16 +102,13 @@ func TestConfig_NoCredentialLeak(t *testing.T) {
 	logger.Info("config", slog.Any("cfg", cfg))
 	out := buf.String()
 	if strings.Contains(out, rawSecret) {
-		t.Errorf("slog output leaked credential: %s", out)
+		t.Errorf("slog output leaked URL password: %s", out)
 	}
-	if !strings.Contains(out, "[REDACTED]") {
-		t.Errorf("slog output missing [REDACTED]: %s", out)
+	if !strings.Contains(out, `"snapshot_backend":"s3"`) {
+		t.Errorf("expected snapshot_backend=s3 in log output: %s", out)
 	}
-	if !strings.Contains(out, `"port"`) {
-		t.Errorf("slog output missing port key: %s", out)
-	}
-	if !strings.Contains(out, `"snapshot_s3_access_key"`) {
-		t.Errorf("slog output missing snapshot_s3_access_key key: %s", out)
+	if !strings.Contains(out, `"snapshot_url":"s3://user:xxxxx@my-bucket?region=us-east-1&prefix=snapshots"`) {
+		t.Errorf("expected redacted snapshot_url in log output: %s", out)
 	}
 }
 

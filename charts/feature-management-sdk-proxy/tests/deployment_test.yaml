@@ -101,51 +101,50 @@ tests:
   - it: injects no credentials without snapshots
     template: deployment.yaml
     asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: SNAPSHOT_S3_ACCESS_KEY
-          any: true
+      - lengthEqual:
+          path: spec.template.spec.containers[0].envFrom
+          count: 1
       - notExists:
           path: spec.template.metadata.annotations["checksum/secret"]
 
-  - it: reads credentials from an existing Secret
+  - it: loads credentials from an existing Secret
     template: deployment.yaml
     set:
       snapshot.enabled: true
-      snapshot.s3.bucket: b
-      snapshot.s3.region: us-east-1
+      snapshot.url: azblob://snaps?storage_account=acct
       snapshot.credentials.existingSecret: my-creds
     asserts:
       - contains:
-          path: spec.template.spec.containers[0].env
+          path: spec.template.spec.containers[0].envFrom
           content:
-            name: SNAPSHOT_S3_ACCESS_KEY
-            valueFrom:
-              secretKeyRef:
-                name: my-creds
-                key: accessKey
+            secretRef:
+              name: my-creds
+
+  - it: loads credentials from the chart-managed Secret
+    template: deployment.yaml
+    set:
+      snapshot.enabled: true
+      snapshot.url: s3://b?region=us-east-1
+      snapshot.credentials.env.AWS_ACCESS_KEY_ID: a
+      snapshot.credentials.env.AWS_SECRET_ACCESS_KEY: s
+    asserts:
       - contains:
-          path: spec.template.spec.containers[0].env
+          path: spec.template.spec.containers[0].envFrom
           content:
-            name: SNAPSHOT_S3_SECRET_KEY
-            valueFrom:
-              secretKeyRef:
-                name: my-creds
-                key: secretKey
+            secretRef:
+              name: rel-feature-management-sdk-proxy-snapshot
+      - exists:
+          path: spec.template.metadata.annotations["checksum/secret"]
 
   - it: injects no credentials with workload identity
     template: deployment.yaml
     set:
       snapshot.enabled: true
-      snapshot.s3.bucket: b
-      snapshot.s3.region: us-east-1
+      snapshot.url: gs://b
     asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: SNAPSHOT_S3_ACCESS_KEY
-          any: true
+      - lengthEqual:
+          path: spec.template.spec.containers[0].envFrom
+          count: 1
 
   - it: passes through extraEnv and scheduling settings
     template: deployment.yaml

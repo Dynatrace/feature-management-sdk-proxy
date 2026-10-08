@@ -37,14 +37,14 @@ DynatraceProviderOptions options = DynatraceProviderOptions.builder()
 The proxy makes outbound HTTPS (443) connections only. The upstream hosts are derived from each SDK key's region
 segment (`<geo>`) and `cdnBaseDomain` (default `fm.dynatrace.com`):
 
-| Destination                  | Host                                            | Used for                                                    |
-|------------------------------|-------------------------------------------------|-------------------------------------------------------------|
-| Config CDN                   | `cdn.<geo>.<cdnBaseDomain>`                     | Flag config fetches and background revalidation             |
-| Metrics ingest               | `metrics.<geo>.<cdnBaseDomain>`                 | `POST /v1/metrics` forwarding                               |
-| Upstream SSE                 | Host of `eventStreamEndpoint` in the config     | One change-notification stream per SDK key                  |
-| Snapshot storage (optional)  | S3 regional endpoint, or `snapshot.s3.endpoint` | Snapshot reads and writes                                   |
-| OTLP collector (optional)    | `otel.endpoint`                                 | Metrics, traces, and logs export (often in-cluster on 4318) |
-| Workload identity (optional) | Provider token endpoint                         | Credentials for snapshot storage                            |
+| Destination                  | Host                                                              | Used for                                                    |
+|------------------------------|-------------------------------------------------------------------|-------------------------------------------------------------|
+| Config CDN                   | `cdn.<geo>.<cdnBaseDomain>`                                       | Flag config fetches and background revalidation             |
+| Metrics ingest               | `metrics.<geo>.<cdnBaseDomain>`                                   | `POST /v1/metrics` forwarding                               |
+| Upstream SSE                 | Host of `eventStreamEndpoint` in the config                       | One change-notification stream per SDK key                  |
+| Snapshot storage (optional)  | Provider endpoint for `snapshot.url`, or its `endpoint=` override | Snapshot reads and writes                                   |
+| OTLP collector (optional)    | `otel.endpoint`                                                   | Metrics, traces, and logs export (often in-cluster on 4318) |
+| Workload identity (optional) | Provider token endpoint                                           | Credentials for snapshot storage                            |
 
 With `networkPolicy.enabled`, DNS and TCP 443 to any address except the cloud metadata service are allowed. Add
 `networkPolicy.extraEgress` rules for anything else, such as an in-cluster OTel collector or the GKE metadata server:
@@ -79,8 +79,12 @@ EKS IRSA and Azure Workload Identity exchange tokens with public HTTPS endpoints
 
 ## Snapshot Persistence
 
-Snapshots let restarted and newly scheduled pods start warm from S3-compatible object storage instead of hitting the
-CDN for every key. With workload identity (recommended):
+Snapshots let restarted and newly scheduled pods start warm from object storage instead of hitting the CDN for every
+key. `snapshot.url` selects the backend: `s3://` (AWS S3 and S3-compatible stores), `gs://` (Google Cloud Storage),
+`azblob://` (Azure Blob Storage), or `file://`. Credentials come from each provider's native credential chain, so
+workload identity needs no static secrets.
+
+EKS (IRSA):
 
 ```yaml
 serviceAccount:
@@ -88,24 +92,47 @@ serviceAccount:
     eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/sdk-proxy-snapshots
 snapshot:
   enabled: true
-  s3:
-    bucket: my-proxy-snapshots
-    region: us-east-1
-    prefix: prod/
+  url: s3://my-proxy-snapshots?region=us-east-1&prefix=prod
 ```
 
-With static credentials from an existing Secret holding `accessKey` and `secretKey`:
+GKE (Workload Identity):
+
+```yaml
+serviceAccount:
+  annotations:
+    iam.gke.io/gcp-service-account: sdk-proxy@my-project.iam.gserviceaccount.com
+snapshot:
+  enabled: true
+  url: gs://my-proxy-snapshots?prefix=prod
+```
+
+AKS (Workload Identity):
+
+```yaml
+serviceAccount:
+  annotations:
+    azure.workload.identity/client-id: 00000000-0000-0000-0000-000000000000
+podLabels:
+  azure.workload.identity/use: "true"
+snapshot:
+  enabled: true
+  url: azblob://my-proxy-snapshots?storage_account=myaccount&prefix=prod
+```
+
+Static credentials are passed as the provider's own environment variables. With an existing Secret whose keys are the
+variable names (here `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`), loaded with `envFrom`:
 
 ```yaml
 snapshot:
   enabled: true
-  s3:
-    bucket: my-proxy-snapshots
-    region: us-east-1
-    endpoint: http://minio.storage:9000   # S3-compatible stores only
+  url: s3://my-proxy-snapshots?region=us-east-1&endpoint=http://minio.storage:9000&use_path_style=true
   credentials:
     existingSecret: sdk-proxy-snapshot-credentials
 ```
+
+Or let the chart create the Secret from `snapshot.credentials.env`, e.g. `AZURE_STORAGE_KEY` for Azure shared keys.
+GCS service-account key files aren't environment variables: mount the key with `extraVolumes`/`extraVolumeMounts` and
+set `GOOGLE_APPLICATION_CREDENTIALS` via `extraEnv`.
 
 ## What the Chart Configures
 

@@ -195,39 +195,22 @@ func run() error {
 	var snapshotLoaded int
 	var snapshotLoadErr error
 
-	switch cfg.SnapshotBackend {
-	case "s3":
-		store, err := snapshot.NewS3Store(ctx, snapshot.S3Config{
-			Endpoint:        cfg.SnapshotS3Endpoint,
-			Bucket:          cfg.SnapshotS3Bucket,
-			Region:          cfg.SnapshotS3Region,
-			Prefix:          cfg.SnapshotS3Prefix,
-			AccessKeyID:     cfg.SnapshotS3AccessKey.Unwrap(),
-			SecretAccessKey: cfg.SnapshotS3SecretKey.Unwrap(),
-		})
+	if cfg.SnapshotURL != "" {
+		store, err := snapshot.OpenBlobStore(ctx, cfg.SnapshotURL)
 		if err != nil {
 			return fmt.Errorf("snapshot: %w", err)
 		}
+		defer func() { _ = store.Close() }()
 		snapshotStore = store
 		snapshotLoaded, snapshotWriter, snapshotLoadErr = initSnapshotWriter(ctx, store, flagCache, inst, logger, cfg.SnapshotWriteQueueSize,
-			slog.String("bucket", cfg.SnapshotS3Bucket),
-			slog.String("prefix", cfg.SnapshotS3Prefix),
-		)
-	case "local":
-		store, err := snapshot.NewLocalStore(cfg.SnapshotLocalDir)
-		if err != nil {
-			return fmt.Errorf("snapshot: %w", err)
-		}
-		snapshotStore = store
-		snapshotLoaded, snapshotWriter, snapshotLoadErr = initSnapshotWriter(ctx, store, flagCache, inst, logger, cfg.SnapshotWriteQueueSize,
-			slog.String("dir", cfg.SnapshotLocalDir),
+			slog.String("url", snapshot.RedactURL(cfg.SnapshotURL)),
 		)
 	}
 
 	// Classify the startup path and log it.
 	// oldest is the zero time when snapshotLoaded==0; Classify guards on loaded==0 before using it.
 	oldest, _ := snapshot.OldestCapturedAt(flagCache)
-	switch snapshot.Classify(cfg.SnapshotBackend != "", snapshotLoaded, snapshotLoadErr != nil, oldest, time.Now(), cfg.SnapshotMaxAge) {
+	switch snapshot.Classify(cfg.SnapshotURL != "", snapshotLoaded, snapshotLoadErr != nil, oldest, time.Now(), cfg.SnapshotMaxAge) {
 	case snapshot.CaseColdNoPersistence:
 		logger.Info("startup: no persistence configured, starting cold")
 	case snapshot.CaseSnapshotFresh:

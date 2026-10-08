@@ -49,59 +49,44 @@ tests:
           path: data.OTEL_TRACES_SAMPLER_ARG
           value: "0.1"
 
-  - it: configures S3 snapshots
+  - it: configures snapshots
     set:
       snapshot:
         enabled: true
         maxAge: 12h
-        s3:
-          bucket: snaps
-          region: eu-west-1
-          endpoint: http://minio:9000
-          prefix: prod/
+        url: s3://snaps?region=eu-west-1&endpoint=http://minio:9000&use_path_style=true&prefix=prod
     asserts:
       - equal:
-          path: data.SNAPSHOT_BACKEND
-          value: s3
-      - equal:
-          path: data.SNAPSHOT_S3_BUCKET
-          value: snaps
-      - equal:
-          path: data.SNAPSHOT_S3_REGION
-          value: eu-west-1
-      - equal:
-          path: data.SNAPSHOT_S3_ENDPOINT
-          value: http://minio:9000
-      - equal:
-          path: data.SNAPSHOT_S3_PREFIX
-          value: prod/
+          path: data.SNAPSHOT_URL
+          value: s3://snaps?region=eu-west-1&endpoint=http://minio:9000&use_path_style=true&prefix=prod
       - equal:
           path: data.SNAPSHOT_MAX_AGE
           value: 12h
+      - notExists:
+          path: data.SNAPSHOT_BACKEND
 
-  - it: requires bucket and region
+  - it: omits snapshot settings when disabled
+    set:
+      snapshot.url: gs://ignored
+    asserts:
+      - notExists:
+          path: data.SNAPSHOT_URL
+
+  - it: requires a URL
     set:
       snapshot.enabled: true
     asserts:
       - failedTemplate:
-          errorMessage: snapshot.s3.bucket and snapshot.s3.region are required when snapshot.enabled=true
+          errorMessage: snapshot.url is required when snapshot.enabled=true
 
-  - it: rejects existingSecret combined with static keys
+  - it: rejects existingSecret combined with static env
     set:
       snapshot:
         enabled: true
-        s3: {bucket: b, region: r}
-        credentials: {existingSecret: x, accessKey: a, secretKey: s}
+        url: s3://b?region=r
+        credentials:
+          existingSecret: x
+          env: {AWS_ACCESS_KEY_ID: a}
     asserts:
       - failedTemplate:
-          errorMessage: set either snapshot.credentials.existingSecret or snapshot.credentials.accessKey/secretKey, not both
-
-  - it: rejects a lone access key
-    set:
-      snapshot:
-        enabled: true
-        s3: {bucket: b, region: r}
-        credentials: {accessKey: a}
-    asserts:
-      - failedTemplate:
-          errorMessage: snapshot.credentials.accessKey and snapshot.credentials.secretKey must be set together
+          errorMessage: set either snapshot.credentials.existingSecret or snapshot.credentials.env, not both

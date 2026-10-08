@@ -25,3 +25,22 @@ tests:
       shutdownTimeout: "30"
     asserts:
       - failedTemplate: {}
+
+  - it: rejects unsupported snapshot URL schemes
+    set:
+      snapshot.url: gcs://bucket
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects removed snapshot.s3 settings
+    set:
+      snapshot.s3.bucket: b
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects invalid credential env var names
+    set:
+      snapshot.credentials.env:
+        "not-an-env-var": x
+    asserts:
+      - failedTemplate: {}

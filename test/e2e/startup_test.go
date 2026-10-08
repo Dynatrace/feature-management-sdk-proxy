@@ -125,9 +125,9 @@ func TestStartup_SnapshotWrittenDuringOperation(t *testing.T) {
 	drainBody(t, resp)
 
 	keyHash2 := sdkkey.PublicID(TestSDKKey2)
-	store, err := snapshot.NewLocalStore(dir)
+	store, err := snapshot.OpenBlobStore(context.Background(), "file://"+dir)
 	if err != nil {
-		t.Fatalf("NewLocalStore: %v", err)
+		t.Fatalf("OpenBlobStore: %v", err)
 	}
 
 	eventually(t,
@@ -161,9 +161,9 @@ func writeTestSnapshot(t *testing.T, dir, sdkKey string, payload []byte, capture
 	if err != nil {
 		t.Fatalf("EncodeEnvelope: %v", err)
 	}
-	store, err := snapshot.NewLocalStore(dir)
+	store, err := snapshot.OpenBlobStore(context.Background(), "file://"+dir)
 	if err != nil {
-		t.Fatalf("NewLocalStore: %v", err)
+		t.Fatalf("OpenBlobStore: %v", err)
 	}
 	if err := store.Put(context.Background(), keyHash, envelope); err != nil {
 		t.Fatalf("store.Put: %v", err)

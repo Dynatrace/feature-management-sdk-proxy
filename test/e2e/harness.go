@@ -118,10 +118,10 @@ func New(t *testing.T, opts Options) (*Harness, error) {
 	var snapshotDone chan struct{}
 
 	if opts.SnapshotDir != "" {
-		store, err := snapshot.NewLocalStore(opts.SnapshotDir)
+		store, err := snapshot.OpenBlobStore(ctx, "file://"+opts.SnapshotDir)
 		if err != nil {
 			cancel()
-			return nil, fmt.Errorf("snapshot.NewLocalStore: %w", err)
+			return nil, fmt.Errorf("snapshot.OpenBlobStore: %w", err)
 		}
 		loaded, writer, loadErr := initSnapshotWriter(ctx, store, flagCache, inst, logger)
 		snapshotWriter = writer

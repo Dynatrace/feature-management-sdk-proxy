@@ -16,7 +16,7 @@ Check readiness:
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "fmsp.fullname" . }} {{ .Values.service.port }}
   curl -i http://localhost:{{ .Values.service.port }}/readyz
 
-Snapshot persistence: {{ if .Values.snapshot.enabled }}s3://{{ .Values.snapshot.s3.bucket }}/{{ .Values.snapshot.s3.prefix }}{{ else }}disabled (pods start cold){{ end }}
+Snapshot persistence: {{ if .Values.snapshot.enabled }}{{ .Values.snapshot.url }}{{ else }}disabled (pods start cold){{ end }}
 Telemetry export:     {{ if .Values.otel.endpoint }}{{ .Values.otel.endpoint }}{{ else }}disabled (set otel.endpoint){{ end }}
 {{- if .Values.networkPolicy.enabled }}
 NetworkPolicy:        enabled (DNS{{ if .Values.networkPolicy.egress.https }} + HTTPS 443{{ end }} egress{{ with .Values.networkPolicy.extraEgress }} + {{ len . }} extra rule(s){{ end }})

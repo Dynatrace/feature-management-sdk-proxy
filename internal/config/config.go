@@ -1,14 +1,15 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/snapshot"
 )
 
 // Config holds all runtime configuration loaded from environment variables.
@@ -57,22 +58,9 @@ type Config struct {
 	// Range 1-100000, default 100. Env: SSE_SUBSCRIBE_BURST.
 	SSESubscribeBurst int
 
-	// Snapshot persistence (optional). When SnapshotBackend is "", persistence
-	// is disabled and all other Snapshot* fields are ignored.
-	//
-	// SnapshotBackend selects the persistence backend: "s3" or "local".
-	SnapshotBackend string
-
-	// S3-compatible object storage settings. Used when SnapshotBackend == "s3".
-	SnapshotS3Endpoint  string // optional; leave empty for AWS S3
-	SnapshotS3Bucket    string // required when backend is "s3"
-	SnapshotS3Region    string // required when backend is "s3"
-	SnapshotS3Prefix    string // optional key prefix; defaults to ""
-	SnapshotS3AccessKey Secret // optional; uses default credential chain when empty
-	SnapshotS3SecretKey Secret // optional; uses default credential chain when empty
-
-	// Local filesystem settings. Used when SnapshotBackend == "local".
-	SnapshotLocalDir string // required when backend is "local"; must be an absolute path
+	// SnapshotURL is the gocloud.dev/blob bucket URL for snapshots. Empty
+	// disables persistence. Env: SNAPSHOT_URL.
+	SnapshotURL string
 
 	// SnapshotWriteQueueSize is the maximum pending async snapshot writes.
 	// Range 1–10000, default 256.
@@ -80,8 +68,8 @@ type Config struct {
 
 	// SnapshotMaxAge is the threshold above which a loaded snapshot is classified
 	// as stale, triggering a loud warning and metric at startup. It is a warning
-	// threshold only — stale snapshots are still served. Ignored when SnapshotBackend
-	// is empty; setting SNAPSHOT_MAX_AGE without SNAPSHOT_BACKEND is an error.
+	// threshold only — stale snapshots are still served. Ignored when SnapshotURL
+	// is empty; setting SNAPSHOT_MAX_AGE without SNAPSHOT_URL is an error.
 	// Env: SNAPSHOT_MAX_AGE, default 24h, must be > 0.
 	SnapshotMaxAge time.Duration
 
@@ -100,15 +88,12 @@ type Config struct {
 	MaxBodyBytes int64
 }
 
-// LogValue implements slog.LogValuer. Secrets emit [REDACTED] automatically
-// via Secret's own LogValue — do not format credential fields with fmt or json.
-// Backend-specific fields (snapshot_s3_*, snapshot_local_dir) are only included
-// when the corresponding backend is active, to avoid [REDACTED] noise for operators
-// who have not configured snapshot persistence.
+// LogValue implements slog.LogValuer. Credential fields must use the Secret
+// type so they emit [REDACTED].
 func (c Config) LogValue() slog.Value {
-	snapshotBackend := c.SnapshotBackend
-	if snapshotBackend == "" {
-		snapshotBackend = "disabled"
+	snapshotBackend := "disabled"
+	if u, err := url.Parse(c.SnapshotURL); c.SnapshotURL != "" && err == nil {
+		snapshotBackend = u.Scheme
 	}
 	attrs := []slog.Attr{
 		slog.Int("port", c.Port),
@@ -130,26 +115,14 @@ func (c Config) LogValue() slog.Value {
 		slog.Duration("cache_inactivity_evict_after", c.CacheInactivityEvictAfter),
 		slog.Int64("max_body_bytes", c.MaxBodyBytes),
 	}
-	if c.SnapshotBackend == snapshotBackendS3 {
-		attrs = append(attrs,
-			slog.String("snapshot_s3_bucket", c.SnapshotS3Bucket),
-			slog.String("snapshot_s3_region", c.SnapshotS3Region),
-			slog.String("snapshot_s3_endpoint", c.SnapshotS3Endpoint),
-			slog.String("snapshot_s3_prefix", c.SnapshotS3Prefix),
-			slog.Any("snapshot_s3_access_key", c.SnapshotS3AccessKey),
-			slog.Any("snapshot_s3_secret_key", c.SnapshotS3SecretKey),
-		)
-	}
-	if c.SnapshotBackend == snapshotBackendLocal {
-		attrs = append(attrs, slog.String("snapshot_local_dir", c.SnapshotLocalDir))
+	if c.SnapshotURL != "" {
+		attrs = append(attrs, slog.String("snapshot_url", snapshot.RedactURL(c.SnapshotURL)))
 	}
 	return slog.GroupValue(attrs...)
 }
 
 const (
 	defaultCDNBaseDomain = "fm.dynatrace.com"
-	snapshotBackendS3    = "s3"
-	snapshotBackendLocal = "local"
 )
 
 // FromEnv loads configuration from environment variables.
@@ -254,39 +227,11 @@ func FromEnv() (Config, error) {
 		cfg.ProxyInstanceID = h
 	}
 
-	if v := os.Getenv("SNAPSHOT_BACKEND"); v != "" {
-		if v != snapshotBackendS3 && v != snapshotBackendLocal {
-			return Config{}, fmt.Errorf("invalid SNAPSHOT_BACKEND %q: must be \"s3\" or \"local\"", v)
+	if v := os.Getenv("SNAPSHOT_URL"); v != "" {
+		if err := snapshot.ValidateURL(v); err != nil {
+			return Config{}, fmt.Errorf("invalid SNAPSHOT_URL: %w", err)
 		}
-		cfg.SnapshotBackend = v
-	}
-
-	if cfg.SnapshotBackend == snapshotBackendS3 {
-		bucket := os.Getenv("SNAPSHOT_S3_BUCKET")
-		if bucket == "" {
-			return Config{}, errors.New("SNAPSHOT_S3_BUCKET is required when SNAPSHOT_BACKEND=s3")
-		}
-		region := os.Getenv("SNAPSHOT_S3_REGION")
-		if region == "" {
-			return Config{}, errors.New("SNAPSHOT_S3_REGION is required when SNAPSHOT_BACKEND=s3")
-		}
-		cfg.SnapshotS3Bucket = bucket
-		cfg.SnapshotS3Region = region
-		cfg.SnapshotS3Endpoint = os.Getenv("SNAPSHOT_S3_ENDPOINT")
-		cfg.SnapshotS3Prefix = os.Getenv("SNAPSHOT_S3_PREFIX")
-		cfg.SnapshotS3AccessKey = Secret(os.Getenv("SNAPSHOT_S3_ACCESS_KEY"))
-		cfg.SnapshotS3SecretKey = Secret(os.Getenv("SNAPSHOT_S3_SECRET_KEY"))
-	}
-
-	if cfg.SnapshotBackend == snapshotBackendLocal {
-		dir := os.Getenv("SNAPSHOT_LOCAL_DIR")
-		if dir == "" {
-			return Config{}, errors.New("SNAPSHOT_LOCAL_DIR is required when SNAPSHOT_BACKEND=local")
-		}
-		if !filepath.IsAbs(dir) {
-			return Config{}, fmt.Errorf("invalid SNAPSHOT_LOCAL_DIR %q: must be an absolute path", dir)
-		}
-		cfg.SnapshotLocalDir = dir
+		cfg.SnapshotURL = v
 	}
 
 	if v := os.Getenv("SNAPSHOT_WRITE_QUEUE_SIZE"); v != "" {
@@ -298,8 +243,8 @@ func FromEnv() (Config, error) {
 	}
 
 	if v := os.Getenv("SNAPSHOT_MAX_AGE"); v != "" {
-		if cfg.SnapshotBackend == "" {
-			return Config{}, fmt.Errorf("SNAPSHOT_MAX_AGE is set but SNAPSHOT_BACKEND is not configured — SNAPSHOT_MAX_AGE has no effect without a snapshot backend")
+		if cfg.SnapshotURL == "" {
+			return Config{}, fmt.Errorf("SNAPSHOT_MAX_AGE is set but SNAPSHOT_URL is not configured — SNAPSHOT_MAX_AGE has no effect without a snapshot backend")
 		}
 		d, err := time.ParseDuration(v)
 		if err != nil || d <= 0 {
