@@ -54,8 +54,8 @@ func TestBlobStore_PutAndGet(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			store := open(t)
 			body := []byte(`{"snapshot_version":1,"sdk_key_id":"dt01.server_us_ab3xy9kp2q","etag":"v1","captured_at":"2026-01-01T00:00:00Z","payload":"dGVzdA=="}`)
-			if err := store.Put(context.Background(), hashA, body); err != nil {
-				t.Fatalf("Put: %v", err)
+			if err := store.PutIfMatch(context.Background(), hashA, body, ""); err != nil {
+				t.Fatalf("PutIfMatch: %v", err)
 			}
 			got, err := store.Get(context.Background(), hashA)
 			if err != nil {
@@ -73,7 +73,7 @@ func TestBlobStore_List(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			store := open(t)
 			for _, k := range []string{hashB, hashC} {
-				if err := store.Put(context.Background(), k, []byte(`{}`)); err != nil {
+				if err := store.PutIfMatch(context.Background(), k, []byte(`{}`), ""); err != nil {
 					t.Fatalf("Put %s: %v", k, err)
 				}
 			}
@@ -120,8 +120,8 @@ func TestBlobStore_Delete_RemovesObject(t *testing.T) {
 	for name, open := range storeBackends(t) {
 		t.Run(name, func(t *testing.T) {
 			store := open(t)
-			if err := store.Put(context.Background(), hashA, []byte(`{}`)); err != nil {
-				t.Fatalf("Put: %v", err)
+			if err := store.PutIfMatch(context.Background(), hashA, []byte(`{}`), ""); err != nil {
+				t.Fatalf("PutIfMatch: %v", err)
 			}
 			if err := store.Delete(context.Background(), hashA); err != nil {
 				t.Fatalf("Delete: %v", err)
@@ -196,8 +196,8 @@ func TestBlobStore_PutIfMatch(t *testing.T) {
 func TestBlobStore_InvalidKeyID(t *testing.T) {
 	store := newFileStore(t, t.TempDir())
 	for _, bad := range []string{"abc", "../escape", "dt01.invalid_us_ab3xy9kp2q", "dt01.server_US_ab3xy9kp2q"} {
-		if err := store.Put(context.Background(), bad, []byte(`{}`)); err == nil {
-			t.Errorf("Put(%q): expected error, got nil", bad)
+		if err := store.PutIfMatch(context.Background(), bad, []byte(`{}`), ""); err == nil {
+			t.Errorf("PutIfMatch(%q): expected error, got nil", bad)
 		}
 		if _, err := store.Get(context.Background(), bad); err == nil {
 			t.Errorf("Get(%q): expected error, got nil", bad)
@@ -211,8 +211,8 @@ func TestBlobStore_InvalidKeyID(t *testing.T) {
 func TestBlobStore_File_ListSkipsNonSnapshotFiles(t *testing.T) {
 	dir := t.TempDir()
 	store := newFileStore(t, dir)
-	if err := store.Put(context.Background(), hashD, []byte(`{}`)); err != nil {
-		t.Fatalf("Put: %v", err)
+	if err := store.PutIfMatch(context.Background(), hashD, []byte(`{}`), ""); err != nil {
+		t.Fatalf("PutIfMatch: %v", err)
 	}
 	// Ignored: stray temp file, directory, nested object, invalid key ID.
 	if err := os.WriteFile(filepath.Join(dir, hashD+".json.18a2b3c4.tmp"), []byte(`{}`), 0o600); err != nil {
@@ -239,7 +239,7 @@ func TestBlobStore_File_ListSkipsNonSnapshotFiles(t *testing.T) {
 func TestBlobStore_File_CreatesDirIfMissing(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "snapshots")
 	store := newFileStore(t, dir)
-	if err := store.Put(context.Background(), hashB, []byte(`{}`)); err != nil {
+	if err := store.PutIfMatch(context.Background(), hashB, []byte(`{}`), ""); err != nil {
 		t.Fatalf("Put after auto-create: %v", err)
 	}
 	info, err := os.Stat(dir)
@@ -254,8 +254,8 @@ func TestBlobStore_File_CreatesDirIfMissing(t *testing.T) {
 func TestBlobStore_File_NoSidecarOrTempFiles(t *testing.T) {
 	dir := t.TempDir()
 	store := newFileStore(t, dir)
-	if err := store.Put(context.Background(), hashA, []byte(`{}`)); err != nil {
-		t.Fatalf("Put: %v", err)
+	if err := store.PutIfMatch(context.Background(), hashA, []byte(`{}`), ""); err != nil {
+		t.Fatalf("PutIfMatch: %v", err)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -277,8 +277,8 @@ func TestBlobStore_File_Prefix(t *testing.T) {
 		t.Fatalf("OpenBlobStore: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	if err := store.Put(context.Background(), hashA, []byte(`{}`)); err != nil {
-		t.Fatalf("Put: %v", err)
+	if err := store.PutIfMatch(context.Background(), hashA, []byte(`{}`), ""); err != nil {
+		t.Fatalf("PutIfMatch: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "snapshots", hashA+".json")); err != nil {
 		t.Errorf("expected object under prefix dir: %v", err)
@@ -301,8 +301,8 @@ func TestBlobStore_File_ConcurrentPuts(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			key := fmt.Sprintf("dt01.server_us_%010d", i)
-			if err := store.Put(context.Background(), key, []byte(`{}`)); err != nil {
-				t.Errorf("Put %s: %v", key, err)
+			if err := store.PutIfMatch(context.Background(), key, []byte(`{}`), ""); err != nil {
+				t.Errorf("PutIfMatch %s: %v", key, err)
 			}
 		}(i)
 	}
@@ -319,8 +319,8 @@ func TestBlobStore_File_ConcurrentPuts(t *testing.T) {
 func TestBlobStore_S3_WritesUnderPrefix(t *testing.T) {
 	fake := newS3Fake()
 	store, _ := newTestS3Store(t, fake)
-	if err := store.Put(context.Background(), hashA, []byte(`{}`)); err != nil {
-		t.Fatalf("Put: %v", err)
+	if err := store.PutIfMatch(context.Background(), hashA, []byte(`{}`), ""); err != nil {
+		t.Fatalf("PutIfMatch: %v", err)
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()

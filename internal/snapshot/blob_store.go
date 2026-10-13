@@ -119,17 +119,6 @@ func objectKey(keyID string) string {
 	return keyID + ".json"
 }
 
-// Put writes the snapshot body for the given key ID unconditionally.
-func (s *BlobStore) Put(ctx context.Context, keyID string, body []byte) error {
-	if !sdkkey.IsValidID(keyID) {
-		return fmt.Errorf("snapshot: blob: invalid key ID %q", keyID)
-	}
-	if err := s.bucket.WriteAll(ctx, objectKey(keyID), body, writerOptions()); err != nil {
-		return fmt.Errorf("snapshot: blob: put %s: %w", keyID, err)
-	}
-	return nil
-}
-
 // PutIfMatch implements Store.
 func (s *BlobStore) PutIfMatch(ctx context.Context, keyID string, body []byte, version string) error {
 	if !sdkkey.IsValidID(keyID) {

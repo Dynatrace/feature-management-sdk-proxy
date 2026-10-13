@@ -165,8 +165,8 @@ func writeTestSnapshot(t *testing.T, dir, sdkKey string, payload []byte, capture
 	if err != nil {
 		t.Fatalf("OpenBlobStore: %v", err)
 	}
-	if err := store.Put(context.Background(), keyHash, envelope); err != nil {
-		t.Fatalf("store.Put: %v", err)
+	if err := store.PutIfMatch(context.Background(), keyHash, envelope, ""); err != nil {
+		t.Fatalf("store.PutIfMatch: %v", err)
 	}
 }
 
