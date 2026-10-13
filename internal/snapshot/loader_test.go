@@ -46,9 +46,18 @@ func (f *fakeStore) Get(_ context.Context, keyHash string) ([]byte, error) {
 	}
 	b, ok := f.objects[keyHash]
 	if !ok {
-		return nil, errors.New("not found")
+		return nil, ErrNotFound
 	}
 	return b, nil
+}
+
+func (f *fakeStore) GetVersioned(ctx context.Context, keyHash string) ([]byte, string, error) {
+	b, err := f.Get(ctx, keyHash)
+	return b, "", err
+}
+
+func (f *fakeStore) PutIfMatch(ctx context.Context, keyHash string, body []byte, _ string) error {
+	return f.Put(ctx, keyHash, body)
 }
 
 func (f *fakeStore) List(_ context.Context) ([]string, error) {
@@ -71,7 +80,8 @@ func TestLoadAll_HappyPath(t *testing.T) {
 	store := newFakeStore()
 	payload := []byte(`{"flags":{}}`)
 	capturedAt := time.Now().Add(-1 * time.Minute)
-	body, err := EncodeEnvelope("abc123def456789a", `"v1"`, capturedAt, payload)
+	lastModified := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
+	body, err := EncodeEnvelope(Record{KeyID: "abc123def456789a", ETag: `"v1"`, LastModified: lastModified, CapturedAt: capturedAt, Payload: payload})
 	if err != nil {
 		t.Fatalf("EncodeEnvelope: %v", err)
 	}
@@ -95,6 +105,9 @@ func TestLoadAll_HappyPath(t *testing.T) {
 	}
 	if entry.ETag != `"v1"` {
 		t.Errorf("etag mismatch: %q", entry.ETag)
+	}
+	if !entry.LastModified.Equal(lastModified) {
+		t.Errorf("lastModified mismatch: %v", entry.LastModified)
 	}
 	if entry.FetchURL != "" {
 		t.Errorf("FetchURL must be empty after load, got %q", entry.FetchURL)
@@ -156,7 +169,7 @@ func TestLoadAll_GetError_SkipsContinues(t *testing.T) {
 	store := newFakeStore()
 	// Put one good entry and one bad entry.
 	payload := []byte(`{}`)
-	body, _ := EncodeEnvelope("good", "", time.Now(), payload)
+	body, _ := EncodeEnvelope(Record{KeyID: "good", ETag: "", CapturedAt: time.Now(), Payload: payload})
 	store.objects["good"] = body
 	store.objects["bad"] = []byte("data") // listed but Get will error
 
@@ -218,8 +231,12 @@ type selectiveErrorStore struct {
 	failKey string
 }
 
-func (s *selectiveErrorStore) Put(ctx context.Context, k string, b []byte) error {
-	return s.inner.Put(ctx, k, b)
+func (s *selectiveErrorStore) PutIfMatch(ctx context.Context, k string, b []byte, v string) error {
+	return s.inner.PutIfMatch(ctx, k, b, v)
+}
+func (s *selectiveErrorStore) GetVersioned(ctx context.Context, k string) ([]byte, string, error) {
+	b, err := s.Get(ctx, k)
+	return b, "", err
 }
 func (s *selectiveErrorStore) Get(ctx context.Context, k string) ([]byte, error) {
 	if k == s.failKey {

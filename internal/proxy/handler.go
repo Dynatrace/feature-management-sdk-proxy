@@ -51,7 +51,7 @@ var hopByHopHeaders = map[string]bool{
 // persist the new cache entry asynchronously. Defined here (rather than
 // importing internal/snapshot) to keep the dependency graph acyclic.
 type SnapshotNotifier interface {
-	OnConfigCached(keyID, etag string, payload []byte)
+	OnConfigCached(keyID string, entry cache.Entry)
 }
 
 // coldFetchResult carries the shared outcome of a singleflight cold-miss fetch.
@@ -242,6 +242,9 @@ func (h *Handler) serveFromCache(ctx context.Context, c *gin.Context, entry cach
 		}
 	}
 
+	if !entry.LastModified.IsZero() {
+		c.Header("Last-Modified", entry.LastModified.UTC().Format(http.TimeFormat))
+	}
 	if entry.ETag != "" && c.GetHeader("If-None-Match") == entry.ETag {
 		c.Header("ETag", entry.ETag)
 		c.Status(http.StatusNotModified)
@@ -341,7 +344,7 @@ func (h *Handler) doDemandRevalidate(ctx context.Context, sdkKey, key string, en
 			h.sseManager.OnConfigCached(sseCtx, sdkKey, result.Entry.Payload)
 		}
 		if h.snapshotNotifier != nil {
-			h.snapshotNotifier.OnConfigCached(key, result.Entry.ETag, result.Entry.Payload)
+			h.snapshotNotifier.OnConfigCached(key, *result.Entry)
 		}
 		h.recordDemandReval(ctx, "refreshed")
 		return demandRevalEntry{entry: *result.Entry}
@@ -497,9 +500,10 @@ func (h *Handler) coldFetch(ctx context.Context, sdkKey, key, target string) col
 			return coldFetchResult{resultLabel: resultBadGateway}
 		}
 		entry := cache.Entry{
-			Payload:   body,
-			ETag:      resp.Header.Get("ETag"),
-			FetchedAt: time.Now(),
+			Payload:      body,
+			ETag:         resp.Header.Get("ETag"),
+			LastModified: parseLastModified(resp.Header),
+			FetchedAt:    time.Now(),
 			// FetchURL contains the raw SDK key — in-memory use is permitted by design
 			// (CLAUDE.md invariant). Snapshot code MUST NOT persist this field as-is.
 			FetchURL:         target,
@@ -514,7 +518,7 @@ func (h *Handler) coldFetch(ctx context.Context, sdkKey, key, target string) col
 			h.sseManager.OnConfigCached(sseCtx, sdkKey, body)
 		}
 		if h.snapshotNotifier != nil {
-			h.snapshotNotifier.OnConfigCached(key, entry.ETag, body)
+			h.snapshotNotifier.OnConfigCached(key, entry)
 		}
 		return coldFetchResult{entry: &entry, resultLabel: resultMiss}
 	}
@@ -587,9 +591,10 @@ func (f *Fetcher) Fetch(ctx context.Context, _ string, fetchURL, etag string) (c
 
 	return cache.FetchResult{
 		Entry: &cache.Entry{
-			Payload:   body,
-			ETag:      resp.Header.Get("ETag"),
-			FetchedAt: time.Now(),
+			Payload:      body,
+			ETag:         resp.Header.Get("ETag"),
+			LastModified: parseLastModified(resp.Header),
+			FetchedAt:    time.Now(),
 			// FetchURL is set by the Refresher to preserve the original URL.
 			// OriginatingFetch is set by the Refresher.refresh after Fetch returns.
 		},
@@ -603,6 +608,15 @@ func (h *Handler) buildTarget(k sdkkey.Key) (string, bool) {
 		return "", false
 	}
 	return "https://cdn." + k.Geo() + "." + h.cdnBaseDomain + "/server/" + k.Raw() + ".json", true
+}
+
+// parseLastModified returns the upstream Last-Modified time, or zero when absent or malformed.
+func parseLastModified(h http.Header) time.Time {
+	t, err := http.ParseTime(h.Get("Last-Modified"))
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // sanitizeErr strips request URL values from *url.Error to prevent raw SDK

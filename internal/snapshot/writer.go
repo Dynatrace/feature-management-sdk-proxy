@@ -2,21 +2,24 @@ package snapshot
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
-	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/metrics"
 )
 
+// maxPutAttempts bounds compare-and-swap retries when other replicas write
+// the same key concurrently.
+const maxPutAttempts = 5
+
 // writeJob is an item queued for async persistence.
 type writeJob struct {
-	keyID    string
-	etag     string
-	payload  []byte
+	record   Record
 	isDelete bool // when true, Delete is called instead of Put
 }
 
@@ -27,6 +30,11 @@ type writeJob struct {
 // Writes are never on the hot path. A failed Put logs a warning and increments
 // a metric; it never blocks or fails the SDK request. When the queue is full,
 // the oldest pending job is dropped (same pattern as the billing retry buffer).
+//
+// Replicas share the store, so each Put is a compare-and-swap: the write is
+// skipped when the stored snapshot has the same upstream ETag or a newer
+// upstream Last-Modified (see Record.Supersedes), and is otherwise conditional
+// on the stored version so a concurrent writer is never silently overwritten.
 type Writer struct {
 	store  Store
 	inst   *metrics.Instruments
@@ -51,21 +59,31 @@ func NewWriter(store Store, inst *metrics.Instruments, logger *slog.Logger, queu
 
 // OnConfigCached is called by the proxy handler after a successful cold fetch (200).
 // This implements the hot-path notification; it is non-blocking.
-func (w *Writer) OnConfigCached(keyID, etag string, payload []byte) {
-	w.enqueue(writeJob{keyID: keyID, etag: etag, payload: payload})
+func (w *Writer) OnConfigCached(keyID string, entry cache.Entry) {
+	w.enqueue(writeJob{record: recordFromEntry(keyID, entry)})
 }
 
 // OnRefreshed implements cache.RefreshObserver. It is called by the background
 // refresher after a successful upstream 200 (never for 304 responses).
-func (w *Writer) OnRefreshed(keyID string, payload []byte) {
-	w.enqueue(writeJob{keyID: keyID, payload: payload})
+func (w *Writer) OnRefreshed(keyID string, entry cache.Entry) {
+	w.enqueue(writeJob{record: recordFromEntry(keyID, entry)})
+}
+
+func recordFromEntry(keyID string, e cache.Entry) Record {
+	return Record{
+		KeyID:        keyID,
+		ETag:         e.ETag,
+		LastModified: e.LastModified,
+		CapturedAt:   e.FetchedAt,
+		Payload:      e.Payload,
+	}
 }
 
 // OnInvalidated queues an async delete of the persisted snapshot for keyID.
 // It is called by the lifecycle handler when a key is rotated or deleted.
 // A failed delete logs a warning and increments a metric; it never blocks.
 func (w *Writer) OnInvalidated(keyID string) {
-	w.enqueue(writeJob{keyID: keyID, isDelete: true})
+	w.enqueue(writeJob{record: Record{KeyID: keyID}, isDelete: true})
 }
 
 func (w *Writer) enqueue(job writeJob) {
@@ -88,7 +106,7 @@ func (w *Writer) enqueue(job writeJob) {
 	select {
 	case dropped = <-w.queue:
 		w.logger.Warn("snapshot: write queue full, dropping oldest",
-			slog.String("sdk_key_public_id", dropped.keyID),
+			slog.String("sdk_key_public_id", dropped.record.KeyID),
 		)
 		w.inst.SnapshotWritesTotal.Add(context.Background(), 1, metric.WithAttributes(
 			attribute.String("result", "dropped"),
@@ -144,36 +162,61 @@ func (w *Writer) Shutdown(ctx context.Context) {
 
 func (w *Writer) persist(job writeJob) {
 	if job.isDelete {
-		w.persistDelete(job.keyID)
+		w.persistDelete(job.record.KeyID)
 		return
 	}
+	ctx := context.Background()
+	rec := job.record
 
-	now := time.Now()
-	body, err := EncodeEnvelope(job.keyID, job.etag, now, job.payload)
+	body, err := EncodeEnvelope(rec)
 	if err != nil {
-		w.logger.Warn("snapshot: encode failed",
-			slog.String("sdk_key_public_id", job.keyID),
-			slog.String("error", err.Error()),
-		)
-		w.inst.SnapshotWritesTotal.Add(context.Background(), 1,
-			metric.WithAttributes(attribute.String("result", "failure"), attribute.String("operation", "put")))
+		w.putFailed(rec.KeyID, "snapshot: encode failed", err)
 		return
 	}
 
-	if err := w.store.Put(context.Background(), job.keyID, body); err != nil {
-		w.logger.Warn("snapshot: write failed",
-			slog.String("sdk_key_public_id", job.keyID),
-			slog.String("error", err.Error()),
-		)
-		w.inst.SnapshotWritesTotal.Add(context.Background(), 1,
-			metric.WithAttributes(attribute.String("result", "failure"), attribute.String("operation", "put")))
+	for range maxPutAttempts {
+		stored, version, err := w.store.GetVersioned(ctx, rec.KeyID)
+		switch {
+		case errors.Is(err, ErrNotFound):
+			version = ""
+		case err != nil:
+			w.putFailed(rec.KeyID, "snapshot: write failed", err)
+			return
+		default:
+			if current, derr := DecodeEnvelope(stored); errors.Is(derr, ErrUnknownVersion) ||
+				(derr == nil && !rec.Supersedes(current)) {
+				// Same or newer upstream content already stored (possibly by a
+				// peer, or a newer binary during a rolling deploy).
+				w.inst.SnapshotWritesTotal.Add(ctx, 1,
+					metric.WithAttributes(attribute.String("result", "skipped"), attribute.String("operation", "put")))
+				return
+			}
+		}
+
+		err = w.store.PutIfMatch(ctx, rec.KeyID, body, version)
+		if errors.Is(err, ErrPreconditionFailed) {
+			continue // another writer won the race; re-read and compare
+		}
+		if err != nil {
+			w.putFailed(rec.KeyID, "snapshot: write failed", err)
+			return
+		}
+		w.inst.SnapshotWritesTotal.Add(ctx, 1,
+			metric.WithAttributes(attribute.String("result", "success"), attribute.String("operation", "put")))
+		w.inst.SnapshotAgeSeconds.Record(ctx, 0,
+			metric.WithAttributes(attribute.String("sdk_key_public_id", rec.KeyID)))
 		return
 	}
+	w.putFailed(rec.KeyID, "snapshot: write failed", ErrPreconditionFailed)
+}
 
+func (w *Writer) putFailed(keyID, msg string, err error) {
+	w.logger.Warn(msg,
+		slog.String("sdk_key_public_id", keyID),
+		slog.String("error", err.Error()),
+	)
 	w.inst.SnapshotWritesTotal.Add(context.Background(), 1,
-		metric.WithAttributes(attribute.String("result", "success"), attribute.String("operation", "put")))
-	w.inst.SnapshotAgeSeconds.Record(context.Background(), 0,
-		metric.WithAttributes(attribute.String("sdk_key_public_id", job.keyID)))
+		metric.WithAttributes(attribute.String("result", "failure"), attribute.String("operation", "put")))
 }
 
 func (w *Writer) persistDelete(keyID string) {

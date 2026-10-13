@@ -157,7 +157,7 @@ const h2sseURL = "https://sse.example.invalid"
 func writeTestSnapshot(t *testing.T, dir, sdkKey string, payload []byte, capturedAt time.Time) {
 	t.Helper()
 	keyHash := sdkkey.PublicID(sdkKey)
-	envelope, err := snapshot.EncodeEnvelope(keyHash, `"test-etag"`, capturedAt, payload)
+	envelope, err := snapshot.EncodeEnvelope(snapshot.Record{KeyID: keyHash, ETag: `"test-etag"`, CapturedAt: capturedAt, Payload: payload})
 	if err != nil {
 		t.Fatalf("EncodeEnvelope: %v", err)
 	}

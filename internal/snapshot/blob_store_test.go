@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -137,6 +138,56 @@ func TestBlobStore_Delete_MissingKeyReturnsNil(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if err := open(t).Delete(context.Background(), hashA); err != nil {
 				t.Errorf("Delete on missing key: expected nil, got %v", err)
+			}
+		})
+	}
+}
+
+func TestBlobStore_GetVersioned_MissingIsErrNotFound(t *testing.T) {
+	for name, open := range storeBackends(t) {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := open(t).GetVersioned(context.Background(), hashA); !errors.Is(err, ErrNotFound) {
+				t.Errorf("expected ErrNotFound, got %v", err)
+			}
+		})
+	}
+}
+
+func TestBlobStore_PutIfMatch(t *testing.T) {
+	for name, open := range storeBackends(t) {
+		t.Run(name, func(t *testing.T) {
+			store := open(t)
+			ctx := context.Background()
+
+			// Create-only succeeds once.
+			if err := store.PutIfMatch(ctx, hashA, []byte(`v1`), ""); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			if err := store.PutIfMatch(ctx, hashA, []byte(`dup`), ""); !errors.Is(err, ErrPreconditionFailed) {
+				t.Fatalf("second create: expected ErrPreconditionFailed, got %v", err)
+			}
+
+			_, v1, err := store.GetVersioned(ctx, hashA)
+			if err != nil || v1 == "" {
+				t.Fatalf("GetVersioned: version %q, err %v", v1, err)
+			}
+			if err := store.PutIfMatch(ctx, hashA, []byte(`v2`), v1); err != nil {
+				t.Fatalf("update at current version: %v", err)
+			}
+			// v1 is now stale: a writer that read before the update must lose.
+			if err := store.PutIfMatch(ctx, hashA, []byte(`stale`), v1); !errors.Is(err, ErrPreconditionFailed) {
+				t.Fatalf("update at stale version: expected ErrPreconditionFailed, got %v", err)
+			}
+
+			got, v2, err := store.GetVersioned(ctx, hashA)
+			if err != nil {
+				t.Fatalf("GetVersioned: %v", err)
+			}
+			if string(got) != "v2" {
+				t.Errorf("body = %q, want v2", got)
+			}
+			if v2 == v1 {
+				t.Errorf("version did not change after write: %q", v2)
 			}
 		})
 	}
@@ -338,14 +389,23 @@ func TestExtractPublicID(t *testing.T) {
 	}
 }
 
-// s3Fake is a minimal in-memory S3-compatible server for tests.
+// s3Fake is a minimal in-memory S3-compatible server for tests, including
+// conditional PUTs (If-Match / If-None-Match: *).
 type s3Fake struct {
 	mu      sync.Mutex
 	objects map[string][]byte
+	etags   map[string]string
+	writes  int
 }
 
 func newS3Fake() *s3Fake {
-	return &s3Fake{objects: make(map[string][]byte)}
+	return &s3Fake{objects: make(map[string][]byte), etags: make(map[string]string)}
+}
+
+func preconditionFailed(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusPreconditionFailed)
+	fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>PreconditionFailed</Code></Error>`)
 }
 
 // keys requires f.mu.
@@ -381,7 +441,19 @@ func (f *s3Fake) handler() http.Handler {
 				http.Error(w, "read error", http.StatusInternalServerError)
 				return
 			}
+			cur, exists := f.etags[key]
+			if r.Header.Get("If-None-Match") == "*" && exists {
+				preconditionFailed(w)
+				return
+			}
+			if m := r.Header.Get("If-Match"); m != "" && m != cur {
+				preconditionFailed(w)
+				return
+			}
+			f.writes++
 			f.objects[key] = body
+			f.etags[key] = fmt.Sprintf(`"%d"`, f.writes)
+			w.Header().Set("ETag", f.etags[key])
 			w.WriteHeader(http.StatusOK)
 
 		case http.MethodHead:
@@ -391,6 +463,7 @@ func (f *s3Fake) handler() http.Handler {
 				return
 			}
 			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+			w.Header().Set("ETag", f.etags[key])
 			w.WriteHeader(http.StatusOK)
 
 		case http.MethodGet:
@@ -403,10 +476,12 @@ func (f *s3Fake) handler() http.Handler {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+			w.Header().Set("ETag", f.etags[key])
 			_, _ = w.Write(data)
 
 		case http.MethodDelete:
 			delete(f.objects, key)
+			delete(f.etags, key)
 			w.WriteHeader(http.StatusNoContent)
 
 		default:

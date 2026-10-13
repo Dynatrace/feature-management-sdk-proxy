@@ -1043,23 +1043,83 @@ func TestHandler_Counter_NoIncrementOnUnrecognizedKeyFormat(t *testing.T) {
 
 // --- Snapshot integration tests ---
 
+type snapshotCall struct {
+	keyHash      string
+	etag         string
+	lastModified time.Time
+	payload      []byte
+}
+
 type mockSnapshotNotifier struct {
 	mu    sync.Mutex
-	calls []struct {
-		keyHash string
-		etag    string
-		payload []byte
+	calls []snapshotCall
+}
+
+func (m *mockSnapshotNotifier) OnConfigCached(keyHash string, entry cache.Entry) {
+	m.mu.Lock()
+	m.calls = append(m.calls, snapshotCall{keyHash, entry.ETag, entry.LastModified, entry.Payload})
+	m.mu.Unlock()
+}
+
+func TestHandler_PassesThroughUpstreamLastModified(t *testing.T) {
+	const lastModified = "Sun, 03 May 2026 12:00:00 GMT"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"v1"`)
+		w.Header().Set("Last-Modified", lastModified)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"flags":{}}`)
+	}))
+	defer upstream.Close()
+
+	notifier := &mockSnapshotNotifier{}
+	h, err := New("fm.test", newRedirectingClient(upstream), cache.New(), nil, notifier, nil, nil, nil, slog.Default(), testTracer)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for _, label := range []string{"miss", "hit"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/server/dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a.json", nil)
+		h.Handle(ginContext(rec, req))
+		if got := rec.Header().Get("Last-Modified"); got != lastModified {
+			t.Errorf("%s: Last-Modified = %q, want %q", label, got, lastModified)
+		}
+		if got := rec.Header().Get("ETag"); got != `"v1"` {
+			t.Errorf("%s: ETag = %q, want %q", label, got, `"v1"`)
+		}
+	}
+
+	want, _ := http.ParseTime(lastModified)
+	notifier.mu.Lock()
+	defer notifier.mu.Unlock()
+	if len(notifier.calls) != 1 || !notifier.calls[0].lastModified.Equal(want) {
+		t.Errorf("snapshot notifier calls = %+v, want one with lastModified %v", notifier.calls, want)
 	}
 }
 
-func (m *mockSnapshotNotifier) OnConfigCached(keyHash, etag string, payload []byte) {
-	m.mu.Lock()
-	m.calls = append(m.calls, struct {
-		keyHash string
-		etag    string
-		payload []byte
-	}{keyHash, etag, payload})
-	m.mu.Unlock()
+func TestFetcher_CapturesUpstreamLastModified(t *testing.T) {
+	cases := map[string]time.Time{
+		"Sun, 03 May 2026 12:00:00 GMT": time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC),
+		"":                              {},
+		"not a date":                    {},
+	}
+	for header, want := range cases {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if header != "" {
+				w.Header().Set("Last-Modified", header)
+			}
+			w.Header().Set("ETag", `"v2"`)
+			_, _ = io.WriteString(w, `{}`)
+		}))
+		res, err := NewFetcher(upstream.Client(), slog.Default(), 1<<20).Fetch(context.Background(), "k", upstream.URL, "")
+		upstream.Close()
+		if err != nil || res.Entry == nil {
+			t.Fatalf("Last-Modified %q: Fetch: %+v, %v", header, res, err)
+		}
+		if !res.Entry.LastModified.Equal(want) || res.Entry.ETag != `"v2"` {
+			t.Errorf("Last-Modified %q: got etag %q lastModified %v, want %q %v", header, res.Entry.ETag, res.Entry.LastModified, `"v2"`, want)
+		}
+	}
 }
 
 func TestHandler_CacheMiss_InvokesSnapshotNotifier(t *testing.T) {

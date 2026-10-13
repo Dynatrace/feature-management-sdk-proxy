@@ -40,6 +40,7 @@ type RefreshIntervalProvider interface {
 type Entry struct {
 	Payload          []byte
 	ETag             string
+	LastModified     time.Time // upstream Last-Modified; zero when absent
 	FetchedAt        time.Time
 	FetchURL         string // full upstream URL for background TTL revalidation
 	OriginatingFetch any    // opaque span context set by the proxy layer; interpreted only by tracing code
@@ -208,7 +209,7 @@ type Fetcher interface {
 // payload from upstream (200 response). It is never called for 304 responses
 // or fetch errors. keyID is the SDK key public identifier (sdkkey.PublicID(sdkKey)).
 type RefreshObserver interface {
-	OnRefreshed(keyID string, payload []byte)
+	OnRefreshed(keyID string, entry Entry)
 }
 
 // RefreshFailureObserver is notified when the background refresher fails to
@@ -356,7 +357,7 @@ func (r *Refresher) refresh(ctx context.Context) {
 			r.cache.Set(keyID, *result.Entry)
 			r.logger.Debug("cache: background refresh — new content received (200), cache updated", slog.String("sdk_key_public_id", keyID))
 			for _, obs := range r.observers {
-				obs.OnRefreshed(keyID, result.Entry.Payload)
+				obs.OnRefreshed(keyID, *result.Entry)
 			}
 			continue
 		}

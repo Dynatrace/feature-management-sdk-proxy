@@ -126,8 +126,8 @@ func (m *Manager) OnConfigCached(ctx context.Context, sdkKey string, payload []b
 // OnRefreshed implements cache.RefreshObserver. It is called by the background
 // refresher when a 200 response updates the cached payload (never on 304).
 // keyID is sdkkey.PublicID(sdkKey).
-func (m *Manager) OnRefreshed(keyID string, payload []byte) {
-	sseURL, inactivitySec, ok := ExtractSSEURL(payload)
+func (m *Manager) OnRefreshed(keyID string, entry cache.Entry) {
+	sseURL, inactivitySec, ok := ExtractSSEURL(entry.Payload)
 	if !ok {
 		return
 	}

@@ -92,11 +92,17 @@ If the write queue fills faster than the backend can drain it, excess writes are
 
 When multiple replicas share the same bucket:
 
-- Each replica writes independently. Writes are not coordinated: the last write for a key wins.
+- Each snapshot records the upstream CDN `ETag` and `Last-Modified` alongside the payload.
+- Writes are compare-and-swap. A replica reads the stored snapshot and skips the write
+  (`proxy.snapshot.writes.total{result="skipped"}`) if it has the same ETag or a newer `Last-Modified`; ties and missing
+  `Last-Modified` fall back to the fetch time. Otherwise it writes conditionally on the version it read (S3 `If-Match`,
+  GCS generation match, Azure `If-Match`) and re-reads on conflict. An older revision never overwrites a newer one, and
+  N replicas seeing the same change produce one write.
+- S3-compatible stores must support conditional `PutObject` (`If-Match`, `If-None-Match`); stores that ignore these
+  headers degrade to last-writer-wins. `file://` coordinates only within one process.
 - Reads at startup are independent. Each replica loads the full set of stored snapshots.
-- There is no fencing or locking. A snapshot written by a replica running an older version may briefly coexist with a
-  newer version's entry. The snapshot envelope format is versioned; unknown versions are skipped at load time with a
-  `skipped_unknown_version` result on `proxy.snapshot.load.total`.
+- The snapshot envelope format is versioned; unknown versions are skipped at load time with a `skipped_unknown_version`
+  result on `proxy.snapshot.load.total`, and are never overwritten by an older binary.
 
 During a rolling deploy, replicas on different versions may read each other's snapshots. Stale but valid snapshots are
 loaded and served; the background TTL refresh will replace them within the cache TTL window.

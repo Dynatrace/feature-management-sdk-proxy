@@ -31,9 +31,18 @@ func (s *stubStore) Get(_ context.Context, keyID string) ([]byte, error) {
 	}
 	b, ok := s.data[keyID]
 	if !ok {
-		return nil, errors.New("not found")
+		return nil, ErrNotFound
 	}
 	return b, nil
+}
+
+func (s *stubStore) GetVersioned(ctx context.Context, keyID string) ([]byte, string, error) {
+	b, err := s.Get(ctx, keyID)
+	return b, "", err
+}
+
+func (s *stubStore) PutIfMatch(ctx context.Context, keyID string, body []byte, _ string) error {
+	return s.Put(ctx, keyID, body)
 }
 
 func (s *stubStore) Put(_ context.Context, keyID string, body []byte) error {
@@ -70,7 +79,7 @@ func noopFallbackLogger() *slog.Logger {
 
 func makeSnapshot(t *testing.T, keyID, etag string, capturedAt time.Time, payload []byte) []byte {
 	t.Helper()
-	data, err := EncodeEnvelope(keyID, etag, capturedAt, payload)
+	data, err := EncodeEnvelope(Record{KeyID: keyID, ETag: etag, CapturedAt: capturedAt, Payload: payload})
 	if err != nil {
 		t.Fatalf("EncodeEnvelope: %v", err)
 	}
@@ -348,9 +357,12 @@ type trackingStore struct {
 func (s *trackingStore) Get(ctx context.Context, keyID string) ([]byte, error) {
 	return s.inner.Get(ctx, keyID)
 }
-func (s *trackingStore) Put(ctx context.Context, keyID string, body []byte) error {
+func (s *trackingStore) GetVersioned(ctx context.Context, keyID string) ([]byte, string, error) {
+	return s.inner.GetVersioned(ctx, keyID)
+}
+func (s *trackingStore) PutIfMatch(ctx context.Context, keyID string, body []byte, version string) error {
 	s.onPut()
-	return s.inner.Put(ctx, keyID, body)
+	return s.inner.PutIfMatch(ctx, keyID, body, version)
 }
 func (s *trackingStore) List(ctx context.Context) ([]string, error) { return s.inner.List(ctx) }
 func (s *trackingStore) Delete(ctx context.Context, keyID string) error {

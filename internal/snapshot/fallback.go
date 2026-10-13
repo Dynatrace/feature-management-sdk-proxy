@@ -95,7 +95,7 @@ func (f *Fallback) checkAndApply(ctx context.Context, keyID, currentETag string,
 		return
 	}
 
-	_, snapshotETag, capturedAt, payload, err := DecodeEnvelope(data)
+	rec, err := DecodeEnvelope(data)
 	if err != nil {
 		if !errors.Is(err, ErrUnknownVersion) {
 			f.logger.Warn("snapshot: fallback envelope decode failed",
@@ -108,6 +108,7 @@ func (f *Fallback) checkAndApply(ctx context.Context, keyID, currentETag string,
 		return
 	}
 
+	snapshotETag, capturedAt := rec.ETag, rec.CapturedAt
 	if snapshotETag == currentETag {
 		f.inst.SnapshotOutageFallbackTotal.Add(ctx, 1,
 			metric.WithAttributes(attribute.String("result", "same_etag")))
@@ -129,10 +130,11 @@ func (f *Fallback) checkAndApply(ctx context.Context, keyID, currentETag string,
 	}
 
 	newEntry := cache.Entry{
-		Payload:   payload,
-		ETag:      snapshotETag,
-		FetchedAt: capturedAt,
-		FetchURL:  cur.FetchURL,
+		Payload:      rec.Payload,
+		ETag:         snapshotETag,
+		LastModified: rec.LastModified,
+		FetchedAt:    capturedAt,
+		FetchURL:     cur.FetchURL,
 	}
 
 	if !f.cache.SetIfNewer(keyID, newEntry, currentFetchedAt, currentETag) {
