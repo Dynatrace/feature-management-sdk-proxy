@@ -55,7 +55,7 @@ func LoadAll(ctx context.Context, store Store, c *cache.Cache, inst *metrics.Ins
 			continue
 		}
 
-		gotHash, etag, capturedAt, payload, err := DecodeEnvelope(body)
+		rec, err := DecodeEnvelope(body)
 		if err != nil {
 			if errors.Is(err, ErrUnknownVersion) {
 				logger.Warn("snapshot: load: skipping object with unknown version",
@@ -72,20 +72,17 @@ func LoadAll(ctx context.Context, store Store, c *cache.Cache, inst *metrics.Ins
 			continue
 		}
 
-		// Prefer the key hash from the object key (used for cache.Set) over the
-		// one embedded in the envelope — they should match, but the object key is
-		// canonical since it was used to write the object.
-		_ = gotHash
-
+		// The object key, not rec.KeyID, is canonical: it was used to write the object.
 		c.Set(keyID, cache.Entry{
-			Payload:   payload,
-			ETag:      etag,
-			FetchedAt: capturedAt,
+			Payload:      rec.Payload,
+			ETag:         rec.ETag,
+			LastModified: rec.LastModified,
+			FetchedAt:    rec.CapturedAt,
 			// FetchURL intentionally empty — repaired on first SDK request.
 		})
 
 		if inst.SnapshotAgeSeconds != nil {
-			age := time.Since(capturedAt).Seconds()
+			age := time.Since(rec.CapturedAt).Seconds()
 			inst.SnapshotAgeSeconds.Record(ctx, age,
 				metric.WithAttributes(attribute.String("sdk_key_public_id", keyID)),
 			)

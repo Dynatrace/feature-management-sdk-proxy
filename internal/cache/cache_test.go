@@ -235,7 +235,8 @@ type mockObserver struct {
 	}
 }
 
-func (m *mockObserver) OnRefreshed(keyHash string, payload []byte) {
+func (m *mockObserver) OnRefreshed(keyHash string, entry Entry) {
+	payload := entry.Payload
 	m.mu.Lock()
 	m.calls = append(m.calls, struct {
 		keyHash string

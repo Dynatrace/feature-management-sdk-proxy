@@ -15,14 +15,17 @@ allowing it to serve requests immediately even when the upstream CDN is unreacha
 
 ## Backends
 
-Two backends are available, selected by `SNAPSHOT_BACKEND`:
+The backend is selected by the scheme of `SNAPSHOT_URL`, opened with [gocloud.dev/blob](https://gocloud.dev/howto/blob/):
 
-| Backend | Use case                                                                                                         |
-|---------|------------------------------------------------------------------------------------------------------------------|
-| `local` | Single-node deployments or development. Snapshots are written to a local directory on disk.                      |
-| `s3`    | Multi-replica or Kubernetes deployments. Snapshots are stored in an S3-compatible bucket shared across replicas. |
+| Scheme      | Use case                                                                                             |
+|-------------|------------------------------------------------------------------------------------------------------|
+| `file://`   | Single-node deployments or development. Snapshots are written to a local directory on disk.          |
+| `s3://`     | Multi-replica deployments on AWS S3 or an S3-compatible store (MinIO, Ceph RGW, Cloudflare R2, ...). |
+| `gs://`     | Multi-replica deployments on Google Cloud Storage.                                                   |
+| `azblob://` | Multi-replica deployments on Azure Blob Storage.                                                     |
 
-When `SNAPSHOT_BACKEND` is unset, persistence is disabled and the proxy always starts cold.
+When `SNAPSHOT_URL` is unset, persistence is disabled and the proxy always starts cold. Any other scheme fails startup.
+Each snapshot is stored as `<prefix><keyID>.json`, where the optional `prefix` URL parameter scopes a shared bucket.
 
 ## Startup Behavior
 
@@ -44,20 +47,18 @@ instance took.
 
 See [configuration.md](configuration.md) for the full variable reference. Common setup examples:
 
-**Local backend (single node):**
+**Local directory (single node):**
 
 ```bash
-SNAPSHOT_BACKEND=local
-SNAPSHOT_LOCAL_DIR=/var/lib/sdk-proxy/snapshots
+SNAPSHOT_URL=file:///var/lib/sdk-proxy/snapshots
 ```
 
-**S3 backend (multi-replica):**
+**Shared bucket (multi-replica):**
 
 ```bash
-SNAPSHOT_BACKEND=s3
-SNAPSHOT_S3_BUCKET=my-proxy-snapshots
-SNAPSHOT_S3_REGION=us-east-1
-SNAPSHOT_S3_PREFIX=prod/
+SNAPSHOT_URL='s3://my-proxy-snapshots?region=us-east-1&prefix=prod'
+SNAPSHOT_URL='gs://my-proxy-snapshots?prefix=prod'
+SNAPSHOT_URL='azblob://my-proxy-snapshots?storage_account=myaccount&prefix=prod'
 ```
 
 **Staleness threshold:**
@@ -89,13 +90,19 @@ If the write queue fills faster than the backend can drain it, excess writes are
 
 ## Multi-Replica Deployments
 
-When multiple replicas share the same S3 backend:
+When multiple replicas share the same bucket:
 
-- Each replica writes independently. Writes are not coordinated: the last write for a key wins.
+- Each snapshot records the upstream CDN `ETag` and `Last-Modified` alongside the payload.
+- Writes are compare-and-swap. A replica reads the stored snapshot and skips the write
+  (`proxy.snapshot.writes.total{result="skipped"}`) if it has the same ETag or a newer `Last-Modified`; ties and missing
+  `Last-Modified` fall back to the fetch time. Otherwise it writes conditionally on the version it read (S3 `If-Match`,
+  GCS generation match, Azure `If-Match`) and re-reads on conflict. An older revision never overwrites a newer one, and
+  N replicas seeing the same change produce one write.
+- S3-compatible stores must support conditional `PutObject` (`If-Match`, `If-None-Match`); stores that ignore these
+  headers degrade to last-writer-wins. `file://` coordinates only within one process.
 - Reads at startup are independent. Each replica loads the full set of stored snapshots.
-- There is no fencing or locking. A snapshot written by a replica running an older version may briefly coexist with a
-  newer version's entry. The snapshot envelope format is versioned; unknown versions are skipped at load time with a
-  `skipped_unknown_version` result on `proxy.snapshot.load.total`.
+- The snapshot envelope format is versioned; unknown versions are skipped at load time with a `skipped_unknown_version`
+  result on `proxy.snapshot.load.total`, and are never overwritten by an older binary.
 
 During a rolling deploy, replicas on different versions may read each other's snapshots. Stale but valid snapshots are
 loaded and served; the background TTL refresh will replace them within the cache TTL window.
@@ -110,10 +117,11 @@ in-memory cache. See [ADR-0003](adr/0003-cross-proxy-snapshot-fallback.md) for t
 **Key properties:**
 
 - The check is async: the CDN failure response path is never blocked.
-- Checks are debounced per key at 60-second intervals to limit S3 request rates during sustained outages.
+- Checks are debounced per key at 60-second intervals to limit object-storage request rates during sustained
+  outages.
 - A successful load updates `FetchedAt` to the snapshot's `captured_at` but does not write back to the store (only a
   proxy that independently verified with the CDN should write snapshots).
-- This path is only active when `SNAPSHOT_BACKEND` is set. Proxies without persistence are unaffected.
+- This path is only active when `SNAPSHOT_URL` is set. Proxies without persistence are unaffected.
 
 **Known limitation:** if all proxies in a cluster lost CDN access before any of them wrote a newer snapshot, there is
 nothing newer in the store to fall back to. This is expected and acceptable.
@@ -122,23 +130,24 @@ Metric: `proxy.snapshot.outage_fallback.total{result}`. See [telemetry.md](telem
 
 ## Authentication
 
-By default, the proxy pulls from the AWS S3 client's default credential chain, which includes environment variables,
-shared credentials files, and EC2/ECS metadata. The recommendation is to leave it to the environment to provide
-credentials when running in AWS.
+The proxy has no storage-credential settings of its own. Each provider uses its native default credential chain, so the
+recommendation is to let the environment provide credentials:
 
-For overriding the destination bucket or providing static credentials, the following variables are supported:
+- **AWS S3:** EKS IRSA or Pod Identity, ECS task roles, EC2 instance profiles; or static `AWS_ACCESS_KEY_ID` and
+  `AWS_SECRET_ACCESS_KEY` (optionally `AWS_SESSION_TOKEN`), or `AWS_PROFILE` with a shared credentials file.
+- **Google Cloud Storage:** GKE Workload Identity or the GCE metadata server; or `GOOGLE_APPLICATION_CREDENTIALS`
+  pointing at a mounted service-account key file.
+- **Azure Blob Storage:** AKS Workload Identity or managed identity (`AZURE_CLIENT_ID` selects a user-assigned
+  identity); or `AZURE_STORAGE_KEY`, `AZURE_STORAGE_SAS_TOKEN`, or `AZURE_STORAGE_CONNECTION_STRING`. The account name
+  comes from the `storage_account` URL parameter or `AZURE_STORAGE_ACCOUNT`.
 
-```bash
-SNAPSHOT_S3_BUCKET=my-proxy-snapshots
-SNAPSHOT_S3_REGION=us-east-1
-SNAPSHOT_S3_PREFIX=prod/            # optional prefix for snapshot keys in the bucket
-SNAPSHOT_S3_ACCESS_KEY_ID=AKIA...   # optional static credentials
-SNAPSHOT_S3_SECRET_ACCESS_KEY=...   # optional static credentials
-```
-
-For compatibility with Cloudflare R2, or other providers, the `SNAPSHOT_S3_ENDPOINT` variable is also supported to
-override the S3 endpoint URL:
+S3-compatible stores take the AWS variables plus an endpoint override. For example, Cloudflare R2:
 
 ```bash
-SNAPSHOT_S3_ENDPOINT=https://<account_id>.r2.cloudflarestorage.com
+SNAPSHOT_URL='s3://my-proxy-snapshots?region=auto&endpoint=https://<account_id>.r2.cloudflarestorage.com'
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
 ```
+
+Self-hosted stores such as MinIO usually also need `use_path_style=true`. See
+[configuration.md](configuration.md#snapshot_url) for all URL parameters.

@@ -48,18 +48,14 @@ data:
   # BILLING_FLUSH_INTERVAL: 60s
   # BILLING_RETRY_BUFFER_SIZE: "1000"
 
-  # Snapshot persistence — choose local or s3, not both
-  # SNAPSHOT_BACKEND: local
-  # SNAPSHOT_LOCAL_DIR: /snapshots    # must match the volume mount path below
+  # Snapshot persistence — set exactly one SNAPSHOT_URL
+  # SNAPSHOT_URL: file:///snapshots   # must match the volume mount path below
+  # SNAPSHOT_URL: s3://my-proxy-snapshots?region=us-east-1&prefix=prod/sdk-proxy
+  # SNAPSHOT_URL: s3://my-proxy-snapshots?region=us-east-1&endpoint=http://minio:9000&use_path_style=true
+  # SNAPSHOT_URL: gs://my-proxy-snapshots?prefix=prod/sdk-proxy
+  # SNAPSHOT_URL: azblob://my-proxy-snapshots?storage_account=myaccount&prefix=prod/sdk-proxy
   # SNAPSHOT_MAX_AGE: 24h
   # SNAPSHOT_WRITE_QUEUE_SIZE: "256"
-
-  # SNAPSHOT_BACKEND: s3
-  # SNAPSHOT_S3_BUCKET: my-proxy-snapshots
-  # SNAPSHOT_S3_REGION: us-east-1
-  # SNAPSHOT_S3_PREFIX: prod/sdk-proxy          # optional; useful when sharing a bucket
-  # SNAPSHOT_S3_ENDPOINT: http://minio:9000     # omit to use the AWS regional endpoint
-  # SNAPSHOT_MAX_AGE: 24h
 
   # OpenTelemetry — set the endpoint to enable metrics and traces export
   # OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.monitoring:4318
@@ -69,19 +65,18 @@ data:
   # OTEL_TRACES_SAMPLER_ARG: ""   # e.g. "0.1" for 10 % sampling with traceidratio
 
 ---
-# ── Secret — S3 credentials (optional) ────────────────────────────────────────
-# Only needed when SNAPSHOT_BACKEND=s3 and you are not using IAM/IRSA.
-# Prefer IRSA or Workload Identity in production; omit this Secret entirely
-# and remove the envFrom reference in the Deployment when using role-based auth.
+# ── Secret — storage credentials (optional) ───────────────────────────────────
+# Only needed for static credentials (provider env vars). Omit with IRSA or
+# Workload Identity.
 #
 # apiVersion: v1
 # kind: Secret
 # metadata:
-#   name: sdk-proxy-s3-credentials
+#   name: sdk-proxy-storage-credentials
 #   # namespace: sdk-proxy
 # stringData:
-#   SNAPSHOT_S3_ACCESS_KEY: AKIAIOSFODNN7EXAMPLE
-#   SNAPSHOT_S3_SECRET_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+#   AWS_ACCESS_KEY_ID: AKIAIOSFODNN7EXAMPLE
+#   AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
 
 ---
 # ── Deployment ─────────────────────────────────────────────────────────────────
@@ -127,9 +122,9 @@ spec:
           envFrom:
             - configMapRef:
                 name: sdk-proxy-config
-            # Uncomment when using S3 with static credentials:
+            # Uncomment when using static storage credentials:
             # - secretRef:
-            #     name: sdk-proxy-s3-credentials
+            #     name: sdk-proxy-storage-credentials
 
           env:
             # PROXY_INSTANCE_ID is set per-pod via the Downward API so that
@@ -169,12 +164,12 @@ spec:
               cpu: 500m
               memory: 256Mi
 
-          # Uncomment when using SNAPSHOT_BACKEND=local:
+          # Uncomment when using a file:// SNAPSHOT_URL:
           # volumeMounts:
           #   - name: snapshots
           #     mountPath: /snapshots
 
-      # Uncomment when using SNAPSHOT_BACKEND=local:
+      # Uncomment when using a file:// SNAPSHOT_URL:
       # volumes:
       #   - name: snapshots
       #     persistentVolumeClaim:
@@ -202,7 +197,7 @@ spec:
 
 ---
 # ── PersistentVolumeClaim — local snapshot storage (optional) ──────────────────
-# Uncomment when using SNAPSHOT_BACKEND=local and reference it in the Deployment
+# Uncomment when using a file:// SNAPSHOT_URL and reference it in the Deployment
 # volumes block above.
 #
 # apiVersion: v1
@@ -221,7 +216,7 @@ spec:
 # ── HorizontalPodAutoscaler (optional) ────────────────────────────────────────
 # Requires the Kubernetes metrics-server. Note: local snapshot persistence
 # (ReadWriteOnce PVCs) is incompatible with HPA scaling to multiple nodes —
-# use S3 or no persistence when enabling autoscaling.
+# use a shared bucket or no persistence when enabling autoscaling.
 #
 # apiVersion: autoscaling/v2
 # kind: HorizontalPodAutoscaler

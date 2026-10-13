@@ -71,32 +71,25 @@ otel:
   # -- `OTEL_TRACES_SAMPLER_ARG`, e.g. `"0.1"`.
   tracesSamplerArg: ""
 
-# Snapshot persistence to S3-compatible object storage, so restarted and new
-# pods start warm. See docs/snapshot.md.
+# Snapshot persistence to object storage, so restarted and new pods start warm.
+# See docs/snapshot.md.
 snapshot:
-  # -- Enable snapshot persistence (`SNAPSHOT_BACKEND=s3`).
+  # -- Enable snapshot persistence.
   enabled: false
+  # -- Bucket URL (`SNAPSHOT_URL`), e.g. `s3://bucket?region=us-east-1`, `gs://bucket`,
+  # `azblob://container?storage_account=name`. Required when `snapshot.enabled`.
+  url: ""
   # -- Snapshots older than this are treated as stale at startup (`SNAPSHOT_MAX_AGE`, proxy default 24h).
   maxAge: null
   # -- Async write queue size (`SNAPSHOT_WRITE_QUEUE_SIZE`, proxy default 256).
   writeQueueSize: null
-  s3:
-    # -- Bucket name. Required when `snapshot.enabled`.
-    bucket: ""
-    # -- Bucket region. Required when `snapshot.enabled`; any placeholder for self-hosted stores.
-    region: ""
-    # -- Endpoint override for S3-compatible stores (MinIO, Ceph, GCS interoperability).
-    endpoint: ""
-    # -- Object key prefix, for sharing a bucket.
-    prefix: ""
+  # Static credentials as provider env vars (e.g. `AWS_ACCESS_KEY_ID`). Leave empty for
+  # workload identity.
   credentials:
-    # -- Existing Secret with keys `accessKey` and `secretKey`. Leave empty and unset the keys
-    # below to use workload identity via `serviceAccount.annotations`.
+    # -- Existing Secret loaded with `envFrom`.
     existingSecret: ""
-    # -- Static access key. The chart creates a Secret. Prefer `existingSecret` or workload identity.
-    accessKey: ""
-    # -- Static secret key, set together with `accessKey`.
-    secretKey: ""
+    # -- Env var name to value; the chart creates a Secret loaded with `envFrom`.
+    env: {}
 
 # -- Additional container environment variables (list of `EnvVar`), e.g. `CACHE_INACTIVITY_EVICT_AFTER`.
 extraEnv: []

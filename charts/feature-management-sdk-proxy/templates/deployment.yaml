@@ -55,6 +55,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "fmsp.fullname" . }}
+            {{- with include "fmsp.credentialsSecretName" . }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
             {{- with .Values.extraEnvFrom }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -63,18 +67,6 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            {{- with include "fmsp.credentialsSecretName" . }}
-            - name: SNAPSHOT_S3_ACCESS_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ . }}
-                  key: accessKey
-            - name: SNAPSHOT_S3_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ . }}
-                  key: secretKey
-            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

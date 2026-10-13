@@ -205,62 +205,58 @@ func TestFromEnv_BillingRetryBufferSize_TooLarge(t *testing.T) {
 	}
 }
 
-func TestFromEnv_SnapshotBackend_S3(t *testing.T) {
-	t.Setenv("SNAPSHOT_BACKEND", "s3")
-	t.Setenv("SNAPSHOT_S3_BUCKET", "my-bucket")
-	t.Setenv("SNAPSHOT_S3_REGION", "us-east-1")
-
+func TestFromEnv_SnapshotURL_Disabled(t *testing.T) {
 	cfg, err := FromEnv()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.SnapshotBackend != "s3" {
-		t.Errorf("SnapshotBackend = %q, want \"s3\"", cfg.SnapshotBackend)
+	if cfg.SnapshotURL != "" {
+		t.Errorf("SnapshotURL = %q, want empty", cfg.SnapshotURL)
 	}
 }
 
-func TestFromEnv_SnapshotBackend_Local(t *testing.T) {
-	t.Setenv("SNAPSHOT_BACKEND", "local")
-	t.Setenv("SNAPSHOT_LOCAL_DIR", "/tmp/snapshots")
-
-	cfg, err := FromEnv()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestFromEnv_SnapshotURL_Valid(t *testing.T) {
+	cases := []string{
+		"s3://my-bucket?region=us-east-1",
+		"s3://my-bucket?region=any&endpoint=http://minio:9000&use_path_style=true&prefix=snapshots",
+		"gs://my-bucket",
+		"azblob://my-container?storage_account=myaccount",
+		"file:///var/lib/sdk-proxy/snapshots",
 	}
-	if cfg.SnapshotBackend != "local" {
-		t.Errorf("SnapshotBackend = %q, want \"local\"", cfg.SnapshotBackend)
-	}
-	if cfg.SnapshotLocalDir != "/tmp/snapshots" {
-		t.Errorf("SnapshotLocalDir = %q, want \"/tmp/snapshots\"", cfg.SnapshotLocalDir)
-	}
-}
-
-func TestFromEnv_SnapshotBackend_Local_MissingDir(t *testing.T) {
-	t.Setenv("SNAPSHOT_BACKEND", "local")
-	t.Setenv("SNAPSHOT_LOCAL_DIR", "")
-
-	_, err := FromEnv()
-	if err == nil {
-		t.Fatal("expected error when SNAPSHOT_LOCAL_DIR is empty")
+	for _, v := range cases {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("SNAPSHOT_URL", v)
+			cfg, err := FromEnv()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.SnapshotURL != v {
+				t.Errorf("SnapshotURL = %q, want %q", cfg.SnapshotURL, v)
+			}
+		})
 	}
 }
 
-func TestFromEnv_SnapshotBackend_Local_RelativePath(t *testing.T) {
-	t.Setenv("SNAPSHOT_BACKEND", "local")
-	t.Setenv("SNAPSHOT_LOCAL_DIR", "relative/path")
-
-	_, err := FromEnv()
-	if err == nil {
-		t.Fatal("expected error for relative SNAPSHOT_LOCAL_DIR")
+func TestFromEnv_SnapshotURL_UnsupportedScheme(t *testing.T) {
+	cases := []string{"gcs://my-bucket", "http://minio:9000/bucket", "my-bucket", "mem://"}
+	for _, v := range cases {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("SNAPSHOT_URL", v)
+			_, err := FromEnv()
+			if err == nil {
+				t.Fatalf("SNAPSHOT_URL=%q: expected error, got nil", v)
+			}
+			if !strings.Contains(err.Error(), "SNAPSHOT_URL") || !strings.Contains(err.Error(), "unsupported URL scheme") {
+				t.Errorf("error %q should name SNAPSHOT_URL and the unsupported scheme", err)
+			}
+		})
 	}
 }
 
-func TestFromEnv_SnapshotBackend_Invalid(t *testing.T) {
-	t.Setenv("SNAPSHOT_BACKEND", "gcs")
-
-	_, err := FromEnv()
-	if err == nil {
-		t.Fatal("expected error for invalid SNAPSHOT_BACKEND")
+func TestFromEnv_SnapshotURL_Unparseable(t *testing.T) {
+	t.Setenv("SNAPSHOT_URL", "s3://bad\x7f%zz")
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("expected error for unparseable SNAPSHOT_URL")
 	}
 }
 
@@ -293,8 +289,7 @@ func TestFromEnv_SnapshotMaxAge_Default(t *testing.T) {
 }
 
 func TestFromEnv_SnapshotMaxAge_ValidOverride(t *testing.T) {
-	t.Setenv("SNAPSHOT_BACKEND", "local")
-	t.Setenv("SNAPSHOT_LOCAL_DIR", "/tmp/snapshots")
+	t.Setenv("SNAPSHOT_URL", "file:///tmp/snapshots")
 	t.Setenv("SNAPSHOT_MAX_AGE", "6h")
 
 	cfg, err := FromEnv()
@@ -310,8 +305,7 @@ func TestFromEnv_SnapshotMaxAge_Invalid(t *testing.T) {
 	cases := []string{"abc", "-1h", "0s"}
 	for _, v := range cases {
 		t.Run(v, func(t *testing.T) {
-			t.Setenv("SNAPSHOT_BACKEND", "local")
-			t.Setenv("SNAPSHOT_LOCAL_DIR", "/tmp/snapshots")
+			t.Setenv("SNAPSHOT_URL", "file:///tmp/snapshots")
 			t.Setenv("SNAPSHOT_MAX_AGE", v)
 			_, err := FromEnv()
 			if err == nil {
@@ -321,12 +315,12 @@ func TestFromEnv_SnapshotMaxAge_Invalid(t *testing.T) {
 	}
 }
 
-func TestFromEnv_SnapshotMaxAge_WithoutBackend(t *testing.T) {
+func TestFromEnv_SnapshotMaxAge_WithoutURL(t *testing.T) {
 	t.Setenv("SNAPSHOT_MAX_AGE", "6h")
 
 	_, err := FromEnv()
 	if err == nil {
-		t.Fatal("expected error when SNAPSHOT_MAX_AGE set without SNAPSHOT_BACKEND")
+		t.Fatal("expected error when SNAPSHOT_MAX_AGE set without SNAPSHOT_URL")
 	}
 }
 

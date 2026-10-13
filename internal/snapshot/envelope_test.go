@@ -13,56 +13,94 @@ func TestEnvelope_RoundTrip(t *testing.T) {
 	etag := `"v42"`
 	capturedAt := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
 
-	data, err := EncodeEnvelope(keyHash, etag, capturedAt, payload)
+	lastModified := time.Date(2026, 5, 3, 11, 59, 0, 0, time.UTC)
+
+	data, err := EncodeEnvelope(Record{KeyID: keyHash, ETag: etag, LastModified: lastModified, CapturedAt: capturedAt, Payload: payload})
 	if err != nil {
 		t.Fatalf("EncodeEnvelope: %v", err)
 	}
 
-	gotKey, gotETag, gotAt, gotPayload, err := DecodeEnvelope(data)
+	got, err := DecodeEnvelope(data)
 	if err != nil {
 		t.Fatalf("DecodeEnvelope: %v", err)
 	}
-	if gotKey != keyHash {
-		t.Errorf("keyHash: got %q, want %q", gotKey, keyHash)
+	if got.KeyID != keyHash {
+		t.Errorf("keyHash: got %q, want %q", got.KeyID, keyHash)
 	}
-	if gotETag != etag {
-		t.Errorf("etag: got %q, want %q", gotETag, etag)
+	if got.ETag != etag {
+		t.Errorf("etag: got %q, want %q", got.ETag, etag)
 	}
-	if !gotAt.Equal(capturedAt) {
-		t.Errorf("capturedAt: got %v, want %v", gotAt, capturedAt)
+	if !got.LastModified.Equal(lastModified) {
+		t.Errorf("lastModified: got %v, want %v", got.LastModified, lastModified)
 	}
-	if !bytes.Equal(gotPayload, payload) {
-		t.Errorf("payload mismatch: got %q, want %q", gotPayload, payload)
+	if !got.CapturedAt.Equal(capturedAt) {
+		t.Errorf("capturedAt: got %v, want %v", got.CapturedAt, capturedAt)
+	}
+	if !bytes.Equal(got.Payload, payload) {
+		t.Errorf("payload mismatch: got %q, want %q", got.Payload, payload)
+	}
+}
+
+func TestEnvelope_LastModifiedOmittedWhenZero(t *testing.T) {
+	data, err := EncodeEnvelope(Record{KeyID: "k", CapturedAt: time.Now()})
+	if err != nil {
+		t.Fatalf("EncodeEnvelope: %v", err)
+	}
+	if bytes.Contains(data, []byte("last_modified")) {
+		t.Errorf("zero LastModified should be omitted: %s", data)
+	}
+}
+
+func TestRecord_Supersedes(t *testing.T) {
+	t0 := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+	cases := []struct {
+		name        string
+		next, prior Record
+		want        bool
+	}{
+		{"same etag", Record{ETag: "a", LastModified: t1, CapturedAt: t1}, Record{ETag: "a", LastModified: t0, CapturedAt: t0}, false},
+		{"newer last-modified", Record{ETag: "b", LastModified: t1, CapturedAt: t0}, Record{ETag: "a", LastModified: t0, CapturedAt: t1}, true},
+		{"older last-modified", Record{ETag: "b", LastModified: t0, CapturedAt: t1}, Record{ETag: "a", LastModified: t1, CapturedAt: t0}, false},
+		{"equal last-modified, newer capture", Record{ETag: "b", LastModified: t0, CapturedAt: t1}, Record{ETag: "a", LastModified: t0, CapturedAt: t0}, true},
+		{"missing last-modified, newer capture", Record{ETag: "b", CapturedAt: t1}, Record{ETag: "a", LastModified: t0, CapturedAt: t0}, true},
+		{"missing last-modified, older capture", Record{ETag: "b", CapturedAt: t0}, Record{ETag: "a", CapturedAt: t1}, false},
+		{"empty etags", Record{CapturedAt: t1}, Record{CapturedAt: t0}, true},
+	}
+	for _, tc := range cases {
+		if got := tc.next.Supersedes(tc.prior); got != tc.want {
+			t.Errorf("%s: Supersedes = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 
 func TestEnvelope_PayloadByteFidelity(t *testing.T) {
 	// Arbitrary bytes including null, high bytes — must survive base64 round-trip.
 	payload := []byte{0x00, 0x01, 0xFF, 0xFE, 0x7B, 0x22, 0x7D}
-	data, err := EncodeEnvelope("k", "", time.Now(), payload)
+	data, err := EncodeEnvelope(Record{KeyID: "k", CapturedAt: time.Now(), Payload: payload})
 	if err != nil {
 		t.Fatalf("EncodeEnvelope: %v", err)
 	}
-	_, _, _, got, err := DecodeEnvelope(data)
+	got, err := DecodeEnvelope(data)
 	if err != nil {
 		t.Fatalf("DecodeEnvelope: %v", err)
 	}
-	if !bytes.Equal(got, payload) {
-		t.Errorf("byte-fidelity failed: got %v, want %v", got, payload)
+	if !bytes.Equal(got.Payload, payload) {
+		t.Errorf("byte-fidelity failed: got %v, want %v", got.Payload, payload)
 	}
 }
 
 func TestEnvelope_UnknownVersionRejected(t *testing.T) {
 	// Manually craft an envelope with a higher version number.
 	raw := []byte(`{"snapshot_version":999,"sdk_key_id":"k","etag":"","captured_at":"2026-01-01T00:00:00Z","payload":""}`)
-	_, _, _, _, err := DecodeEnvelope(raw)
+	_, err := DecodeEnvelope(raw)
 	if !errors.Is(err, ErrUnknownVersion) {
 		t.Errorf("expected ErrUnknownVersion, got %v", err)
 	}
 }
 
 func TestEnvelope_MalformedJSON(t *testing.T) {
-	_, _, _, _, err := DecodeEnvelope([]byte(`not json`))
+	_, err := DecodeEnvelope([]byte(`not json`))
 	if err == nil {
 		t.Error("expected error for malformed JSON, got nil")
 	}
@@ -71,17 +109,17 @@ func TestEnvelope_MalformedJSON(t *testing.T) {
 func TestEnvelope_ForwardCompatUnknownFields(t *testing.T) {
 	// A known version with extra unknown fields should still decode without error.
 	raw := []byte(`{"snapshot_version":1,"sdk_key_id":"k","etag":"e","captured_at":"2026-01-01T00:00:00Z","payload":"aGVsbG8=","future_field":"ignored"}`)
-	keyID, etag, _, payload, err := DecodeEnvelope(raw)
+	got, err := DecodeEnvelope(raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if keyID != "k" {
-		t.Errorf("keyID: got %q", keyID)
+	if got.KeyID != "k" {
+		t.Errorf("keyID: got %q", got.KeyID)
 	}
-	if etag != "e" {
-		t.Errorf("etag: got %q", etag)
+	if got.ETag != "e" {
+		t.Errorf("etag: got %q", got.ETag)
 	}
-	if string(payload) != "hello" {
-		t.Errorf("payload: got %q", payload)
+	if string(got.Payload) != "hello" {
+		t.Errorf("payload: got %q", got.Payload)
 	}
 }

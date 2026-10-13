@@ -80,8 +80,8 @@ helm install sdk-proxy ./charts/feature-management-sdk-proxy --namespace sdk-pro
 ```
 
 The chart wires the health probes, sets `PROXY_INSTANCE_ID` to the pod name, sizes the termination grace period for a
-clean shutdown, and runs the container as non-root with a read-only root filesystem. Snapshot persistence (S3 or local
-PVC), OpenTelemetry export, ingress, autoscaling, and a PodDisruptionBudget are configured through values. See
+clean shutdown, and runs the container as non-root with a read-only root filesystem. Snapshot persistence (S3, GCS, Azure
+Blob), OpenTelemetry export, ingress, autoscaling, and a PodDisruptionBudget are configured through values. See
 [charts/feature-management-sdk-proxy/README.md](charts/feature-management-sdk-proxy/README.md), which also lists the
 required egress and an optional NetworkPolicy.
 
@@ -123,7 +123,7 @@ All configuration is via environment variables with safe defaults.
 | `SHUTDOWN_TIMEOUT`            | `30s`              | Grace period for draining in-flight requests on shutdown.                     |
 | `PROXY_INSTANCE_ID`           | hostname           | Identifies this replica in usage records. In Kubernetes, set to the pod name. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | —                  | Enables telemetry export when set.                                            |
-| `SNAPSHOT_BACKEND`            | —                  | Persistence backend: `local` or `s3`. Unset to disable.                       |
+| `SNAPSHOT_URL`                | —                  | Snapshot bucket: `s3://`, `gs://`, `azblob://`, `file://`. Unset to disable.  |
 
 See [docs/configuration.md](docs/configuration.md) for the full reference.
 

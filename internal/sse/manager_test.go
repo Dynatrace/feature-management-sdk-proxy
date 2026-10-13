@@ -152,7 +152,7 @@ func TestManager_OnRefreshed_SameURLIsNoop(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
-	m.OnRefreshed(keyHash, payload) // same URL
+	m.OnRefreshed(keyHash, cache.Entry{Payload: payload}) // same URL
 
 	time.Sleep(300 * time.Millisecond)
 	if n := connCount.Load(); n != 1 {

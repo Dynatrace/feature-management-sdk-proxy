@@ -125,9 +125,9 @@ func TestStartup_SnapshotWrittenDuringOperation(t *testing.T) {
 	drainBody(t, resp)
 
 	keyHash2 := sdkkey.PublicID(TestSDKKey2)
-	store, err := snapshot.NewLocalStore(dir)
+	store, err := snapshot.OpenBlobStore(context.Background(), "file://"+dir)
 	if err != nil {
-		t.Fatalf("NewLocalStore: %v", err)
+		t.Fatalf("OpenBlobStore: %v", err)
 	}
 
 	eventually(t,
@@ -157,16 +157,16 @@ const h2sseURL = "https://sse.example.invalid"
 func writeTestSnapshot(t *testing.T, dir, sdkKey string, payload []byte, capturedAt time.Time) {
 	t.Helper()
 	keyHash := sdkkey.PublicID(sdkKey)
-	envelope, err := snapshot.EncodeEnvelope(keyHash, `"test-etag"`, capturedAt, payload)
+	envelope, err := snapshot.EncodeEnvelope(snapshot.Record{KeyID: keyHash, ETag: `"test-etag"`, CapturedAt: capturedAt, Payload: payload})
 	if err != nil {
 		t.Fatalf("EncodeEnvelope: %v", err)
 	}
-	store, err := snapshot.NewLocalStore(dir)
+	store, err := snapshot.OpenBlobStore(context.Background(), "file://"+dir)
 	if err != nil {
-		t.Fatalf("NewLocalStore: %v", err)
+		t.Fatalf("OpenBlobStore: %v", err)
 	}
-	if err := store.Put(context.Background(), keyHash, envelope); err != nil {
-		t.Fatalf("store.Put: %v", err)
+	if err := store.PutIfMatch(context.Background(), keyHash, envelope, ""); err != nil {
+		t.Fatalf("store.PutIfMatch: %v", err)
 	}
 }
 

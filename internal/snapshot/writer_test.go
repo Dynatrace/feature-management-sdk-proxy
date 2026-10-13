@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/dynatrace/feature-management-sdk-proxy/internal/cache"
 )
 
 type countingStore struct {
@@ -16,7 +18,7 @@ type countingStore struct {
 	delFn   func(keyHash string) error
 }
 
-func (s *countingStore) Put(_ context.Context, keyHash string, _ []byte) error {
+func (s *countingStore) PutIfMatch(_ context.Context, keyHash string, _ []byte, _ string) error {
 	if s.putFn != nil {
 		if err := s.putFn(keyHash); err != nil {
 			return err
@@ -29,7 +31,11 @@ func (s *countingStore) Put(_ context.Context, keyHash string, _ []byte) error {
 }
 
 func (s *countingStore) Get(_ context.Context, _ string) ([]byte, error) {
-	return nil, errors.New("not implemented")
+	return nil, ErrNotFound
+}
+
+func (s *countingStore) GetVersioned(_ context.Context, _ string) ([]byte, string, error) {
+	return nil, "", ErrNotFound
 }
 
 func (s *countingStore) List(_ context.Context) ([]string, error) {
@@ -57,7 +63,7 @@ func TestWriter_OnConfigCached_WritesPersisted(t *testing.T) {
 	done := make(chan struct{})
 	go func() { defer close(done); w.Run(ctx) }()
 
-	w.OnConfigCached("key1", `"v1"`, []byte(`{"flags":{}}`))
+	w.OnConfigCached("key1", cache.Entry{ETag: `"v1"`, Payload: []byte(`{"flags":{}}`)})
 
 	// Let the writer drain.
 	time.Sleep(50 * time.Millisecond)
@@ -79,7 +85,7 @@ func TestWriter_OnRefreshed_WritesPersisted(t *testing.T) {
 	done := make(chan struct{})
 	go func() { defer close(done); w.Run(ctx) }()
 
-	w.OnRefreshed("key2", []byte(`{}`))
+	w.OnRefreshed("key2", cache.Entry{Payload: []byte(`{}`)})
 
 	time.Sleep(50 * time.Millisecond)
 	cancel()
@@ -106,7 +112,7 @@ func TestWriter_PutError_NoBlock(t *testing.T) {
 	returned := make(chan struct{})
 	go func() {
 		defer close(returned)
-		w.OnConfigCached("k", "", []byte(`{}`))
+		w.OnConfigCached("k", cache.Entry{ETag: "", Payload: []byte(`{}`)})
 	}()
 	select {
 	case <-returned:
@@ -135,15 +141,15 @@ func TestWriter_QueueFull_DropsOldest(t *testing.T) {
 	go func() { defer close(done); w.Run(ctx) }()
 
 	// First job will be picked up by Run immediately, blocking on store.Put.
-	w.OnConfigCached("k0", "", []byte(`{}`))
+	w.OnConfigCached("k0", cache.Entry{ETag: "", Payload: []byte(`{}`)})
 	time.Sleep(20 * time.Millisecond) // let Run pick up k0
 
 	// Fill the queue.
-	w.OnConfigCached("k1", "", []byte(`{}`))
-	w.OnConfigCached("k2", "", []byte(`{}`))
+	w.OnConfigCached("k1", cache.Entry{ETag: "", Payload: []byte(`{}`)})
+	w.OnConfigCached("k2", cache.Entry{ETag: "", Payload: []byte(`{}`)})
 
 	// This enqueue should drop k1 (oldest in queue).
-	w.OnConfigCached("k3", "", []byte(`{}`))
+	w.OnConfigCached("k3", cache.Entry{ETag: "", Payload: []byte(`{}`)})
 
 	close(block) // unblock all puts
 	time.Sleep(100 * time.Millisecond)
@@ -213,8 +219,8 @@ func TestWriter_Shutdown_DrainsQueue(t *testing.T) {
 	w := NewWriter(store, noopInst(t), noopLogger(), 16)
 	// Do NOT start Run — test Shutdown drain path directly.
 
-	w.OnConfigCached("k1", "", []byte(`{}`))
-	w.OnConfigCached("k2", "", []byte(`{}`))
+	w.OnConfigCached("k1", cache.Entry{ETag: "", Payload: []byte(`{}`)})
+	w.OnConfigCached("k2", cache.Entry{ETag: "", Payload: []byte(`{}`)})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

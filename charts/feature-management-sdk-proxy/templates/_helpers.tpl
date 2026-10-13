@@ -76,7 +76,7 @@ workload identity is used.
 {{- with .Values.snapshot.credentials }}
 {{- if .existingSecret }}
 {{- .existingSecret }}
-{{- else if .accessKey }}
+{{- else if .env }}
 {{- printf "%s-snapshot" (include "fmsp.fullname" $) }}
 {{- end }}
 {{- end }}
@@ -90,14 +90,11 @@ render time instead of producing a pod that exits 1 at startup.
 {{- define "fmsp.validate" -}}
 {{- with .Values.snapshot }}
 {{- if .enabled }}
-{{- if or (not .s3.bucket) (not .s3.region) }}
-{{- fail "snapshot.s3.bucket and snapshot.s3.region are required when snapshot.enabled=true" }}
+{{- if not .url }}
+{{- fail "snapshot.url is required when snapshot.enabled=true" }}
 {{- end }}
-{{- if and .credentials.existingSecret (or .credentials.accessKey .credentials.secretKey) }}
-{{- fail "set either snapshot.credentials.existingSecret or snapshot.credentials.accessKey/secretKey, not both" }}
-{{- end }}
-{{- if ne (empty .credentials.accessKey) (empty .credentials.secretKey) }}
-{{- fail "snapshot.credentials.accessKey and snapshot.credentials.secretKey must be set together" }}
+{{- if and .credentials.existingSecret .credentials.env }}
+{{- fail "set either snapshot.credentials.existingSecret or snapshot.credentials.env, not both" }}
 {{- end }}
 {{- end }}
 {{- end }}

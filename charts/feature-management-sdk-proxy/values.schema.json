@@ -163,6 +163,10 @@
         "enabled": {
           "type": "boolean"
         },
+        "url": {
+          "type": "string",
+          "pattern": "^$|^(s3|gs|azblob|file)://"
+        },
         "maxAge": {
           "type": [
             "string",
@@ -178,35 +182,20 @@
           "minimum": 1,
           "maximum": 10000
         },
-        "s3": {
-          "type": "object",
-          "properties": {
-            "bucket": {
-              "type": "string"
-            },
-            "region": {
-              "type": "string"
-            },
-            "endpoint": {
-              "type": "string"
-            },
-            "prefix": {
-              "type": "string"
-            }
-          },
-          "additionalProperties": false
-        },
         "credentials": {
           "type": "object",
           "properties": {
             "existingSecret": {
               "type": "string"
             },
-            "accessKey": {
-              "type": "string"
-            },
-            "secretKey": {
-              "type": "string"
+            "env": {
+              "type": "object",
+              "propertyNames": {
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
             }
           },
           "additionalProperties": false

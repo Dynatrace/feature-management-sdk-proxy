@@ -240,24 +240,57 @@ Snapshot persistence is **optional**. When disabled (the default), the proxy sta
 cache entries are written asynchronously to the configured backend and loaded back on startup to reduce cold-start
 latency.
 
-Two backends are supported: `s3` (any S3-compatible object store) and `local` (a directory on the local filesystem).
+The backend is selected by a single bucket URL, `SNAPSHOT_URL`, opened with
+[gocloud.dev/blob](https://gocloud.dev/howto/blob/). AWS S3 (and S3-compatible stores), Google Cloud Storage, Azure
+Blob Storage, and the local filesystem are supported.
 
 See [snapshot.md](snapshot.md) for startup behavior and deployment guidance.
 
-### `SNAPSHOT_BACKEND`
+### `SNAPSHOT_URL`
 
 **Optional.** Default: unset (persistence disabled).
 
-Selects the persistence backend.
+The bucket that holds snapshot objects. The scheme selects the provider:
 
-| Value   | Backend                                                                        |
-|---------|--------------------------------------------------------------------------------|
-| `s3`    | Any S3-compatible object store (AWS S3, MinIO, Ceph, GCS S3-compat)            |
-| `local` | Local filesystem directory, suitable for single-node or air-gapped deployments |
+| Scheme      | Backend                                                    | Example                                                 |
+|-------------|------------------------------------------------------------|---------------------------------------------------------|
+| `s3://`     | AWS S3 and S3-compatible stores (MinIO, Ceph RGW, ...)     | `s3://my-proxy-snapshots?region=us-east-1`              |
+| `gs://`     | Google Cloud Storage                                       | `gs://my-proxy-snapshots`                               |
+| `azblob://` | Azure Blob Storage (the host is the container name)        | `azblob://my-proxy-snapshots?storage_account=myaccount` |
+| `file://`   | Local directory, for single-node or air-gapped deployments | `file:///var/lib/sdk-proxy/snapshots`                   |
+
+An unparseable URL or any other scheme fails startup with a descriptive error.
+
+Query parameters:
+
+| Parameter                     | Applies to | Description                                                                                        |
+|-------------------------------|------------|----------------------------------------------------------------------------------------------------|
+| `prefix`                      | all        | Key prefix for all snapshot objects, for sharing a bucket. A trailing `/` is added if missing.     |
+| `region`                      | `s3`       | Bucket region. For self-hosted stores, any non-empty placeholder.                                  |
+| `endpoint`                    | `s3`       | Endpoint override for S3-compatible stores, e.g. `http://minio:9000`.                              |
+| `use_path_style`              | `s3`       | `true` for path-style addressing. Most self-hosted S3-compatible stores need this with `endpoint`. |
+| `storage_account`             | `azblob`   | Storage account name. Alternatively set `AZURE_STORAGE_ACCOUNT`.                                   |
+| `create_dir`, `dir_file_mode` | `file`     | Default to creating the directory with mode `0700` (`dir_file_mode` is decimal, so `448`).         |
+
+Other provider parameters are passed through; see the gocloud.dev
+[URL reference](https://gocloud.dev/concepts/urls/) for each driver. Values containing `&`, `?` or `=` (such as an
+`endpoint` with a query string) must be URL-encoded.
 
 ```bash
-SNAPSHOT_BACKEND=local
+SNAPSHOT_URL='s3://my-proxy-snapshots?region=us-east-1&prefix=prod/sdk-proxy'
+SNAPSHOT_URL='s3://snapshots?region=us-east-1&endpoint=http://minio:9000&use_path_style=true'
+SNAPSHOT_URL='gs://my-proxy-snapshots?prefix=prod'
+SNAPSHOT_URL='azblob://my-proxy-snapshots?storage_account=myaccount'
+SNAPSHOT_URL=file:///var/lib/sdk-proxy/snapshots
 ```
+
+> **Breaking change:** `SNAPSHOT_URL` replaces `SNAPSHOT_BACKEND`, `SNAPSHOT_LOCAL_DIR`, and `SNAPSHOT_S3_*`, which are
+> no longer read. Migrate `SNAPSHOT_BACKEND=s3` + `SNAPSHOT_S3_BUCKET=b` + `SNAPSHOT_S3_REGION=r` +
+> `SNAPSHOT_S3_ENDPOINT=e` + `SNAPSHOT_S3_PREFIX=p` to `s3://b?region=r&endpoint=e&use_path_style=true&prefix=p`
+> (`use_path_style=true` matches the previous behavior when an endpoint was set), `SNAPSHOT_S3_ACCESS_KEY` /
+> `SNAPSHOT_S3_SECRET_KEY` to `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, and `SNAPSHOT_BACKEND=local` +
+> `SNAPSHOT_LOCAL_DIR=/d` to `file:///d`. Existing snapshots keep the same `<prefix>/<keyID>.json` layout and are
+> loaded as-is, except under an old `SNAPSHOT_S3_PREFIX` ending in `/`, which was written as `<prefix>//<keyID>.json`.
 
 ---
 
@@ -275,7 +308,7 @@ after an extended outage. The default of 24 hours is suitable for most deploymen
 SNAPSHOT_MAX_AGE=24h
 ```
 
-> ⚠️ `SNAPSHOT_MAX_AGE` has no effect unless `SNAPSHOT_BACKEND` is also set.
+> ⚠️ `SNAPSHOT_MAX_AGE` has no effect unless `SNAPSHOT_URL` is also set; setting it alone fails startup.
 
 ---
 
@@ -317,95 +350,25 @@ Must be a positive integer. Values below `1` are rejected at startup.
 
 ---
 
-### S3 Backend Variables
+### Snapshot Storage Credentials
 
-Used when `SNAPSHOT_BACKEND=s3`.
+The proxy has no storage-credential variables of its own. Each provider uses its native credential chain, so workload
+identity works with no static secrets:
 
-#### `SNAPSHOT_S3_BUCKET`
+| Provider | Keyless (recommended)                                                         | Static credentials                                                                                           |
+|----------|-------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
+| AWS S3   | EKS IRSA / Pod Identity, ECS task roles, EC2 instance profiles                | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (+ `AWS_SESSION_TOKEN`), or `AWS_PROFILE`                      |
+| GCS      | GKE Workload Identity, GCE metadata server                                    | `GOOGLE_APPLICATION_CREDENTIALS` pointing at a mounted service-account key file                              |
+| Azure    | AKS Workload Identity, managed identity (`AZURE_CLIENT_ID` for user-assigned) | `AZURE_STORAGE_KEY` (with the account name), `AZURE_STORAGE_SAS_TOKEN`, or `AZURE_STORAGE_CONNECTION_STRING` |
 
-**Required when `SNAPSHOT_BACKEND=s3`.**
+S3-compatible stores (MinIO, Ceph) use the AWS variables. These are object-storage credentials, never SDK keys.
 
-The name of the S3 bucket that holds snapshot objects.
-
-```bash
-SNAPSHOT_S3_BUCKET=my-proxy-snapshots
-```
-
----
-
-#### `SNAPSHOT_S3_REGION`
-
-**Required when `SNAPSHOT_BACKEND=s3`.**
-
-The AWS region for the bucket. For self-hosted S3-compatible services, use any non-empty placeholder (e.g. `us-east-1`).
-
-```bash
-SNAPSHOT_S3_REGION=us-east-1
-```
-
----
-
-#### `SNAPSHOT_S3_ENDPOINT`
-
-**Optional.**
-
-Override the S3 endpoint URL. Leave unset to use the AWS regional endpoint derived from `SNAPSHOT_S3_REGION`. Set this
-for self-hosted S3-compatible services (MinIO, Ceph, etc.).
-
-```bash
-SNAPSHOT_S3_ENDPOINT=http://minio:9000
-```
-
----
-
-#### `SNAPSHOT_S3_PREFIX`
-
-**Optional.** Default: `""` (objects stored at the bucket root).
-
-A key prefix applied to all snapshot objects. Useful for sharing a bucket across multiple proxy deployments.
-
-```bash
-SNAPSHOT_S3_PREFIX=prod/sdk-proxy
-```
-
----
-
-#### `SNAPSHOT_S3_ACCESS_KEY` / `SNAPSHOT_S3_SECRET_KEY`
-
-**Optional.** Default: AWS SDK default credential chain (env vars, IRSA, instance roles, etc.).
-
-Explicit static credentials. When set, both must be provided. Prefer IRSA or instance roles in production.
-
-```bash
-SNAPSHOT_S3_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE
-SNAPSHOT_S3_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-```
-
----
-
-### Local Backend Variables
-
-Used when `SNAPSHOT_BACKEND=local`.
-
-#### `SNAPSHOT_LOCAL_DIR`
-
-**Required when `SNAPSHOT_BACKEND=local`.**
-
-Absolute path to the directory where snapshot files are stored. The directory is created on startup if it does not
-exist. Must be an absolute path (not relative).
-
-```bash
-SNAPSHOT_LOCAL_DIR=/var/lib/sdk-proxy/snapshots
-```
-
-**Kubernetes volume example:**
+**Kubernetes `file://` volume example:**
 
 ```yaml
 env:
-  - name: SNAPSHOT_BACKEND
-    value: local
-  - name: SNAPSHOT_LOCAL_DIR
-    value: /snapshots
+  - name: SNAPSHOT_URL
+    value: file:///snapshots
 volumeMounts:
   - name: snapshots
     mountPath: /snapshots
@@ -433,13 +396,15 @@ SNAPSHOT_WRITE_QUEUE_SIZE=256
 
 ## OTel Variables
 
-Metrics, traces, and logs export is disabled by default. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable all three; all other OTel variables are optional. See [telemetry.md](telemetry.md) for the full reference.
+Metrics, traces, and logs export is disabled by default. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable all three; all
+other OTel variables are optional. See [telemetry.md](telemetry.md) for the full reference.
 
 ### `OTEL_EXPORTER_OTLP_ENDPOINT`
 
 **Optional.** Default: unset (metrics, traces, and logs sent to no-op providers).
 
-The OTLP/HTTP endpoint for an OpenTelemetry collector. When set, the proxy pushes metrics every 30 seconds and batches traces and logs continuously.
+The OTLP/HTTP endpoint for an OpenTelemetry collector. When set, the proxy pushes metrics every 30 seconds and batches
+traces and logs continuously.
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
@@ -463,7 +428,8 @@ OTEL_SERVICE_NAME=sdk-proxy
 
 **Optional.**
 
-Comma-separated `key=value` pairs added as resource attributes to all exported metrics, traces, and logs. Useful for adding environment, region, or cluster labels.
+Comma-separated `key=value` pairs added as resource attributes to all exported metrics, traces, and logs. Useful for
+adding environment, region, or cluster labels.
 
 ```bash
 OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production,k8s.cluster.name=us-east-1
@@ -496,9 +462,7 @@ OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production
 With snapshot persistence:
 
 ```bash
-SNAPSHOT_BACKEND=s3
-SNAPSHOT_S3_BUCKET=my-proxy-snapshots
-SNAPSHOT_S3_REGION=us-east-1
+SNAPSHOT_URL='s3://my-proxy-snapshots?region=us-east-1'
 SNAPSHOT_MAX_AGE=24h
 ```
 
