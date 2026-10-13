@@ -62,6 +62,7 @@ make lint           # golangci-lint
 make docker         # build OCI image
 make helm-lint      # ct lint the Helm chart (charts/feature-management-sdk-proxy)
 make helm-test      # helm-unittest suites
+make helm-install-test  # install the chart into kind and run helm test (ct install)
 make helm-docs      # regenerate the chart README (don't hand-edit it)
 ```
 

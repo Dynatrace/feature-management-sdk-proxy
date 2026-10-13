@@ -8,7 +8,8 @@
 - For chart work in `charts/feature-management-sdk-proxy` (optional): [Helm](https://helm.sh/docs/intro/install/),
   [chart-testing](https://github.com/helm/chart-testing) (`ct`), the
   [helm-unittest](https://github.com/helm-unittest/helm-unittest) plugin, and
-  [helm-docs](https://github.com/norwoodj/helm-docs)
+  [helm-docs](https://github.com/norwoodj/helm-docs); `make helm-install-test` also needs Docker and
+  [kind](https://kind.sigs.k8s.io)
 
 ## Build & Test
 
@@ -21,6 +22,7 @@ make lint        # golangci-lint (must pass before merge)
 make docker      # build the OCI image
 make helm-lint   # ct lint the Helm chart
 make helm-test   # helm-unittest suites
+make helm-install-test  # install the chart into kind and run helm test (ct install)
 make helm-docs   # regenerate the chart README from values.yaml
 ```
 

@@ -1,8 +1,0 @@
-serviceAccount:
-  annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/sdk-proxy-snapshots
-snapshot:
-  enabled: true
-  s3:
-    bucket: sdk-proxy-snapshots
-    region: us-east-1

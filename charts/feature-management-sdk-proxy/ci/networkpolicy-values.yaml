@@ -14,3 +14,7 @@ networkPolicy:
       - namespaceSelector:
           matchLabels:
             kubernetes.io/metadata.name: apps
+      # helm test pod, in the release namespace
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/component: test
