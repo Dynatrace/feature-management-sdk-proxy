@@ -1,0 +1,238 @@
+# Full environment variable reference: docs/configuration.md in the repository.
+# Unset (null) values fall back to the proxy's built-in defaults.
+
+# -- Number of proxy replicas.
+replicaCount: 2
+
+image:
+  # -- Image registry. Override to use a mirror.
+  registry: ghcr.io
+  # -- Image repository within the registry.
+  repository: dynatrace/feature-management-sdk-proxy
+  # -- Image tag. Defaults to the chart `appVersion`.
+  tag: ""
+  # -- Image digest (`sha256:...`). Takes precedence over `tag` when set.
+  digest: ""
+  # -- Image pull policy.
+  pullPolicy: IfNotPresent
+
+# -- Image pull secrets for private registries or mirrors.
+imagePullSecrets: []
+# -- Override the chart name used in resource names.
+nameOverride: ""
+# -- Override the full resource name.
+fullnameOverride: ""
+# -- Labels added to every resource the chart renders.
+commonLabels: {}
+
+serviceAccount:
+  # -- Create a ServiceAccount.
+  create: true
+  # -- ServiceAccount annotations, e.g. for workload identity granting snapshot bucket access
+  # (`eks.amazonaws.com/role-arn`, `iam.gke.io/gcp-service-account`, `azure.workload.identity/client-id`).
+  annotations: {}
+  # -- ServiceAccount name. Generated from the full name when empty.
+  name: ""
+  # -- Mount the ServiceAccount token. The proxy doesn't call the Kubernetes API; projected
+  # workload identity tokens are mounted separately by the provider's webhook.
+  automountServiceAccountToken: false
+
+# -- Port the proxy listens on (`PORT`).
+containerPort: 8080
+
+# -- Log level (`LOG_LEVEL`): `DEBUG`, `INFO`, `WARN`, or `ERROR`.
+logLevel: INFO
+# -- Graceful shutdown drain timeout (`SHUTDOWN_TIMEOUT`). Keep `terminationGracePeriodSeconds`
+# at least 20s above it.
+shutdownTimeout: 30s
+# -- Upstream base domain (`CDN_BASE_DOMAIN`). Unset uses the proxy default, `fm.dynatrace.com`.
+cdnBaseDomain: null
+
+sse:
+  # -- Enable SSE fan-out. `false` sets `SSE_DISABLED=true` (SDKs fall back to polling).
+  enabled: true
+  # -- Max downstream subscribers per SDK key (`SSE_FANOUT_CAP_PER_KEY`, proxy default 1000, 0 = unlimited).
+  fanoutCapPerKey: null
+  # -- Per-key subscribe rate limit (`SSE_SUBSCRIBE_RATE_PER_SEC`, proxy default 20).
+  subscribeRatePerSec: null
+  # -- Per-key subscribe burst (`SSE_SUBSCRIBE_BURST`, proxy default 100).
+  subscribeBurst: null
+
+otel:
+  # -- OTLP/HTTP endpoint (`OTEL_EXPORTER_OTLP_ENDPOINT`). Telemetry export is disabled when empty.
+  # With `networkPolicy.enabled`, allow the collector's port via `networkPolicy.extraEgress` unless it is 443.
+  endpoint: ""
+  # -- `OTEL_SERVICE_NAME` (proxy default `sdk-proxy`).
+  serviceName: ""
+  # -- `OTEL_RESOURCE_ATTRIBUTES`, e.g. `deployment.environment=prod`.
+  resourceAttributes: ""
+  # -- `OTEL_TRACES_SAMPLER`, e.g. `parentbased_traceidratio`.
+  tracesSampler: ""
+  # -- `OTEL_TRACES_SAMPLER_ARG`, e.g. `"0.1"`.
+  tracesSamplerArg: ""
+
+# Snapshot persistence to S3-compatible object storage, so restarted and new
+# pods start warm. See docs/snapshot.md.
+snapshot:
+  # -- Enable snapshot persistence (`SNAPSHOT_BACKEND=s3`).
+  enabled: false
+  # -- Snapshots older than this are treated as stale at startup (`SNAPSHOT_MAX_AGE`, proxy default 24h).
+  maxAge: null
+  # -- Async write queue size (`SNAPSHOT_WRITE_QUEUE_SIZE`, proxy default 256).
+  writeQueueSize: null
+  s3:
+    # -- Bucket name. Required when `snapshot.enabled`.
+    bucket: ""
+    # -- Bucket region. Required when `snapshot.enabled`; any placeholder for self-hosted stores.
+    region: ""
+    # -- Endpoint override for S3-compatible stores (MinIO, Ceph, GCS interoperability).
+    endpoint: ""
+    # -- Object key prefix, for sharing a bucket.
+    prefix: ""
+  credentials:
+    # -- Existing Secret with keys `accessKey` and `secretKey`. Leave empty and unset the keys
+    # below to use workload identity via `serviceAccount.annotations`.
+    existingSecret: ""
+    # -- Static access key. The chart creates a Secret. Prefer `existingSecret` or workload identity.
+    accessKey: ""
+    # -- Static secret key, set together with `accessKey`.
+    secretKey: ""
+
+# -- Additional container environment variables (list of `EnvVar`), e.g. `CACHE_INACTIVITY_EVICT_AFTER`.
+extraEnv: []
+# -- Additional `envFrom` sources.
+extraEnvFrom: []
+# -- Additional pod volumes.
+extraVolumes: []
+# -- Additional container volume mounts.
+extraVolumeMounts: []
+
+# -- Pod annotations.
+podAnnotations: {}
+# -- Pod labels.
+podLabels: {}
+
+# -- Pod security context. UID/GID 65532 is the distroless `nonroot` user.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container security context.
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  # -- Service type.
+  type: ClusterIP
+  # -- Service port. SDKs use `configOrigin: http://<service>.<namespace>.svc:<port>`.
+  port: 8080
+  # -- Service annotations.
+  annotations: {}
+  # -- `None` or `ClientIP`. With several replicas, an SDK's `/sse` subscription may reach a pod
+  # that hasn't cached its key yet (412, the SDK retries); `ClientIP` pins clients to one pod.
+  sessionAffinity: None
+  # -- Session affinity config, e.g. `clientIP.timeoutSeconds`.
+  sessionAffinityConfig: {}
+
+ingress:
+  # -- Expose the proxy through an Ingress, for SDKs outside the cluster.
+  enabled: false
+  # -- Ingress class name.
+  className: ""
+  # -- Ingress annotations. `/sse` is a long-lived stream: disable response buffering and raise read
+  # timeouts, e.g. `nginx.ingress.kubernetes.io/proxy-buffering: "off"`.
+  annotations: {}
+  # -- Ingress hosts and paths.
+  hosts:
+    - host: sdk-proxy.local
+      paths:
+        - path: /
+          pathType: Prefix
+  # -- Ingress TLS configuration.
+  tls: []
+
+networkPolicy:
+  # -- Render a NetworkPolicy restricting pod traffic.
+  enabled: false
+  egress:
+    # -- Allow DNS (UDP/TCP 53) to any destination.
+    dns: true
+    # -- Allow HTTPS (TCP 443) to any destination except `exceptCidrs` (CDN, metrics, SSE, S3).
+    https: true
+    # -- CIDRs excluded from the HTTPS rule: the cloud instance metadata service (IPv4 and IPv6).
+    exceptCidrs:
+      - 169.254.169.254/32
+      - fd00:ec2::254/128
+  # -- Additional egress rules (list of `NetworkPolicyEgressRule`), e.g. GKE metadata server on 988
+  # for Workload Identity, or an in-cluster OTel collector.
+  extraEgress: []
+  ingress:
+    # -- Peers allowed to reach the proxy port (list of `NetworkPolicyPeer`: `namespaceSelector`,
+    # `podSelector`, `ipBlock`). Empty allows all sources.
+    from: []
+  # -- Additional ingress rules (list of `NetworkPolicyIngressRule`).
+  extraIngress: []
+
+# -- Resource requests and limits.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+# -- Liveness probe.
+livenessProbe:
+  httpGet:
+    path: /livez
+    port: http
+  periodSeconds: 10
+  failureThreshold: 3
+
+# -- Readiness probe. `/readyz` returns 503 until snapshot load completes.
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: http
+  initialDelaySeconds: 2
+  periodSeconds: 5
+  failureThreshold: 3
+
+# -- Startup probe, which holds off liveness checks during startup.
+startupProbe:
+  httpGet:
+    path: /livez
+    port: http
+  periodSeconds: 2
+  failureThreshold: 30
+
+# -- Pod termination grace period. Shutdown takes up to `shutdownTimeout` + 5s (SSE) + snapshot
+# drain + 10s (usage flush); keep this above that sum.
+terminationGracePeriodSeconds: 60
+
+podDisruptionBudget:
+  # -- Render a PodDisruptionBudget.
+  enabled: true
+  # -- Max pods unavailable during voluntary disruptions. Ignored when `minAvailable` is set.
+  maxUnavailable: 1
+  # -- Min pods available during voluntary disruptions.
+  minAvailable: null
+
+# -- Node selector.
+nodeSelector: {}
+# -- Tolerations.
+tolerations: []
+# -- Affinity rules.
+affinity: {}
+# -- Topology spread constraints. Values are templated.
+topologySpreadConstraints: []
+# -- Priority class name.
+priorityClassName: ""

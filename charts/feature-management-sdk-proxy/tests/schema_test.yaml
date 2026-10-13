@@ -1,0 +1,27 @@
+suite: values schema
+templates:
+  - configmap.yaml
+tests:
+  - it: rejects unknown top-level keys
+    set:
+      replicas: 3
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects invalid log levels
+    set:
+      logLevel: TRACE
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects malformed digests
+    set:
+      image.digest: latest
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects non-duration shutdown timeouts
+    set:
+      shutdownTimeout: "30"
+    asserts:
+      - failedTemplate: {}

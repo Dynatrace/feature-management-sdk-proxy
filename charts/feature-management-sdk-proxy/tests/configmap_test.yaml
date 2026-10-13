@@ -1,0 +1,107 @@
+suite: configmap
+templates:
+  - configmap.yaml
+tests:
+  - it: renders defaults
+    asserts:
+      - equal:
+          path: data
+          value:
+            PORT: "8080"
+            LOG_LEVEL: INFO
+            SHUTDOWN_TIMEOUT: 30s
+
+  - it: maps typed values to env vars
+    set:
+      logLevel: DEBUG
+      cdnBaseDomain: fm.dynatracelabs.com
+      sse:
+        enabled: false
+        fanoutCapPerKey: 0
+        subscribeRatePerSec: 5
+        subscribeBurst: 10
+      otel:
+        endpoint: http://otel:4318
+        tracesSamplerArg: "0.1"
+    asserts:
+      - equal:
+          path: data.LOG_LEVEL
+          value: DEBUG
+      - equal:
+          path: data.CDN_BASE_DOMAIN
+          value: fm.dynatracelabs.com
+      - equal:
+          path: data.SSE_DISABLED
+          value: "true"
+      - equal:
+          path: data.SSE_FANOUT_CAP_PER_KEY
+          value: "0"
+      - equal:
+          path: data.SSE_SUBSCRIBE_RATE_PER_SEC
+          value: "5"
+      - equal:
+          path: data.SSE_SUBSCRIBE_BURST
+          value: "10"
+      - equal:
+          path: data.OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://otel:4318
+      - equal:
+          path: data.OTEL_TRACES_SAMPLER_ARG
+          value: "0.1"
+
+  - it: configures S3 snapshots
+    set:
+      snapshot:
+        enabled: true
+        maxAge: 12h
+        s3:
+          bucket: snaps
+          region: eu-west-1
+          endpoint: http://minio:9000
+          prefix: prod/
+    asserts:
+      - equal:
+          path: data.SNAPSHOT_BACKEND
+          value: s3
+      - equal:
+          path: data.SNAPSHOT_S3_BUCKET
+          value: snaps
+      - equal:
+          path: data.SNAPSHOT_S3_REGION
+          value: eu-west-1
+      - equal:
+          path: data.SNAPSHOT_S3_ENDPOINT
+          value: http://minio:9000
+      - equal:
+          path: data.SNAPSHOT_S3_PREFIX
+          value: prod/
+      - equal:
+          path: data.SNAPSHOT_MAX_AGE
+          value: 12h
+
+  - it: requires bucket and region
+    set:
+      snapshot.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: snapshot.s3.bucket and snapshot.s3.region are required when snapshot.enabled=true
+
+  - it: rejects existingSecret combined with static keys
+    set:
+      snapshot:
+        enabled: true
+        s3: {bucket: b, region: r}
+        credentials: {existingSecret: x, accessKey: a, secretKey: s}
+    asserts:
+      - failedTemplate:
+          errorMessage: set either snapshot.credentials.existingSecret or snapshot.credentials.accessKey/secretKey, not both
+
+  - it: rejects a lone access key
+    set:
+      snapshot:
+        enabled: true
+        s3: {bucket: b, region: r}
+        credentials: {accessKey: a}
+    asserts:
+      - failedTemplate:
+          errorMessage: snapshot.credentials.accessKey and snapshot.credentials.secretKey must be set together

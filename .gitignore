@@ -20,5 +20,8 @@ coverage.txt
 
 /proxy
 
+# kind kubeconfig from make helm-install-test
+/.kind/
+
 # Claude Code worktrees
 .claude/worktrees/

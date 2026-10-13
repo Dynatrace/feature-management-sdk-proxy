@@ -45,9 +45,10 @@ dockers_v2:
       "org.opencontainers.image.licenses": "Apache-2.0"
       "org.opencontainers.image.vendor": "Dynatrace"
 
+# release-please creates the GitHub release and writes CHANGELOG.md; GoReleaser
+# only uploads artifacts to it.
+release:
+  mode: keep-existing
+
 changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^chore(beads):"
-      - "^Merge "
+  disable: true

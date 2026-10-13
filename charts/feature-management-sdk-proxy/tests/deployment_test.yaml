@@ -1,0 +1,194 @@
+suite: deployment
+templates:
+  - deployment.yaml
+  # checksum annotations include these
+  - configmap.yaml
+  - secret.yaml
+release:
+  name: rel
+tests:
+  - it: uses the appVersion image from ghcr.io by default
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/dynatrace/feature-management-sdk-proxy:v0.2.0
+        chart:
+          appVersion: v0.2.0
+
+  - it: supports registry mirrors
+    template: deployment.yaml
+    set:
+      image.registry: mirror.example.com/
+      image.tag: v9.9.9
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mirror.example.com/dynatrace/feature-management-sdk-proxy:v9.9.9
+
+  - it: prefers digest over tag
+    template: deployment.yaml
+    set:
+      image.digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "@sha256:0{64}$"
+
+  - it: probes /livez and /readyz
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /livez
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+
+  - it: runs hardened by default
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65532
+      - equal:
+          path: spec.template.spec.securityContext.runAsGroup
+          value: 65532
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: never drops below desired replicas during rollout
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+
+  - it: allows more grace than the shutdown timeout
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 60
+
+  - it: sets PROXY_INSTANCE_ID from the pod name
+    template: deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROXY_INSTANCE_ID
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+
+  - it: injects no credentials without snapshots
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SNAPSHOT_S3_ACCESS_KEY
+          any: true
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/secret"]
+
+  - it: reads credentials from an existing Secret
+    template: deployment.yaml
+    set:
+      snapshot.enabled: true
+      snapshot.s3.bucket: b
+      snapshot.s3.region: us-east-1
+      snapshot.credentials.existingSecret: my-creds
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SNAPSHOT_S3_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: my-creds
+                key: accessKey
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SNAPSHOT_S3_SECRET_KEY
+            valueFrom:
+              secretKeyRef:
+                name: my-creds
+                key: secretKey
+
+  - it: injects no credentials with workload identity
+    template: deployment.yaml
+    set:
+      snapshot.enabled: true
+      snapshot.s3.bucket: b
+      snapshot.s3.region: us-east-1
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SNAPSHOT_S3_ACCESS_KEY
+          any: true
+
+  - it: passes through extraEnv and scheduling settings
+    template: deployment.yaml
+    set:
+      extraEnv:
+        - name: CACHE_INACTIVITY_EVICT_AFTER
+          value: 24h
+      nodeSelector:
+        pool: egress
+      tolerations:
+        - key: dedicated
+          operator: Exists
+      podLabels:
+        team: ff
+      podAnnotations:
+        a: b
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CACHE_INACTIVITY_EVICT_AFTER
+            value: 24h
+      - equal:
+          path: spec.template.spec.nodeSelector.pool
+          value: egress
+      - equal:
+          path: spec.template.spec.tolerations[0].key
+          value: dedicated
+      - equal:
+          path: spec.template.metadata.labels.team
+          value: ff
+      - equal:
+          path: spec.template.metadata.annotations.a
+          value: b
+
+  - it: applies commonLabels without changing the selector
+    template: deployment.yaml
+    set:
+      commonLabels:
+        cost-center: "42"
+    asserts:
+      - equal:
+          path: metadata.labels.cost-center
+          value: "42"
+      - notExists:
+          path: spec.selector.matchLabels.cost-center

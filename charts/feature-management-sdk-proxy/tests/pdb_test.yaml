@@ -1,0 +1,21 @@
+suite: pdb
+templates:
+  - pdb.yaml
+tests:
+  - it: allows one disruption by default
+    asserts:
+      - equal:
+          path: spec.maxUnavailable
+          value: 1
+      - notExists:
+          path: spec.minAvailable
+
+  - it: supports minAvailable
+    set:
+      podDisruptionBudget.minAvailable: 1
+    asserts:
+      - equal:
+          path: spec.minAvailable
+          value: 1
+      - notExists:
+          path: spec.maxUnavailable

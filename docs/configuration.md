@@ -502,64 +502,12 @@ SNAPSHOT_S3_REGION=us-east-1
 SNAPSHOT_MAX_AGE=24h
 ```
 
-## Kubernetes Deployment Example
+## Kubernetes Deployment
 
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: sdk-proxy-config
-data:
-  PORT: "8080"
-  LOG_LEVEL: INFO
-  SHUTDOWN_TIMEOUT: 30s
-  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.monitoring:4318
-  OTEL_RESOURCE_ATTRIBUTES: deployment.environment=production
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: sdk-proxy
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: sdk-proxy
-  template:
-    metadata:
-      labels:
-        app: sdk-proxy
-    spec:
-      containers:
-        - name: sdk-proxy
-          image: sdk-proxy:latest
-          ports:
-            - containerPort: 8080
-          envFrom:
-            - configMapRef:
-                name: sdk-proxy-config
-          env:
-            - name: PROXY_INSTANCE_ID
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
-          resources:
-            requests:
-              cpu: 100m
-              memory: 64Mi
-            limits:
-              cpu: 500m
-              memory: 256Mi
-          livenessProbe:
-            httpGet:
-              path: /livez
-              port: 8080
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: 8080
-            initialDelaySeconds: 5
-            periodSeconds: 10
-```
+Use the Helm chart in [`charts/feature-management-sdk-proxy`](../charts/feature-management-sdk-proxy/README.md). Its
+typed values (`logLevel`, `sse`, `otel`, `snapshot`, ...) map onto the variables above, other variables go in
+`extraEnv`, and `PORT` and `PROXY_INSTANCE_ID` are set by the chart. For plain manifests, see
+[`examples/kubernetes.example.yml`](../examples/kubernetes.example.yml).
+
+Whichever you use, set `terminationGracePeriodSeconds` above `SHUTDOWN_TIMEOUT` plus about 15s (see
+[shutdown.md](shutdown.md)). Otherwise Kubernetes kills the pod before the final usage flush.

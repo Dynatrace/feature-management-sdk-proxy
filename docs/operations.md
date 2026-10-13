@@ -190,7 +190,8 @@ The proxy exits 0 on a normal signal-driven shutdown, even if non-critical teard
 a startup failure or an unexpected listener error before any signal arrived. A **second signal received during
 graceful shutdown** forces an immediate exit with code `128 + signo` (e.g. `143` for `SIGTERM`); use this to escape a
 hung shutdown instead of `kill -9`. `SIGKILL` cannot be caught — the final usage flush and any queued snapshot writes
-are lost.
+are lost. Make sure the orchestrator's grace period covers the whole sequence; see
+[shutdown.md](shutdown.md#orchestrator-grace-period).
 
 ---
 

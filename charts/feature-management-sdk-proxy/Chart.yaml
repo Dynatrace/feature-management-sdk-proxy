@@ -1,0 +1,19 @@
+apiVersion: v2
+name: feature-management-sdk-proxy
+description: Dynatrace Feature Management SDK Proxy, a caching and SSE fan-out egress point for Feature Management server SDKs
+type: application
+# Managed by release-please: the chart is released in lockstep with the proxy,
+# so version and appVersion are both set from the release tag. Don't edit by hand.
+version: 0.2.0  # x-release-please-version
+appVersion: "v0.2.0"  # x-release-please-version
+home: https://github.com/Dynatrace/feature-management-sdk-proxy
+sources:
+  - https://github.com/Dynatrace/feature-management-sdk-proxy
+maintainers:
+  - name: Dynatrace
+    url: https://github.com/Dynatrace
+keywords:
+  - feature-flags
+  - openfeature
+  - flagd
+  - dynatrace

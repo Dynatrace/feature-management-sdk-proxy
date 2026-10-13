@@ -1,0 +1,76 @@
+name: Chart
+
+on:
+  pull_request:
+    paths:
+      - "charts/**"
+      - "ct.yaml"
+      - ".github/workflows/chart.yml"
+  push:
+    branches: [main]
+    paths:
+      - "charts/**"
+      - "ct.yaml"
+      - ".github/workflows/chart.yml"
+
+env:
+  HELM_UNITTEST_VERSION: "1.2.1"
+  HELM_DOCS_VERSION: "1.14.2"
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.x"
+
+      - uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f # v2.8.0
+
+      - name: ct lint
+        run: ct lint --config ct.yaml
+
+      - name: helm-unittest
+        run: |
+          # Pinned version; Helm 4 requires opting out of signature verification for unsigned plugins.
+          helm plugin install https://github.com/helm-unittest/helm-unittest --version "v${HELM_UNITTEST_VERSION}" --verify=false
+          helm unittest charts/*
+
+      - name: Check chart README is up to date
+        run: |
+          curl -sSfL "https://github.com/norwoodj/helm-docs/releases/download/v${HELM_DOCS_VERSION}/helm-docs_${HELM_DOCS_VERSION}_Linux_x86_64.tar.gz" \
+            | tar -xz -C /usr/local/bin helm-docs
+          helm-docs --chart-search-root charts
+          git diff --exit-code -- charts || {
+            echo "::error::Chart README is stale. Run 'make helm-docs' and commit the result."
+            exit 1
+          }
+
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.x"
+
+      - uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f # v2.8.0
+
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          install_only: true
+
+      - name: ct install
+        run: make helm-install-test

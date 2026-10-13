@@ -1,0 +1,27 @@
+suite: service
+templates:
+  - service.yaml
+tests:
+  - it: is ClusterIP on 8080 by default
+    asserts:
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports[0].port
+          value: 8080
+      - equal:
+          path: spec.sessionAffinity
+          value: None
+
+  - it: supports other types and affinity
+    set:
+      service.type: LoadBalancer
+      service.sessionAffinity: ClientIP
+    asserts:
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+      - equal:
+          path: spec.sessionAffinity
+          value: ClientIP

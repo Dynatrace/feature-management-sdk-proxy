@@ -1,0 +1,12 @@
+suite: test-connection
+templates:
+  - tests/test-connection.yaml
+tests:
+  - it: isn't selected by the proxy's selectors
+    asserts:
+      # selected pods get the proxy's NetworkPolicy egress rules and can't reach the Service
+      - notExists:
+          path: metadata.labels["app.kubernetes.io/name"]
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: test

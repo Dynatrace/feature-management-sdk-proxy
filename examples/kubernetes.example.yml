@@ -1,5 +1,9 @@
 # Example Kubernetes deployment of the sdk-proxy container image.
 #
+# For most deployments prefer the Helm chart in charts/feature-management-sdk-proxy, which renders
+# an equivalent (and validated) set of resources:
+#   helm install sdk-proxy ./charts/feature-management-sdk-proxy
+#
 # This file is a single multi-document manifest. Apply it with:
 #   kubectl apply -f kubernetes.example.yml
 #
@@ -31,6 +35,14 @@ data:
 
   # SSE
   # SSE_DISABLED: "false"   # set "true" to fall back to polling-only mode (10 s interval)
+  # SSE_FANOUT_CAP_PER_KEY: "1000"      # max downstream subscribers per SDK key (0 = unlimited)
+  # SSE_SUBSCRIBE_RATE_PER_SEC: "20"    # per-key subscribe rate limit
+  # SSE_SUBSCRIBE_BURST: "100"          # per-key subscribe burst
+  # LIFECYCLE_KEYS_CAP: "10000"         # max keys per lifecycle event
+
+  # Cache / requests
+  # CACHE_INACTIVITY_EVICT_AFTER: 48h   # evict keys idle for longer than this
+  # MAX_BODY_BYTES: "10485760"          # max upstream config / metrics body size
 
   # Billing
   # BILLING_FLUSH_INTERVAL: 60s
@@ -40,6 +52,7 @@ data:
   # SNAPSHOT_BACKEND: local
   # SNAPSHOT_LOCAL_DIR: /snapshots    # must match the volume mount path below
   # SNAPSHOT_MAX_AGE: 24h
+  # SNAPSHOT_WRITE_QUEUE_SIZE: "256"
 
   # SNAPSHOT_BACKEND: s3
   # SNAPSHOT_S3_BUCKET: my-proxy-snapshots
@@ -89,10 +102,23 @@ spec:
       labels:
         app: sdk-proxy
     spec:
-      terminationGracePeriodSeconds: 60  # must exceed SHUTDOWN_TIMEOUT
+      # Must exceed SHUTDOWN_TIMEOUT + SSE close (5 s) + snapshot drain + usage flush (10 s).
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532     # distroless "nonroot"
+        runAsGroup: 65532
+        fsGroup: 65532       # lets the proxy write to a mounted snapshot volume
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: sdk-proxy
-          image: ghcr.io/dynatrace/feature-management-sdk-proxy:latest
+          image: ghcr.io/dynatrace/feature-management-sdk-proxy:latest  # pin a release tag (e.g. v0.2.0) in production
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: 8080
@@ -164,9 +190,12 @@ metadata:
 spec:
   selector:
     app: sdk-proxy
+  # With multiple replicas, an SDK's /sse subscription may land on a pod that
+  # has not cached its config yet (412, SDK retries). ClientIP affinity avoids it.
+  # sessionAffinity: ClientIP
   ports:
     - name: http
-      port: 80
+      port: 8080   # SDKs use configOrigin: http://sdk-proxy:8080
       targetPort: http
       protocol: TCP
   type: ClusterIP
@@ -213,3 +242,18 @@ spec:
 #         target:
 #           type: Utilization
 #           averageUtilization: 70
+
+---
+# ── PodDisruptionBudget (optional) ─────────────────────────────────────────────
+# Keeps at least one replica serving during node drains.
+#
+# apiVersion: policy/v1
+# kind: PodDisruptionBudget
+# metadata:
+#   name: sdk-proxy
+#   # namespace: sdk-proxy
+# spec:
+#   maxUnavailable: 1
+#   selector:
+#     matchLabels:
+#       app: sdk-proxy
