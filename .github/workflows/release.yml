@@ -2,35 +2,44 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
-  contents: write
-  pull-requests: write
-  packages: write
+  contents: read
 
 jobs:
-  # Opens/updates the release PR from conventional commits. Merging it bumps
-  # CHANGELOG.md and the chart's version/appVersion, tags vX.Y.Z, and creates
-  # the GitHub release.
   release-please:
+    permissions:
+      contents: write
+      pull-requests: write
     runs-on: ubuntu-latest
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
+
     steps:
-      - id: release
-        uses: googleapis/release-please-action@v5
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  # Tags pushed with GITHUB_TOKEN don't trigger other workflows, so the build
-  # runs here rather than on a tag push.
-  goreleaser:
-    needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+
+  publish-image:
     runs-on: ubuntu-latest
+    needs: release-please
+    environment: publish
+    permissions:
+      contents: write
+      packages: write
+    if: ${{ fromJSON(needs.release-please.outputs.release_created || false) }}
+
     steps:
       - uses: actions/checkout@v7
         with:
@@ -72,3 +81,33 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-chart:
+    runs-on: ubuntu-latest
+    needs: [release-please, publish-image]
+    environment: publish
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - uses: azure/setup-helm@v5
+
+      - name: Check chart version matches tag
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          version=$(helm show chart charts/feature-management-sdk-proxy | sed -n 's/^version: //p')
+          [ "v${version}" = "${TAG}" ] || { echo "::error::chart version ${version} doesn't match tag ${TAG}"; exit 1; }
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+
+      - name: Package and push chart
+        run: |
+          helm package charts/feature-management-sdk-proxy --destination dist
+          helm push dist/*.tgz oci://ghcr.io/dynatrace/charts

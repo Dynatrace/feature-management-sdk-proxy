@@ -62,14 +62,19 @@ Never commit directly to `main`.
 ## Releasing
 
 Releases are cut by [release-please](https://github.com/googleapis/release-please). On every push to `main` it opens
-or updates a release PR from the conventional commits since the last tag (`feat` bumps the minor version, `fix` the
-patch, while the version is below 1.0). Merging that PR:
+or updates a release PR from the conventional commits since the last tag. PR titles must follow
+[Conventional Commits](https://www.conventionalcommits.org) (enforced by the PR title lint). While the version is below
+1.0, breaking changes bump the minor version and everything else the patch; releases are tagged as `-alpha`
+prereleases. Merging the release PR:
 
 - updates `CHANGELOG.md` and `.release-please-manifest.json`,
 - sets the Helm chart's `version` and `appVersion` in `charts/feature-management-sdk-proxy/Chart.yaml` to the release
   version (the chart is released in lockstep with the proxy),
-- tags `vX.Y.Z` and creates the GitHub release, then GoReleaser attaches the binaries and pushes the image to
-  `ghcr.io/dynatrace/feature-management-sdk-proxy`.
+- tags the release and creates the GitHub release, then `publish-image` attaches the binaries and pushes the image to
+  `ghcr.io/dynatrace/feature-management-sdk-proxy`, and `publish-chart` pushes the chart to
+  `oci://ghcr.io/dynatrace/charts/feature-management-sdk-proxy`.
+
+If a publish job fails, use "Re-run failed jobs" on the Release workflow run.
 
 Don't push release tags or edit the chart version by hand. To force a specific version, add a `Release-As: X.Y.Z`
 footer to a commit on `main`.
