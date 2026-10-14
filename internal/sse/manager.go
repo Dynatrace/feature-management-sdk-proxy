@@ -55,6 +55,13 @@ type Manager struct {
 	cfg      Config
 
 	lifecycle func(Event) bool // optional; set via SetLifecycleHandler
+	refetcher Refetcher        // optional; set via SetRefetcher
+
+	// refetches coalesces event-driven cache refreshes per key.
+	refetches  sync.Map // keyID -> *refetchState
+	refetchWG  sync.WaitGroup
+	baseCtx    context.Context
+	baseCancel context.CancelFunc
 
 	mu    sync.RWMutex
 	conns map[string]*keyState
@@ -67,6 +74,28 @@ type Manager struct {
 	subscribeLimiters sync.Map // keyID -> *rate.Limiter
 
 	shutdownOnce sync.Once
+}
+
+// Refetcher refreshes the cached config for a key from upstream. Implemented
+// by *cache.Refresher.
+type Refetcher interface {
+	RefreshKey(ctx context.Context, keyID string, hint cache.RefetchHint) cache.RefreshOutcome
+}
+
+// refetchTimeout bounds a single event-driven cache refresh.
+const refetchTimeout = 30 * time.Second
+
+// refetchState holds the latest unprocessed change notification for a key.
+type refetchState struct {
+	mu      sync.Mutex
+	running bool
+	pending *pendingRefetch
+}
+
+type pendingRefetch struct {
+	evt  Event
+	hint cache.RefetchHint
+	sc   trace.SpanContext
 }
 
 type keyState struct {
@@ -85,14 +114,17 @@ func New(httpClient *http.Client, inst *metrics.Instruments, logger *slog.Logger
 	srv := eventsource.NewServer()
 	srv.BufferSize = 16 // match previous channel buffer size
 
+	baseCtx, baseCancel := context.WithCancel(context.Background())
 	return &Manager{
-		client:   httpClient,
-		inst:     inst,
-		logger:   logger,
-		tracer:   tracenoop.NewTracerProvider().Tracer("sse"),
-		esServer: srv,
-		conns:    make(map[string]*keyState),
-		cfg:      cfg,
+		baseCtx:    baseCtx,
+		baseCancel: baseCancel,
+		client:     httpClient,
+		inst:       inst,
+		logger:     logger,
+		tracer:     tracenoop.NewTracerProvider().Tracer("sse"),
+		esServer:   srv,
+		conns:      make(map[string]*keyState),
+		cfg:        cfg,
 	}
 }
 
@@ -127,6 +159,8 @@ func (m *Manager) OnConfigCached(ctx context.Context, sdkKey string, payload []b
 // refresher when a 200 response updates the cached payload (never on 304).
 // keyID is sdkkey.PublicID(sdkKey).
 func (m *Manager) OnRefreshed(keyID string, entry cache.Entry) {
+	m.NotifyPolledChange(keyID, entry)
+
 	sseURL, inactivitySec, ok := ExtractSSEURL(entry.Payload)
 	if !ok {
 		return
@@ -147,6 +181,25 @@ func (m *Manager) OnRefreshed(keyID string, entry cache.Entry) {
 		state.cancel()
 	}
 	m.startLocked(context.Background(), keyID, sseURL, inactivitySec, state)
+}
+
+// NotifyPolledChange publishes a synthesized change notification to keyID's
+// subscribers for a config change retrieved by polling, but only while the
+// upstream SSE connection for keyID is not streaming: when it is, upstream
+// announces changes itself.
+func (m *Manager) NotifyPolledChange(keyID string, entry cache.Entry) {
+	m.mu.RLock()
+	state, ok := m.conns[keyID]
+	streaming := ok && state.streaming.Load()
+	m.mu.RUnlock()
+	if streaming || !m.HasSubscribers(keyID) {
+		return
+	}
+	m.logger.Info("sse: upstream not streaming, notifying subscribers of polled config change",
+		slog.String("sdk_key_public_id", keyID),
+		slog.String("etag", entry.ETag),
+	)
+	m.publish(keyID, refetchEvent(keyID, entry), trace.SpanContext{}, "synthesized")
 }
 
 // AdmitSubscriber gates on per-key subscribe rate and fan-out cap; increments
@@ -199,6 +252,69 @@ func (m *Manager) SetLifecycleHandler(fn func(Event) bool) {
 	m.lifecycle = fn
 }
 
+// SetRefetcher makes the Manager refresh a key's cached config before
+// forwarding an upstream change notification, so SDK clients that refetch get the
+// new config. Must be called before the first OnConfigCached call.
+func (m *Manager) SetRefetcher(r Refetcher) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.refetcher = r
+}
+
+// onUpstreamEvent forwards evt, first refreshing the cache when it is a
+// change notification and a Refetcher is set.
+func (m *Manager) onUpstreamEvent(keyID string, evt Event, sc trace.SpanContext) {
+	m.mu.RLock()
+	r := m.refetcher
+	m.mu.RUnlock()
+	hint, isRefetch := parseRefetch(evt)
+	if r == nil || !isRefetch {
+		m.publish(keyID, evt, sc, "forwarded")
+		return
+	}
+
+	v, _ := m.refetches.LoadOrStore(keyID, &refetchState{})
+	st := v.(*refetchState)
+	st.mu.Lock()
+	st.pending = &pendingRefetch{evt: evt, hint: hint, sc: sc} // newer events supersede queued ones
+	if st.running {
+		st.mu.Unlock()
+		return
+	}
+	st.running = true
+	st.mu.Unlock()
+	m.refetchWG.Go(func() { m.drainRefetches(keyID, st, r) })
+}
+
+// drainRefetches refreshes the cache and then forwards the event, repeating
+// once more if further events arrived meanwhile. Events received during a
+// refresh are coalesced into one refresh and one forwarded event.
+func (m *Manager) drainRefetches(keyID string, st *refetchState, r Refetcher) {
+	for {
+		st.mu.Lock()
+		p := st.pending
+		st.pending = nil
+		if p == nil {
+			st.running = false
+			st.mu.Unlock()
+			return
+		}
+		st.mu.Unlock()
+
+		ctx, cancel := context.WithTimeout(m.baseCtx, refetchTimeout)
+		outcome := r.RefreshKey(ctx, keyID, p.hint)
+		cancel()
+		if m.baseCtx.Err() != nil {
+			return
+		}
+		// An evicted key has been closed (subscribers disconnected); forward in
+		// every other case: on failure clients refetch the stale entry, as before.
+		if outcome != cache.RefreshEvicted {
+			m.publish(keyID, p.evt, p.sc, "forwarded")
+		}
+	}
+}
+
 // Close cancels the upstream SSE connection for keyID, disconnects all
 // downstream subscribers via eventsource.Server.Unregister, and removes state.
 // Safe to call on a key that has no active connection (no-op).
@@ -234,6 +350,7 @@ func (m *Manager) Close(keyID string) {
 func (m *Manager) Shutdown(ctx context.Context) error {
 	var err error
 	m.shutdownOnce.Do(func() {
+		m.baseCancel()
 		m.mu.Lock()
 		states := make([]*keyState, 0, len(m.conns))
 		for _, state := range m.conns {
@@ -264,6 +381,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 			for _, state := range states {
 				state.wg.Wait()
 			}
+			m.refetchWG.Wait()
 			close(done)
 		}()
 
@@ -289,8 +407,8 @@ func (m *Manager) HasSubscribers(keyID string) bool {
 // cache.RefreshIntervalConnected when the upstream SSE read loop for keyID is
 // actively streaming, and cache.RefreshIntervalDisconnected otherwise.
 func (m *Manager) RefreshInterval(keyID string) time.Duration {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	state, ok := m.conns[keyID]
 	if ok && state.streaming.Load() {
 		return cache.RefreshIntervalConnected
@@ -340,7 +458,7 @@ func (m *Manager) startLocked(ctx context.Context, keyID, sseURL string, inactiv
 		// onEvent references c.connectSpanCtx which is populated inside c.run
 		// after the setup span ends, so it is always set before any event fires.
 		c.onEvent = func(evt Event) {
-			m.publish(keyID, evt, c.connectSpanCtx)
+			m.onUpstreamEvent(keyID, evt, c.connectSpanCtx)
 		}
 		c.run(connCtx)
 	})
@@ -348,13 +466,15 @@ func (m *Manager) startLocked(ctx context.Context, keyID, sseURL string, inactiv
 
 // publish fans out an event to all downstream subscribers of keyID via the
 // eventsource.Server. It emits a short-lived sse.event.forward span per event
-// (not per connection), linked to the upstream connect span.
-func (m *Manager) publish(keyID string, evt Event, connectSC trace.SpanContext) {
+// (not per connection), linked to the upstream connect span when there is one.
+// result is "forwarded" for upstream events, "synthesized" for polled changes.
+func (m *Manager) publish(keyID string, evt Event, connectSC trace.SpanContext, result string) {
 	spanOpts := []trace.SpanStartOption{
 		trace.WithSpanKind(trace.SpanKindProducer),
 		trace.WithAttributes(
 			attribute.String("sdk_key_public_id", keyID),
 			attribute.String("sse.event.type", evt.EventType),
+			attribute.String("result", result),
 		),
 	}
 	if connectSC.IsValid() {
@@ -366,7 +486,7 @@ func (m *Manager) publish(keyID string, evt Event, connectSC trace.SpanContext) 
 
 	m.inst.SSEUpstreamEvents.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("sdk_key_public_id", keyID),
-		attribute.String("result", "forwarded"),
+		attribute.String("result", result),
 	))
 	span.End()
 }

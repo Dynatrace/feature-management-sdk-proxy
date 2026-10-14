@@ -85,6 +85,15 @@ func (c *Cache) Get(key string) (Entry, bool) {
 	return e, ok
 }
 
+// Peek retrieves an entry without refreshing its last-access timestamp, for
+// internal maintenance that must not count as client activity.
+func (c *Cache) Peek(key string) (Entry, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	e, ok := c.entries[key]
+	return e, ok
+}
+
 // Set stores or replaces an entry and initializes its last-access timestamp.
 func (c *Cache) Set(key string, e Entry) {
 	c.mu.Lock()
@@ -231,6 +240,7 @@ type Refresher struct {
 	inst             *metrics.Instruments    // nil → metrics skipped
 	logger           *slog.Logger
 	tracer           trace.Tracer
+	keyLocks         sync.Map // keyID -> *sync.Mutex; serializes refreshes per key
 }
 
 // NewRefresher constructs a Refresher. Call Run to start the background loop.
@@ -323,94 +333,146 @@ func (r *Refresher) refresh(ctx context.Context) {
 			r.logger.Debug("cache: skipping stale snapshot-restored entry (no FetchURL yet)", slog.String("sdk_key_public_id", keyID))
 			continue
 		}
-		fetchCtx, span := r.tracer.Start(ctx, "proxy.refresh_fetch",
-			trace.WithAttributes(
-				attribute.String("sdk_key_public_id", keyID),
-				attribute.Bool("if_none_match", entry.ETag != ""),
-			))
-		result, err := r.fetcher.Fetch(fetchCtx, keyID, entry.FetchURL, entry.ETag)
-		if err != nil {
-			span.RecordError(err)
-			span.SetAttributes(attribute.String("result", "error"))
-			span.End()
-			r.logger.Warn("cache: background refresh failed",
-				slog.String("sdk_key_public_id", keyID),
-				slog.String("error", err.Error()),
-			)
-			if r.failureObserver != nil {
-				go r.failureObserver.OnRefreshFailure(ctx, keyID, entry.ETag, entry.FetchedAt)
-			}
-			continue
-		}
-		if result.NotModified {
-			span.SetAttributes(attribute.String("result", "not_modified"))
-			span.End()
-			r.cache.ResetTTL(keyID, time.Now())
-			r.logger.Debug("cache: background refresh — upstream unchanged (304), TTL extended", slog.String("sdk_key_public_id", keyID))
-			continue
-		}
-		if result.Entry != nil {
-			result.Entry.FetchURL = entry.FetchURL // preserve the fetch URL
-			result.Entry.OriginatingFetch = span.SpanContext()
-			span.SetAttributes(attribute.String("result", "ok"))
-			span.End()
-			r.cache.Set(keyID, *result.Entry)
-			r.logger.Debug("cache: background refresh — new content received (200), cache updated", slog.String("sdk_key_public_id", keyID))
-			for _, obs := range r.observers {
-				obs.OnRefreshed(keyID, *result.Entry)
-			}
-			continue
-		}
-		// Non-200/non-304: upstream returned an error status code.
-		if result.StatusCode != 0 {
-			statusStr := strconv.Itoa(result.StatusCode)
-			span.SetAttributes(
-				attribute.String("result", "upstream_error"),
-				attribute.Int("upstream.status_code", result.StatusCode),
-			)
-			span.End()
-			if ShouldEvict(result.StatusCode) {
-				r.cache.Delete(keyID)
-				r.logger.Warn("cache: background refresh got evictable status, evicting entry",
-					slog.String("sdk_key_public_id", keyID),
-					slog.Int("upstream_status", result.StatusCode),
-					slog.String("reason", EvictionReason(result.StatusCode)),
-				)
-				if r.inst != nil {
-					r.inst.CacheRefreshTotal.Add(ctx, 1, metric.WithAttributes(
-						attribute.String("result", "evicted"),
-						attribute.String("status_code", statusStr),
-					))
-				}
-				if r.evictor == nil {
-					r.logger.Warn("cache: evictor not set — SSE close and snapshot delete skipped on eviction",
-						slog.String("sdk_key_public_id", keyID),
-					)
-				} else {
-					r.evictor(keyID)
-				}
-			} else {
-				r.logger.Warn("cache: background refresh got upstream error, preserving stale entry",
-					slog.String("sdk_key_public_id", keyID),
-					slog.Int("upstream_status", result.StatusCode),
-				)
-				if r.inst != nil {
-					r.inst.CacheRefreshTotal.Add(ctx, 1, metric.WithAttributes(
-						attribute.String("result", "preserved_stale"),
-						attribute.String("status_code", statusStr),
-					))
-				}
-				if r.failureObserver != nil {
-					go r.failureObserver.OnRefreshFailure(ctx, keyID, entry.ETag, entry.FetchedAt)
-				}
-			}
-			continue
-		}
-		// Defensive: Fetcher returned a zero FetchResult — not a valid state.
-		// End the span to prevent a leak from a buggy Fetcher implementation.
-		span.SetAttributes(attribute.String("result", "unexpected_empty"))
-		span.End()
+		r.refreshKeyLocked(ctx, keyID, RefetchHint{})
 	}
+}
+
+// RefetchHint carries the change metadata from an upstream change notification
+// (refetchConfig or refetchEvaluation). ETag is optional.
+type RefetchHint struct {
+	ETag string
+}
+
+// RefreshOutcome is the result of a single-key refresh.
+type RefreshOutcome int
+
+// RefreshKey outcomes.
+const (
+	RefreshSkipped     RefreshOutcome = iota // no entry, no FetchURL, or already at the hinted ETag
+	RefreshUpdated                           // 200: cache updated, observers notified
+	RefreshNotModified                       // 304: TTL extended
+	RefreshFailed                            // network error or non-evictable status; stale entry kept
+	RefreshEvicted                           // evictable 4xx: entry evicted
+)
+
+// RefreshKey revalidates keyID against upstream immediately, outside the
+// polling schedule, e.g. when upstream SSE announces a change. It follows the
+// same rules as the background refresh (observers, eviction, failure
+// notification). When hint.ETag matches the cached ETag the key is already
+// current and no request is made. Safe for concurrent use; refreshes of the
+// same key are serialized.
+func (r *Refresher) RefreshKey(ctx context.Context, keyID string, hint RefetchHint) RefreshOutcome {
+	return r.refreshKeyLocked(ctx, keyID, hint)
+}
+
+// refreshKeyLocked serializes refreshes per key so a slow poll can't overwrite
+// the result of a later event-driven refresh, then re-reads the entry so
+// If-None-Match uses the latest ETag.
+func (r *Refresher) refreshKeyLocked(ctx context.Context, keyID string, hint RefetchHint) RefreshOutcome {
+	mu, _ := r.keyLocks.LoadOrStore(keyID, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	defer mu.(*sync.Mutex).Unlock()
+
+	entry, ok := r.cache.Peek(keyID)
+	if !ok || entry.FetchURL == "" {
+		return RefreshSkipped
+	}
+	if hint.ETag != "" && hint.ETag == entry.ETag {
+		return RefreshSkipped
+	}
+	return r.refreshEntry(ctx, keyID, entry)
+}
+
+// refreshEntry performs one upstream revalidation of entry.
+func (r *Refresher) refreshEntry(ctx context.Context, keyID string, entry Entry) RefreshOutcome {
+	fetchCtx, span := r.tracer.Start(ctx, "proxy.refresh_fetch",
+		trace.WithAttributes(
+			attribute.String("sdk_key_public_id", keyID),
+			attribute.Bool("if_none_match", entry.ETag != ""),
+		))
+	result, err := r.fetcher.Fetch(fetchCtx, keyID, entry.FetchURL, entry.ETag)
+	if err != nil {
+		span.RecordError(err)
+		span.SetAttributes(attribute.String("result", "error"))
+		span.End()
+		r.logger.Warn("cache: background refresh failed",
+			slog.String("sdk_key_public_id", keyID),
+			slog.String("error", err.Error()),
+		)
+		if r.failureObserver != nil {
+			go r.failureObserver.OnRefreshFailure(context.WithoutCancel(ctx), keyID, entry.ETag, entry.FetchedAt)
+		}
+		return RefreshFailed
+	}
+	if result.NotModified {
+		span.SetAttributes(attribute.String("result", "not_modified"))
+		span.End()
+		r.cache.ResetTTL(keyID, time.Now())
+		r.logger.Debug("cache: background refresh — upstream unchanged (304), TTL extended", slog.String("sdk_key_public_id", keyID))
+		return RefreshNotModified
+	}
+	if result.Entry != nil {
+		result.Entry.FetchURL = entry.FetchURL // preserve the fetch URL
+		result.Entry.OriginatingFetch = span.SpanContext()
+		span.SetAttributes(attribute.String("result", "ok"))
+		span.End()
+		r.cache.Set(keyID, *result.Entry)
+		r.logger.Debug("cache: background refresh — new content received (200), cache updated", slog.String("sdk_key_public_id", keyID))
+		for _, obs := range r.observers {
+			obs.OnRefreshed(keyID, *result.Entry)
+		}
+		return RefreshUpdated
+	}
+	// Non-200/non-304: upstream returned an error status code.
+	if result.StatusCode != 0 {
+		statusStr := strconv.Itoa(result.StatusCode)
+		span.SetAttributes(
+			attribute.String("result", "upstream_error"),
+			attribute.Int("upstream.status_code", result.StatusCode),
+		)
+		span.End()
+		if ShouldEvict(result.StatusCode) {
+			r.cache.Delete(keyID)
+			r.logger.Warn("cache: background refresh got evictable status, evicting entry",
+				slog.String("sdk_key_public_id", keyID),
+				slog.Int("upstream_status", result.StatusCode),
+				slog.String("reason", EvictionReason(result.StatusCode)),
+			)
+			if r.inst != nil {
+				r.inst.CacheRefreshTotal.Add(ctx, 1, metric.WithAttributes(
+					attribute.String("result", "evicted"),
+					attribute.String("status_code", statusStr),
+				))
+			}
+			if r.evictor == nil {
+				r.logger.Warn("cache: evictor not set — SSE close and snapshot delete skipped on eviction",
+					slog.String("sdk_key_public_id", keyID),
+				)
+			} else {
+				r.evictor(keyID)
+			}
+			return RefreshEvicted
+		}
+		r.logger.Warn("cache: background refresh got upstream error, preserving stale entry",
+			slog.String("sdk_key_public_id", keyID),
+			slog.Int("upstream_status", result.StatusCode),
+		)
+		if r.inst != nil {
+			r.inst.CacheRefreshTotal.Add(ctx, 1, metric.WithAttributes(
+				attribute.String("result", "preserved_stale"),
+				attribute.String("status_code", statusStr),
+			))
+		}
+		if r.failureObserver != nil {
+			go r.failureObserver.OnRefreshFailure(context.WithoutCancel(ctx), keyID, entry.ETag, entry.FetchedAt)
+		}
+		return RefreshFailed
+	}
+	// Defensive: Fetcher returned a zero FetchResult — not a valid state.
+	// End the span to prevent a leak from a buggy Fetcher implementation.
+	span.SetAttributes(attribute.String("result", "unexpected_empty"))
+	span.End()
+	return RefreshFailed
 }
 
 // EvictionReason returns a human-readable label for a status code that warrants

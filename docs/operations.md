@@ -37,8 +37,8 @@ The proxy multiplexes SSE events from a single upstream connection to all SDK cl
    cache presence: if no config is cached for the given `stream_id`, it returns 412 Precondition Failed. On cold start
    this is expected; providers retry after fetching the config.
 
-3. **Events are fanned out.** When the upstream connection receives a `refetchEvaluation` event, the proxy dispatches it
-   to all active subscriber channels. Slow clients whose channel buffer is full (16 events) have events dropped; the
+3. **Events are fanned out.** When the upstream connection receives a `refetchConfig` event, the proxy first
+   refreshes that key's cached config from the CDN, then dispatches the event to all active subscriber channels. Slow clients whose channel buffer is full (16 events) have events dropped; the
    proxy logs a warning and increments a metric.
 
 4. **One connection per key.** Regardless of how many SDK clients subscribe, the proxy maintains exactly one upstream
@@ -113,8 +113,9 @@ backoff: starting at 1 second, doubling each attempt, capping at 60 seconds. The
 connection stays stable for more than 30 seconds.
 
 While reconnecting, the poll interval for that key falls back to 10 seconds, so flag changes are still delivered via CDN
-polling. Connected SDK clients keep receiving heartbeats (`: ping` every 15 seconds) and are not disconnected. They
-receive the next `refetchEvaluation` once the upstream connection is re-established.
+polling. Connected SDK clients keep receiving heartbeats (`: ping` every 15 seconds) and are not disconnected. When a poll finds
+new content during this time, the proxy sends them a `refetchConfig` itself (see
+[sse.md](sse.md#change-notifications-from-polling)).
 
 ### Snapshot Write Failure
 

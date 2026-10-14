@@ -150,6 +150,51 @@ connection is considered **streaming**. The cache refresher consults this state 
 This means a healthy SSE connection reduces background CDN load by 60x. During reconnect backoff, the proxy falls back
 to aggressive polling so flag changes are still delivered promptly.
 
+### Change Notification Events
+
+Upstream sends `refetchConfig` on server channels (`refetchEvaluation` on web and mobile channels), delivered as an Ably
+message whose `data` is the notification as a JSON string. `lastModified` is in Unix milliseconds:
+
+```text
+event: message
+data: {"id":"...","name":"refetchConfig","data":"{\"type\":\"refetchConfig\",\"etag\":\"\\\"abc123\\\"\",\"lastModified\":1771622898000}"}
+```
+
+The proxy also accepts the notification unwrapped in `data`, or as a named `refetchConfig` event.
+
+### Refreshing the Cache on Upstream Notifications
+
+Before forwarding a `refetchConfig` (or `refetchEvaluation`), the proxy revalidates that key's cached config against
+the CDN, so SDK clients that refetch in response get the new config rather than the copy cached until the next poll
+(10 minutes while connected). The refresh follows the background refresher's rules: a 200 updates the cache and
+snapshot, a 304 extends the TTL, and an evictable 4xx evicts the key, in which case the event is not forwarded. On a
+failure the event is forwarded anyway.
+
+- If the event's `etag` already matches the cached ETag, it is forwarded without a CDN request.
+- The refresh is a plain conditional GET (`If-None-Match`) of the stored config URL; no query parameters are added.
+- Events that arrive while a refresh for the key is running are coalesced: one more refresh runs afterwards and only
+  the latest event is forwarded.
+- Refreshes of one key (polled or event-driven) never run concurrently, so an older response can't overwrite a newer
+  one.
+
+Other event types are forwarded unchanged.
+
+### Change Notifications From Polling
+
+When polling retrieves new content (a background refresh or a demand revalidation returning 200) while the key's upstream
+connection is not streaming, the proxy publishes a change notification to that key's subscribers itself, so connected
+clients don't wait for the upstream connection to come back. It uses the type upstream would send for the key's
+platform (`refetchConfig` for server keys) with the new revision's ETag and upstream `Last-Modified` (Unix
+milliseconds), in the unwrapped form:
+
+```text
+event: message
+data: {"type":"refetchConfig","etag":"\"abc123\"","lastModified":1771622898000}
+```
+
+No event is published while the upstream connection is streaming (upstream announces changes itself), on a 304, or when
+the key has no subscribers. These events are counted as `proxy.sse.upstream.events{result="synthesized"}`.
+
 When `SSE_DISABLED=true`, `GET /sse` returns **501 Not Implemented** and the `eventStreamEndpoint` URL is not rewritten
 in the flagd config: SDK clients receive the upstream URL verbatim (or no URL if the upstream omits it). Clients must
 rely exclusively on polling; they must not connect to `/sse`.
