@@ -6,6 +6,7 @@ package e2e
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -77,11 +78,11 @@ func TestSSE_EventDelivery(t *testing.T) {
 	// Give the handler time to register both subscribers.
 	time.Sleep(100 * time.Millisecond)
 
-	// Send a refetchEvaluation event from upstream.
-	h.SSE.SendEvent(FormatEvent("refetchEvaluation", `{"flags":"all"}`))
+	// Send a refetchConfig event from upstream.
+	h.SSE.SendEvent(FormatEvent("refetchConfig", `{"flags":"all"}`))
 
-	receiveEvent(t, ch1, "refetchEvaluation", 3*time.Second)
-	receiveEvent(t, ch2, "refetchEvaluation", 3*time.Second)
+	receiveEvent(t, ch1, "refetchConfig", 3*time.Second)
+	receiveEvent(t, ch2, "refetchConfig", 3*time.Second)
 }
 
 // TestSSE_BeforeConfigCached_Returns412 verifies that a client connecting to
@@ -143,8 +144,8 @@ func TestSSE_ColdStart_BootstrapAndReconnect(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Event delivered end-to-end.
-	h.SSE.SendEvent(FormatEvent("refetchEvaluation", `{"flags":"all"}`))
-	receiveEvent(t, ch, "refetchEvaluation", 3*time.Second)
+	h.SSE.SendEvent(FormatEvent("refetchConfig", `{"flags":"all"}`))
+	receiveEvent(t, ch, "refetchConfig", 3*time.Second)
 }
 
 // TestSSE_MissingSDKKey_Returns400 verifies that a request to /sse without
@@ -179,4 +180,72 @@ func TestSSE_TwoKeys_IndependentConnections(t *testing.T) {
 		3*time.Second, 50*time.Millisecond,
 		"expected 2 upstream SSE connections for 2 distinct SDK keys",
 	)
+}
+
+// TestSSE_UpstreamRefetch_RefreshesCacheBeforeForwarding verifies that an
+// upstream refetchConfig makes the proxy refresh its own cache before
+// forwarding, so the client's refetch gets the new config immediately instead
+// of the copy cached until the next (10-minute, while connected) poll.
+func TestSSE_UpstreamRefetch_RefreshesCacheBeforeForwarding(t *testing.T) {
+	h := MustNew(t, Options{})
+
+	resp := h.GetConfig(t, TestSDKKey)
+	assertStatus(t, resp, http.StatusOK)
+	drainBody(t, resp)
+	eventually(t,
+		func() bool { return h.SSE.ConnCount() == 1 },
+		3*time.Second, 50*time.Millisecond,
+		"upstream SSE connection not established",
+	)
+
+	ch, cancel := connectSSE(t, h.URL(h.SSEPath(TestSDKKey)))
+	defer cancel()
+	time.Sleep(100 * time.Millisecond)
+
+	// Publish a new revision at the CDN, then announce it over upstream SSE.
+	h.CDN.SetPayload([]byte(`{"flags":{"rolled-out":{"state":"ENABLED"}}}`))
+	h.CDN.SetETag(`"test-etag-v2"`)
+	h.CDN.ResetCalls()
+	// Ably message framing, as delivered on server channels.
+	h.SSE.SendEvent(FormatEvent("message", `{"id":"m1","name":"refetchConfig","data":"{\"type\":\"refetchConfig\",\"etag\":\"\\\"test-etag-v2\\\"\",\"lastModified\":1771622898000}"}`))
+
+	receiveEvent(t, ch, "refetchConfig", 3*time.Second)
+	if calls := h.CDN.Calls(); calls != 1 {
+		t.Errorf("CDN calls after event = %d, want 1 (one refresh before forwarding)", calls)
+	}
+
+	resp = h.GetConfig(t, TestSDKKey)
+	assertStatus(t, resp, http.StatusOK)
+	if body := drainBody(t, resp); !strings.Contains(body, "rolled-out") {
+		t.Errorf("client refetch after event got stale config: %s", body)
+	}
+	if etag := resp.Header.Get("ETag"); etag != `"test-etag-v2"` {
+		t.Errorf("ETag = %q, want %q", etag, `"test-etag-v2"`)
+	}
+}
+
+// TestSSE_UpstreamRefetch_SameETagSkipsCDN verifies that an event naming the
+// already-cached revision is forwarded without a CDN request.
+func TestSSE_UpstreamRefetch_SameETagSkipsCDN(t *testing.T) {
+	h := MustNew(t, Options{})
+
+	resp := h.GetConfig(t, TestSDKKey)
+	assertStatus(t, resp, http.StatusOK)
+	drainBody(t, resp)
+	eventually(t,
+		func() bool { return h.SSE.ConnCount() == 1 },
+		3*time.Second, 50*time.Millisecond,
+		"upstream SSE connection not established",
+	)
+	ch, cancel := connectSSE(t, h.URL(h.SSEPath(TestSDKKey)))
+	defer cancel()
+	time.Sleep(100 * time.Millisecond)
+
+	h.CDN.ResetCalls()
+	h.SSE.SendEvent(FormatEvent("message", `{"type":"refetchConfig","etag":"\"test-etag-v1\""}`))
+
+	receiveEvent(t, ch, "refetchConfig", 3*time.Second)
+	if calls := h.CDN.Calls(); calls != 0 {
+		t.Errorf("CDN calls = %d, want 0 for an event naming the cached ETag", calls)
+	}
 }
