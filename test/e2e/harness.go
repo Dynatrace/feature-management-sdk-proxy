@@ -208,8 +208,11 @@ func New(t *testing.T, opts Options) (*Harness, error) {
 		}()
 	}
 
-	// Use a dedicated 5s fetcher for background refresh (same reasoning as main.go).
-	refreshFetcher := proxy.NewFetcher(&http.Client{Timeout: 5 * time.Second}, logger, 0)
+	// Use a dedicated 5s fetcher for background refresh (same reasoning as main.go),
+	// routed to the CDN mock like the cold-fetch client.
+	refreshClient := cdnMock.redirectingClient()
+	refreshClient.Timeout = 5 * time.Second
+	refreshFetcher := proxy.NewFetcher(refreshClient, logger, 0)
 	var refreshObservers []cache.RefreshObserver
 	refreshObservers = append(refreshObservers, sseManager)
 	if snapshotWriter != nil {
@@ -217,6 +220,7 @@ func New(t *testing.T, opts Options) (*Harness, error) {
 	}
 	refresher := cache.NewRefresherWithObservers(flagCache, refreshFetcher, logger, refreshObservers...)
 	refresher.SetIntervalProvider(sseManager)
+	sseManager.SetRefetcher(refresher)
 	go refresher.Run(ctx)
 
 	probeHandlers := health.New(func() bool { return true }, logger)

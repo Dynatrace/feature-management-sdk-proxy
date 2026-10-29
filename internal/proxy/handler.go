@@ -340,6 +340,9 @@ func (h *Handler) doDemandRevalidate(ctx context.Context, sdkKey, key string, en
 		h.cache.Set(key, *result.Entry)
 		h.logger.DebugContext(ctx, "proxy: demand revalidation — new content received (200), cache updated", slog.String("sdk_key_public_id", key))
 		if h.sseManager != nil {
+			// Subscribers attached to the snapshot-restored config before upstream
+			// SSE is up; tell them the config changed.
+			h.sseManager.NotifyPolledChange(key, *result.Entry)
 			sseCtx := trace.ContextWithSpanContext(context.Background(), span.SpanContext())
 			h.sseManager.OnConfigCached(sseCtx, sdkKey, result.Entry.Payload)
 		}

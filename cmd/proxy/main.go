@@ -373,6 +373,8 @@ func run() error {
 	refresher := cache.NewRefresherWithObservers(flagCache, refreshFetcher, logger, refreshObservers...)
 	if sseManager != nil {
 		refresher.SetIntervalProvider(sseManager)
+		// Refresh the cache before forwarding upstream change notifications.
+		sseManager.SetRefetcher(refresher)
 	}
 	refresher.SetTracer(tracer)
 	refresher.SetInstruments(inst)
