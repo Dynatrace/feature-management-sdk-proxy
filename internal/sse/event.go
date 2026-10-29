@@ -20,7 +20,7 @@ const (
 type changeNotification struct {
 	Type         string `json:"type"`
 	ETag         string `json:"etag,omitempty"`
-	LastModified int64  `json:"lastModified,omitempty"` // Unix milliseconds
+	LastModified int64  `json:"lastModified,omitempty"` // Unix seconds
 }
 
 // parseRefetch reports whether evt is a change notification and returns its
@@ -60,7 +60,7 @@ func refetchEventType(keyID string) string {
 func refetchEvent(keyID string, entry cache.Entry) Event {
 	d := changeNotification{Type: refetchEventType(keyID), ETag: entry.ETag}
 	if !entry.LastModified.IsZero() {
-		d.LastModified = entry.LastModified.UnixMilli()
+		d.LastModified = entry.LastModified.Unix()
 	}
 	data, _ := json.Marshal(d) // cannot fail: fixed struct of strings and ints
 	return Event{EventType: "message", Data: data}

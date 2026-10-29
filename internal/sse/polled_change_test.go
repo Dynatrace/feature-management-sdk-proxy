@@ -103,7 +103,7 @@ func TestManager_PolledChange_NotifiesWhenUpstreamNotStreaming(t *testing.T) {
 			if len(got) != 1 {
 				t.Fatalf("want 1 change notification, got %d in %q", len(got), body)
 			}
-			want := changeNotification{Type: EventTypeRefetchConfig, ETag: `"v2"`, LastModified: polledEntry().LastModified.UnixMilli()}
+			want := changeNotification{Type: EventTypeRefetchConfig, ETag: `"v2"`, LastModified: polledEntry().LastModified.Unix()}
 			if got[0] != want {
 				t.Errorf("event data = %+v, want %+v", got[0], want)
 			}
