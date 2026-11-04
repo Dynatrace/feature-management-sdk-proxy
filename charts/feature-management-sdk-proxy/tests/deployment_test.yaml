@@ -9,12 +9,12 @@ release:
 tests:
   - it: uses the appVersion image from ghcr.io by default
     template: deployment.yaml
+    chart:
+      appVersion: v9.9.9
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/dynatrace/feature-management-sdk-proxy:v0.2.0
-        chart:
-          appVersion: v0.2.0
+          value: ghcr.io/dynatrace/feature-management-sdk-proxy:v9.9.9
 
   - it: supports registry mirrors
     template: deployment.yaml
