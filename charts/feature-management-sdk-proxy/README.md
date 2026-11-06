@@ -187,7 +187,7 @@ ingress:
 | fullnameOverride | string | `""` | Override the full resource name. |
 | image.digest | string | `""` | Image digest (`sha256:...`). Takes precedence over `tag` when set. |
 | image.pullPolicy | string | `"IfNotPresent"` | Image pull policy. |
-| image.registry | string | `"ghcr.io"` | Image registry. Override to use a mirror. |
+| image.registry | string | `"ghcr.io"` | Image registry. Override to use a mirror. Values are templated. |
 | image.repository | string | `"dynatrace/feature-management-sdk-proxy"` | Image repository within the registry. |
 | image.tag | string | `""` | Image tag. Defaults to the chart `appVersion`. |
 | imagePullSecrets | list | `[]` | Image pull secrets for private registries or mirrors. |

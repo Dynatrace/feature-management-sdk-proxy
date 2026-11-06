@@ -26,6 +26,17 @@ tests:
           path: spec.template.spec.containers[0].image
           value: mirror.example.com/dynatrace/feature-management-sdk-proxy:v9.9.9
 
+  - it: templates the registry
+    template: deployment.yaml
+    set:
+      global.mirror: mirror.example.com
+      image.registry: "{{ .Values.global.mirror }}/ghcr.io"
+      image.tag: v9.9.9
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mirror.example.com/ghcr.io/dynatrace/feature-management-sdk-proxy:v9.9.9
+
   - it: prefers digest over tag
     template: deployment.yaml
     set:

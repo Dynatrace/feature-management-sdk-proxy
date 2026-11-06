@@ -5,7 +5,7 @@
 replicaCount: 2
 
 image:
-  # -- Image registry. Override to use a mirror.
+  # -- Image registry. Override to use a mirror. Values are templated.
   registry: ghcr.io
   # -- Image repository within the registry.
   repository: dynatrace/feature-management-sdk-proxy

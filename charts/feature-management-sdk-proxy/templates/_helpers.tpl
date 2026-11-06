@@ -49,8 +49,8 @@ Full image reference: registry/repository, then @digest or :tag.
 */}}
 {{- define "fmsp.image" -}}
 {{- $repo := .Values.image.repository }}
-{{- if .Values.image.registry }}
-{{- $repo = printf "%s/%s" (trimSuffix "/" .Values.image.registry) $repo }}
+{{- with tpl .Values.image.registry . }}
+{{- $repo = printf "%s/%s" (trimSuffix "/" .) $repo }}
 {{- end }}
 {{- if .Values.image.digest }}
 {{- printf "%s@%s" $repo .Values.image.digest }}
