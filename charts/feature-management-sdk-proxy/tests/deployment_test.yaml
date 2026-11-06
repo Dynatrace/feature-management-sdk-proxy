@@ -37,6 +37,16 @@ tests:
           path: spec.template.spec.containers[0].image
           value: mirror.example.com/ghcr.io/dynatrace/feature-management-sdk-proxy:v9.9.9
 
+  - it: omits a null registry
+    template: deployment.yaml
+    set:
+      image.registry: null
+      image.tag: v9.9.9
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: dynatrace/feature-management-sdk-proxy:v9.9.9
+
   - it: prefers digest over tag
     template: deployment.yaml
     set:
