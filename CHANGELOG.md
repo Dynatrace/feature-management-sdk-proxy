@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.1](https://github.com/Dynatrace/feature-management-sdk-proxy/compare/v0.3.0...v0.3.1) (2026-11-06)
+
+
+### ✨ New Features
+
+* **chart:** template image.registry ([#38](https://github.com/Dynatrace/feature-management-sdk-proxy/issues/38)) ([36c6e07](https://github.com/Dynatrace/feature-management-sdk-proxy/commit/36c6e079c58d59f5b815f46930f2659728578563))
+
+
+### 🐛 Bug Fixes
+
+* create releases as non-prerelease so they are marked latest ([#36](https://github.com/Dynatrace/feature-management-sdk-proxy/issues/36)) ([05fa857](https://github.com/Dynatrace/feature-management-sdk-proxy/commit/05fa857440163217fc19493a5648085764ab9da7))
+
+
+### 🧹 Chore
+
+* **deps:** bump github.com/go-jose/go-jose/v4 from 4.1.4 to 4.1.6 ([#34](https://github.com/Dynatrace/feature-management-sdk-proxy/issues/34)) ([51a7f8c](https://github.com/Dynatrace/feature-management-sdk-proxy/commit/51a7f8c8d0c922467f483a9d86ca24c509c106b3))
+* **deps:** bump go.opentelemetry.io/otel/exporters/otlp/otlptrace from 1.43.0 to 1.45.0 ([#26](https://github.com/Dynatrace/feature-management-sdk-proxy/issues/26)) ([509ccc2](https://github.com/Dynatrace/feature-management-sdk-proxy/commit/509ccc22fe33a0a919f4f5da07cb7c9937f3b4b7))
+* **deps:** bump go.opentelemetry.io/otel/sdk from 1.44.0 to 1.45.0 ([#25](https://github.com/Dynatrace/feature-management-sdk-proxy/issues/25)) ([a3ba0c5](https://github.com/Dynatrace/feature-management-sdk-proxy/commit/a3ba0c56b95f46bea615acae67b3d03355d0681e))
+* **deps:** bump google.golang.org/grpc from 1.83.1 to 1.83.2 ([#22](https://github.com/Dynatrace/feature-management-sdk-proxy/issues/22)) ([001b799](https://github.com/Dynatrace/feature-management-sdk-proxy/commit/001b7990b07b08318eabc3ac11ee56a0f1f37590))
+
 ## [0.3.0](https://github.com/Dynatrace/feature-management-sdk-proxy/compare/v0.2.0...v0.3.0) (2026-11-04)
 
 
