@@ -35,30 +35,28 @@ Usage: include "fmsp.render" (dict "value" .Values.x "context" $)
 {{- if typeIs "string" .value }}
 {{- tpl .value .context }}
 {{- else }}
-{{- (include "fmsp.tplTree" . | fromJson).v | toYaml }}
+{{- (include "fmsp.tplTree" . | fromJson).result | toYaml }}
 {{- end }}
 {{- end }}
 
-{{/* fmsp.render helper; returns {"v": <value>} as JSON */}}
+{{/* tpl every string in .value; output is wrapped as {"result": ...} because fromJson only parses objects */}}
 {{- define "fmsp.tplTree" -}}
 {{- $ctx := .context }}
-{{- if kindIs "map" .value }}
-{{- $out := dict }}
-{{- range $k, $v := .value }}
-{{- $_ := set $out $k (include "fmsp.tplTree" (dict "value" $v "context" $ctx) | fromJson).v }}
+{{- $v := .value }}
+{{- if kindIs "string" $v }}
+{{- $v = tpl $v $ctx }}
+{{- else if kindIs "map" $v }}
+{{- $v = dict }}
+{{- range $key, $item := .value }}
+{{- $_ := set $v $key (include "fmsp.tplTree" (dict "value" $item "context" $ctx) | fromJson).result }}
 {{- end }}
-{{- dict "v" $out | toJson }}
-{{- else if kindIs "slice" .value }}
-{{- $out := list }}
-{{- range .value }}
-{{- $out = append $out (include "fmsp.tplTree" (dict "value" . "context" $ctx) | fromJson).v }}
+{{- else if kindIs "slice" $v }}
+{{- $v = list }}
+{{- range $item := .value }}
+{{- $v = append $v (include "fmsp.tplTree" (dict "value" $item "context" $ctx) | fromJson).result }}
 {{- end }}
-{{- dict "v" $out | toJson }}
-{{- else if kindIs "string" .value }}
-{{- dict "v" (tpl .value $ctx) | toJson }}
-{{- else }}
-{{- dict "v" .value | toJson }}
 {{- end }}
+{{- dict "result" $v | toJson }}
 {{- end }}
 
 {{- define "fmsp.labels" -}}
