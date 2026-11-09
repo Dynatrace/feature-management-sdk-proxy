@@ -25,13 +25,25 @@ Create a default fully qualified app name, truncated to 63 chars (DNS label limi
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{/*
+Render a value through tpl: strings as-is, maps and lists as YAML.
+Usage: include "fmsp.render" (dict "value" .Values.x "context" $)
+*/}}
+{{- define "fmsp.render" -}}
+{{- if typeIs "string" .value }}
+{{- tpl .value .context }}
+{{- else }}
+{{- tpl (toYaml .value) .context }}
+{{- end }}
+{{- end }}
+
 {{- define "fmsp.labels" -}}
 helm.sh/chart: {{ include "fmsp.chart" . }}
 {{ include "fmsp.selectorLabels" . }}
 app.kubernetes.io/version: {{ include "fmsp.imageTag" . | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- with .Values.commonLabels }}
-{{ toYaml . }}
+{{ include "fmsp.render" (dict "value" . "context" $) }}
 {{- end }}
 {{- end }}
 
@@ -65,6 +77,14 @@ Full image reference: registry/repository, then @digest or :tag.
 {{- $repo = printf "%s/%s" (trimSuffix "/" .) $repo }}
 {{- end }}
 {{- printf "%s:%s" $repo .Values.tests.image.tag }}
+{{- end }}
+
+{{- define "fmsp.replicaCount" -}}
+{{- $r := include "fmsp.render" (dict "value" .Values.replicaCount "context" $) | trim }}
+{{- if not (regexMatch "^[0-9]+$" $r) }}
+{{- fail (printf "replicaCount must render to a non-negative integer, got %q" $r) }}
+{{- end }}
+{{- $r }}
 {{- end }}
 
 {{- define "fmsp.serviceAccountName" -}}

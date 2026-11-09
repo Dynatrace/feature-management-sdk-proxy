@@ -172,6 +172,24 @@ ingress:
           pathType: Prefix
 ```
 
+## Templated Values
+
+These values go through `tpl`, so a wrapper chart can derive them from its own values or globals instead of setting
+them per environment: `replicaCount`, `image.registry`, `tests.image.registry`, `commonLabels`, `deploymentAnnotations`,
+`podAnnotations`, `podLabels`, `serviceAccount.annotations`, `service.annotations`, `ingress.annotations`,
+`cdnBaseDomain`, `otel.*`, `snapshot.url`, `extraEnv`, `extraEnvFrom`, `extraVolumes`, `extraVolumeMounts`,
+`imagePullSecrets`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, and
+the `networkPolicy` `ingress.from`, `extraIngress`, and `extraEgress` rules.
+
+```yaml
+feature-management-sdk-proxy:
+  image:
+    registry: "{{`{{ .Values.global.containerImageRegistry }}`}}"
+  replicaCount: "{{`{{ .Values.global.zoneCount }}`}}"
+```
+
+Plain values render unchanged. To keep a literal `{{`{{`}}`, write `{{`{{ "{{" }}`}}`.
+
 {{ template "chart.valuesSection" . }}
 
 ## Development

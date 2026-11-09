@@ -56,3 +56,9 @@ tests:
       tests.image.digest: sha256:0
     asserts:
       - failedTemplate: {}
+
+  - it: accepts a templated replicaCount
+    set:
+      replicaCount: "{{ 3 }}"
+    asserts:
+      - notFailedTemplate: {}

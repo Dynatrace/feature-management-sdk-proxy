@@ -6,7 +6,7 @@ metadata:
     {{- include "fmsp.labels" . | nindent 4 }}
   {{- with .Values.service.annotations }}
   annotations:
-    {{- toYaml . | nindent 4 }}
+    {{- include "fmsp.render" (dict "value" . "context" $) | nindent 4 }}
   {{- end }}
 spec:
   type: {{ .Values.service.type }}

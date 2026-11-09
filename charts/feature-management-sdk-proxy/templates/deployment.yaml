@@ -4,8 +4,12 @@ metadata:
   name: {{ include "fmsp.fullname" . }}
   labels:
     {{- include "fmsp.labels" . | nindent 4 }}
+  {{- with .Values.deploymentAnnotations }}
+  annotations:
+    {{- include "fmsp.render" (dict "value" . "context" $) | nindent 4 }}
+  {{- end }}
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ include "fmsp.replicaCount" . }}
   selector:
     matchLabels:
       {{- include "fmsp.selectorLabels" . | nindent 6 }}
@@ -22,21 +26,21 @@ spec:
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         {{- end }}
         {{- with .Values.podAnnotations }}
-        {{- toYaml . | nindent 8 }}
+        {{- include "fmsp.render" (dict "value" . "context" $) | nindent 8 }}
         {{- end }}
       labels:
         {{- include "fmsp.labels" . | nindent 8 }}
         {{- with .Values.podLabels }}
-        {{- toYaml . | nindent 8 }}
+        {{- include "fmsp.render" (dict "value" . "context" $) | nindent 8 }}
         {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
+        {{- include "fmsp.render" (dict "value" . "context" $) | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "fmsp.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
-      {{- with .Values.priorityClassName }}
+      {{- with tpl .Values.priorityClassName $ }}
       priorityClassName: {{ . }}
       {{- end }}
       securityContext:
@@ -60,7 +64,7 @@ spec:
                 name: {{ . }}
             {{- end }}
             {{- with .Values.extraEnvFrom }}
-            {{- toYaml . | nindent 12 }}
+            {{- include "fmsp.render" (dict "value" . "context" $) | nindent 12 }}
             {{- end }}
           env:
             - name: PROXY_INSTANCE_ID
@@ -68,7 +72,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             {{- with .Values.extraEnv }}
-            {{- toYaml . | nindent 12 }}
+            {{- include "fmsp.render" (dict "value" . "context" $) | nindent 12 }}
             {{- end }}
           {{- with .Values.startupProbe }}
           startupProbe:
@@ -86,25 +90,25 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           {{- with .Values.extraVolumeMounts }}
           volumeMounts:
-            {{- toYaml . | nindent 12 }}
+            {{- include "fmsp.render" (dict "value" . "context" $) | nindent 12 }}
           {{- end }}
       {{- with .Values.extraVolumes }}
       volumes:
-        {{- toYaml . | nindent 8 }}
+        {{- include "fmsp.render" (dict "value" . "context" $) | nindent 8 }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
-        {{- toYaml . | nindent 8 }}
+        {{- include "fmsp.render" (dict "value" . "context" $) | nindent 8 }}
       {{- end }}
       {{- with .Values.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- include "fmsp.render" (dict "value" . "context" $) | nindent 8 }}
       {{- end }}
       {{- with .Values.topologySpreadConstraints }}
       topologySpreadConstraints:
-        {{- tpl (toYaml .) $ | nindent 8 }}
+        {{- include "fmsp.render" (dict "value" . "context" $) | nindent 8 }}
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:
-        {{- toYaml . | nindent 8 }}
+        {{- include "fmsp.render" (dict "value" . "context" $) | nindent 8 }}
       {{- end }}

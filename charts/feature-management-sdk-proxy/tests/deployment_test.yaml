@@ -212,3 +212,50 @@ tests:
           value: "42"
       - notExists:
           path: spec.selector.matchLabels.cost-center
+
+  - it: templates per-environment values
+    template: deployment.yaml
+    set:
+      global.zones: 3
+      global.cluster: dev1
+      replicaCount: "{{ .Values.global.zones }}"
+      deploymentAnnotations:
+        link: "logs|https://example.com/{{ .Values.global.cluster }}"
+      podAnnotations:
+        cluster: "{{ .Values.global.cluster }}"
+      podLabels:
+        cluster: "{{ .Values.global.cluster }}"
+      extraEnv:
+        - name: CLUSTER
+          value: "{{ .Values.global.cluster }}"
+      nodeSelector:
+        pool: "{{ .Values.global.cluster }}"
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+      - equal:
+          path: metadata.annotations.link
+          value: logs|https://example.com/dev1
+      - equal:
+          path: spec.template.metadata.annotations.cluster
+          value: dev1
+      - equal:
+          path: spec.template.metadata.labels.cluster
+          value: dev1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLUSTER
+            value: dev1
+      - equal:
+          path: spec.template.spec.nodeSelector.pool
+          value: dev1
+
+  - it: rejects a replicaCount that doesn't render to an integer
+    template: deployment.yaml
+    set:
+      replicaCount: "{{ .Release.Name }}"
+    asserts:
+      - failedTemplate:
+          errorPattern: replicaCount must render to a non-negative integer

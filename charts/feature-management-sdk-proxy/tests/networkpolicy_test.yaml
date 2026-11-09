@@ -73,3 +73,16 @@ tests:
     asserts:
       - notExists:
           path: spec.ingress[0].from
+
+  - it: templates ingress peers
+    set:
+      global.consumerNs: consumers
+      networkPolicy.enabled: true
+      networkPolicy.ingress.from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: "{{ .Values.global.consumerNs }}"
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: consumers

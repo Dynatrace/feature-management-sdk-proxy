@@ -1,11 +1,11 @@
 # Full environment variable reference: docs/configuration.md in the repository.
 # Unset (null) values fall back to the proxy's built-in defaults.
 
-# -- Number of proxy replicas.
+# -- Number of proxy replicas; an integer, or a template that renders one.
 replicaCount: 2
 
 image:
-  # -- Image registry. Override to use a mirror. Values are templated.
+  # -- Image registry. Override to use a mirror.
   registry: ghcr.io
   # -- Image repository within the registry.
   repository: dynatrace/feature-management-sdk-proxy
@@ -77,7 +77,7 @@ snapshot:
   # -- Enable snapshot persistence.
   enabled: false
   # -- Bucket URL (`SNAPSHOT_URL`), e.g. `s3://bucket?region=us-east-1`, `gs://bucket`,
-  # `azblob://container?storage_account=name`. Required when `snapshot.enabled`. Values are templated.
+  # `azblob://container?storage_account=name`. Required when `snapshot.enabled`.
   url: ""
   # -- Snapshots older than this are treated as stale at startup (`SNAPSHOT_MAX_AGE`, proxy default 24h).
   maxAge: null
@@ -100,6 +100,8 @@ extraVolumes: []
 # -- Additional container volume mounts.
 extraVolumeMounts: []
 
+# -- Deployment annotations.
+deploymentAnnotations: {}
 # -- Pod annotations.
 podAnnotations: {}
 # -- Pod labels.
@@ -178,7 +180,7 @@ tests:
   # -- Render the `helm test` pod that checks `/readyz` through the Service.
   enabled: true
   image:
-    # -- Test image registry. Values are templated.
+    # -- Test image registry.
     registry: ""
     # -- Test image repository.
     repository: busybox
@@ -238,7 +240,7 @@ nodeSelector: {}
 tolerations: []
 # -- Affinity rules.
 affinity: {}
-# -- Topology spread constraints. Values are templated.
+# -- Topology spread constraints.
 topologySpreadConstraints: []
 # -- Priority class name.
 priorityClassName: ""
