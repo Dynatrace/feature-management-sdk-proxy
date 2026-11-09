@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/Dynatrace/feature-management-sdk-proxy/compare/v0.3.1...v0.3.2) (2026-11-09)
+
+
+### ✨ New Features
+
+* **chart:** template per-environment values and make the test pod optional ([#39](https://github.com/Dynatrace/feature-management-sdk-proxy/issues/39)) ([9e570b0](https://github.com/Dynatrace/feature-management-sdk-proxy/commit/9e570b0ed0ba46ef6471c772d9a733629f49ad71))
+
 ## [0.3.1](https://github.com/Dynatrace/feature-management-sdk-proxy/compare/v0.3.0...v0.3.1) (2026-11-06)
 
 
