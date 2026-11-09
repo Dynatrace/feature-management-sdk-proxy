@@ -25,13 +25,47 @@ Create a default fully qualified app name, truncated to 63 chars (DNS label limi
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{/*
+Render a value through tpl: strings directly, maps and lists by templating each
+string inside them before serializing, so substituted text is escaped.
+Templated values render as strings.
+Usage: include "fmsp.render" (dict "value" .Values.x "context" $)
+*/}}
+{{- define "fmsp.render" -}}
+{{- if typeIs "string" .value }}
+{{- tpl .value .context }}
+{{- else }}
+{{- (include "fmsp.tplTree" . | fromJson).result | toYaml }}
+{{- end }}
+{{- end }}
+
+{{/* tpl every string in .value; output is wrapped as {"result": ...} because fromJson only parses objects */}}
+{{- define "fmsp.tplTree" -}}
+{{- $ctx := .context }}
+{{- $v := .value }}
+{{- if typeIs "string" $v }}
+{{- $v = tpl $v $ctx }}
+{{- else if kindIs "map" $v }}
+{{- $v = dict }}
+{{- range $key, $item := .value }}
+{{- $_ := set $v $key (include "fmsp.tplTree" (dict "value" $item "context" $ctx) | fromJson).result }}
+{{- end }}
+{{- else if kindIs "slice" $v }}
+{{- $v = list }}
+{{- range $item := .value }}
+{{- $v = append $v (include "fmsp.tplTree" (dict "value" $item "context" $ctx) | fromJson).result }}
+{{- end }}
+{{- end }}
+{{- dict "result" $v | toJson }}
+{{- end }}
+
 {{- define "fmsp.labels" -}}
 helm.sh/chart: {{ include "fmsp.chart" . }}
 {{ include "fmsp.selectorLabels" . }}
 app.kubernetes.io/version: {{ include "fmsp.imageTag" . | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- with .Values.commonLabels }}
-{{ toYaml . }}
+{{ include "fmsp.render" (dict "value" . "context" $) }}
 {{- end }}
 {{- end }}
 
@@ -57,6 +91,22 @@ Full image reference: registry/repository, then @digest or :tag.
 {{- else }}
 {{- printf "%s:%s" $repo (include "fmsp.imageTag" .) }}
 {{- end }}
+{{- end }}
+
+{{- define "fmsp.testImage" -}}
+{{- $repo := .Values.tests.image.repository }}
+{{- with .Values.tests.image.registry }}
+{{- $repo = printf "%s/%s" (trimSuffix "/" .) $repo }}
+{{- end }}
+{{- printf "%s:%s" $repo .Values.tests.image.tag }}
+{{- end }}
+
+{{- define "fmsp.replicaCount" -}}
+{{- $r := include "fmsp.render" (dict "value" .Values.replicaCount "context" $) | trim }}
+{{- if not (regexMatch "^[0-9]+$" $r) }}
+{{- fail (printf "replicaCount must render to a non-negative integer, got %q" $r) }}
+{{- end }}
+{{- $r }}
 {{- end }}
 
 {{- define "fmsp.serviceAccountName" -}}
@@ -90,8 +140,12 @@ render time instead of producing a pod that exits 1 at startup.
 {{- define "fmsp.validate" -}}
 {{- with .Values.snapshot }}
 {{- if .enabled }}
-{{- if not .url }}
+{{- $url := tpl (.url | default "") $ }}
+{{- if not $url }}
 {{- fail "snapshot.url is required when snapshot.enabled=true" }}
+{{- end }}
+{{- if not (regexMatch "^(s3|gs|azblob|file)://" $url) }}
+{{- fail (printf "snapshot.url must start with s3://, gs://, azblob:// or file://, got %q" $url) }}
 {{- end }}
 {{- if and .credentials.existingSecret .credentials.env }}
 {{- fail "set either snapshot.credentials.existingSecret or snapshot.credentials.env, not both" }}

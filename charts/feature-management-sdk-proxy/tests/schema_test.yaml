@@ -44,3 +44,21 @@ tests:
         "not-an-env-var": x
     asserts:
       - failedTemplate: {}
+
+  - it: accepts a templated snapshot URL
+    set:
+      snapshot.url: "{{ .Values.global.bucket }}"
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: rejects unknown test settings
+    set:
+      tests.image.digest: sha256:0
+    asserts:
+      - failedTemplate: {}
+
+  - it: accepts a templated replicaCount
+    set:
+      replicaCount: "{{ 3 }}"
+    asserts:
+      - notFailedTemplate: {}

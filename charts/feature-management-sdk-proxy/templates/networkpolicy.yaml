@@ -19,10 +19,10 @@ spec:
           protocol: TCP
       {{- with $np.ingress.from }}
       from:
-        {{- toYaml . | nindent 8 }}
+        {{- include "fmsp.render" (dict "value" . "context" $) | nindent 8 }}
       {{- end }}
     {{- with $np.extraIngress }}
-    {{- toYaml . | nindent 4 }}
+    {{- include "fmsp.render" (dict "value" . "context" $) | nindent 4 }}
     {{- end }}
   egress:
     {{- if $np.egress.dns }}
@@ -58,6 +58,6 @@ spec:
             {{- end }}
     {{- end }}
     {{- with $np.extraEgress }}
-    {{- toYaml . | nindent 4 }}
+    {{- include "fmsp.render" (dict "value" . "context" $) | nindent 4 }}
     {{- end }}
 {{- end }}

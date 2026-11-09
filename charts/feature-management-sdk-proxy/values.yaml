@@ -1,11 +1,11 @@
 # Full environment variable reference: docs/configuration.md in the repository.
 # Unset (null) values fall back to the proxy's built-in defaults.
 
-# -- Number of proxy replicas.
+# -- Number of proxy replicas; an integer, or a template that renders one.
 replicaCount: 2
 
 image:
-  # -- Image registry. Override to use a mirror. Values are templated.
+  # -- Image registry. Override to use a mirror.
   registry: ghcr.io
   # -- Image repository within the registry.
   repository: dynatrace/feature-management-sdk-proxy
@@ -100,6 +100,8 @@ extraVolumes: []
 # -- Additional container volume mounts.
 extraVolumeMounts: []
 
+# -- Deployment annotations.
+deploymentAnnotations: {}
 # -- Pod annotations.
 podAnnotations: {}
 # -- Pod labels.
@@ -174,6 +176,19 @@ networkPolicy:
   # -- Additional ingress rules (list of `NetworkPolicyIngressRule`).
   extraIngress: []
 
+tests:
+  # -- Render the `helm test` pod that checks `/readyz` through the Service.
+  enabled: true
+  image:
+    # -- Test image registry.
+    registry: ""
+    # -- Test image repository.
+    repository: busybox
+    # -- Test image tag.
+    tag: "1.37"
+  # -- Test pod resource requests and limits.
+  resources: {}
+
 # -- Resource requests and limits.
 resources:
   requests:
@@ -225,7 +240,7 @@ nodeSelector: {}
 tolerations: []
 # -- Affinity rules.
 affinity: {}
-# -- Topology spread constraints. Values are templated.
+# -- Topology spread constraints.
 topologySpreadConstraints: []
 # -- Priority class name.
 priorityClassName: ""

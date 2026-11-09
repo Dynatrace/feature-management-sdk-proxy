@@ -212,3 +212,103 @@ tests:
           value: "42"
       - notExists:
           path: spec.selector.matchLabels.cost-center
+
+  - it: templates per-environment values
+    template: deployment.yaml
+    set:
+      global.zones: 3
+      global.cluster: dev1
+      replicaCount: "{{ .Values.global.zones }}"
+      deploymentAnnotations:
+        link: "logs|https://example.com/{{ .Values.global.cluster }}"
+      podAnnotations:
+        cluster: "{{ .Values.global.cluster }}"
+      podLabels:
+        cluster: "{{ .Values.global.cluster }}"
+      extraEnv:
+        - name: CLUSTER
+          value: "{{ .Values.global.cluster }}"
+      nodeSelector:
+        pool: "{{ .Values.global.cluster }}"
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+      - equal:
+          path: metadata.annotations.link
+          value: logs|https://example.com/dev1
+      - equal:
+          path: spec.template.metadata.annotations.cluster
+          value: dev1
+      - equal:
+          path: spec.template.metadata.labels.cluster
+          value: dev1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLUSTER
+            value: dev1
+      - equal:
+          path: spec.template.spec.nodeSelector.pool
+          value: dev1
+
+  - it: rejects a replicaCount that doesn't render to an integer
+    template: deployment.yaml
+    set:
+      replicaCount: "{{ .Release.Name }}"
+    asserts:
+      - failedTemplate:
+          errorPattern: replicaCount must render to a non-negative integer
+
+  - it: escapes substituted text
+    template: deployment.yaml
+    set:
+      global.owner: "MyTeam's: #1"
+      deploymentAnnotations:
+        owner: "{{ .Values.global.owner }}"
+    asserts:
+      - equal:
+          path: metadata.annotations.owner
+          value: "MyTeam's: #1"
+
+  - it: escapes substituted text in lists
+    template: deployment.yaml
+    set:
+      global.owner: "MyTeam's: #1"
+      extraEnv:
+        - name: OWNER
+          value: "{{ .Values.global.owner }}"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OWNER
+            value: "MyTeam's: #1"
+
+  - it: keeps booleans in templated lists
+    template: deployment.yaml
+    set:
+      global.cm: my-config
+      extraEnvFrom:
+        - configMapRef:
+            name: "{{ .Values.global.cm }}"
+            optional: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            configMapRef:
+              name: my-config
+              optional: true
+
+  - it: keeps literal numbers in templated lists
+    template: deployment.yaml
+    set:
+      tolerations:
+        - key: k
+          operator: Exists
+          tolerationSeconds: 60
+    asserts:
+      - equal:
+          path: spec.template.spec.tolerations[0].tolerationSeconds
+          value: 60

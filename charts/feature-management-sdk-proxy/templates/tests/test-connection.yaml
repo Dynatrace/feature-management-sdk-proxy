@@ -1,3 +1,4 @@
+{{- if .Values.tests.enabled }}
 apiVersion: v1
 kind: Pod
 metadata:
@@ -9,13 +10,17 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
     app.kubernetes.io/component: test
     {{- with .Values.commonLabels }}
-    {{- toYaml . | nindent 4 }}
+    {{- include "fmsp.render" (dict "value" . "context" $) | nindent 4 }}
     {{- end }}
   annotations:
     "helm.sh/hook": test
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   restartPolicy: Never
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- include "fmsp.render" (dict "value" . "context" $) | nindent 4 }}
+  {{- end }}
   securityContext:
     runAsNonRoot: true
     runAsUser: 65532
@@ -23,10 +28,15 @@ spec:
       type: RuntimeDefault
   containers:
     - name: wget
-      image: busybox:1.37
+      image: {{ include "fmsp.testImage" . }}
       command: ["wget", "-q", "-O-", "http://{{ include "fmsp.fullname" . }}:{{ .Values.service.port }}/readyz"]
       securityContext:
         allowPrivilegeEscalation: false
         readOnlyRootFilesystem: true
         capabilities:
           drop: ["ALL"]
+      {{- with .Values.tests.resources }}
+      resources:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

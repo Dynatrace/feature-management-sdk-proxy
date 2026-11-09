@@ -65,6 +65,34 @@ tests:
       - notExists:
           path: data.SNAPSHOT_BACKEND
 
+  - it: templates the snapshot URL
+    set:
+      global.bucket: snaps
+      snapshot.enabled: true
+      snapshot.url: "gs://{{ .Values.global.bucket }}?prefix=proxy/"
+    asserts:
+      - equal:
+          path: data.SNAPSHOT_URL
+          value: gs://snaps?prefix=proxy/
+
+  - it: fails when the snapshot URL template renders empty
+    set:
+      global.bucket: ""
+      snapshot.enabled: true
+      snapshot.url: "{{ .Values.global.bucket }}"
+    asserts:
+      - failedTemplate:
+          errorMessage: snapshot.url is required when snapshot.enabled=true
+
+  - it: fails when the snapshot URL template renders an unsupported scheme
+    set:
+      global.bucket: snaps
+      snapshot.enabled: true
+      snapshot.url: "gcs://{{ .Values.global.bucket }}"
+    asserts:
+      - failedTemplate:
+          errorPattern: must start with s3://
+
   - it: omits snapshot settings when disabled
     set:
       snapshot.url: gs://ignored
@@ -90,3 +118,16 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: set either snapshot.credentials.existingSecret or snapshot.credentials.env, not both
+
+  - it: templates otel settings
+    set:
+      global.cluster: dev1
+      otel.endpoint: "http://otel.{{ .Values.global.cluster }}:4318"
+      otel.resourceAttributes: "k8s.cluster.name={{ .Values.global.cluster }}"
+    asserts:
+      - equal:
+          path: data.OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://otel.dev1:4318
+      - equal:
+          path: data.OTEL_RESOURCE_ATTRIBUTES
+          value: k8s.cluster.name=dev1

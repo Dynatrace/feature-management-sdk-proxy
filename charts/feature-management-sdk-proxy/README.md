@@ -172,6 +172,25 @@ ingress:
           pathType: Prefix
 ```
 
+## Templated Values
+
+These values go through `tpl`, so a wrapper chart can derive them from its own values or globals instead of setting
+them per environment: `replicaCount`, `image.registry`, `commonLabels`, `deploymentAnnotations`,
+`podAnnotations`, `podLabels`, `serviceAccount.annotations`, `service.annotations`, `ingress.annotations`,
+`cdnBaseDomain`, `otel.*`, `snapshot.url`, `extraEnv`, `extraEnvFrom`, `extraVolumes`, `extraVolumeMounts`,
+`imagePullSecrets`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, and
+the `networkPolicy` `ingress.from`, `extraIngress`, and `extraEgress` rules.
+
+```yaml
+feature-management-sdk-proxy:
+  image:
+    registry: "{{ .Values.global.containerImageRegistry }}"
+  replicaCount: "{{ .Values.global.zoneCount }}"
+```
+
+Plain values render unchanged, and templated values render as strings, so keep numeric fields like
+`tolerationSeconds` literal. To keep a literal `{{`, write `{{ "{{" }}`.
+
 ## Values
 
 | Key | Type | Default | Description |
@@ -180,6 +199,7 @@ ingress:
 | cdnBaseDomain | string | `nil` | Upstream base domain (`CDN_BASE_DOMAIN`). Unset uses the proxy default, `fm.dynatrace.com`. |
 | commonLabels | object | `{}` | Labels added to every resource the chart renders. |
 | containerPort | int | `8080` | Port the proxy listens on (`PORT`). |
+| deploymentAnnotations | object | `{}` | Deployment annotations. |
 | extraEnv | list | `[]` | Additional container environment variables (list of `EnvVar`), e.g. `CACHE_INACTIVITY_EVICT_AFTER`. |
 | extraEnvFrom | list | `[]` | Additional `envFrom` sources. |
 | extraVolumeMounts | list | `[]` | Additional container volume mounts. |
@@ -187,7 +207,7 @@ ingress:
 | fullnameOverride | string | `""` | Override the full resource name. |
 | image.digest | string | `""` | Image digest (`sha256:...`). Takes precedence over `tag` when set. |
 | image.pullPolicy | string | `"IfNotPresent"` | Image pull policy. |
-| image.registry | string | `"ghcr.io"` | Image registry. Override to use a mirror. Values are templated. |
+| image.registry | string | `"ghcr.io"` | Image registry. Override to use a mirror. |
 | image.repository | string | `"dynatrace/feature-management-sdk-proxy"` | Image repository within the registry. |
 | image.tag | string | `""` | Image tag. Defaults to the chart `appVersion`. |
 | imagePullSecrets | list | `[]` | Image pull secrets for private registries or mirrors. |
@@ -220,7 +240,7 @@ ingress:
 | podSecurityContext | object | `{"fsGroup":65532,"runAsGroup":65532,"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}}` | Pod security context. UID/GID 65532 is the distroless `nonroot` user. |
 | priorityClassName | string | `""` | Priority class name. |
 | readinessProbe | object | `{"failureThreshold":3,"httpGet":{"path":"/readyz","port":"http"},"initialDelaySeconds":2,"periodSeconds":5}` | Readiness probe. `/readyz` returns 503 until snapshot load completes. |
-| replicaCount | int | `2` | Number of proxy replicas. |
+| replicaCount | int | `2` | Number of proxy replicas; an integer, or a template that renders one. |
 | resources | object | `{"limits":{"memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Resource requests and limits. |
 | securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true}` | Container security context. |
 | service.annotations | object | `{}` | Service annotations. |
@@ -245,8 +265,13 @@ ingress:
 | sse.subscribeRatePerSec | string | `nil` | Per-key subscribe rate limit (`SSE_SUBSCRIBE_RATE_PER_SEC`, proxy default 20). |
 | startupProbe | object | `{"failureThreshold":30,"httpGet":{"path":"/livez","port":"http"},"periodSeconds":2}` | Startup probe, which holds off liveness checks during startup. |
 | terminationGracePeriodSeconds | int | `60` | Pod termination grace period. Shutdown takes up to `shutdownTimeout` + 5s (SSE) + snapshot drain + 10s (usage flush); keep this above that sum. |
+| tests.enabled | bool | `true` | Render the `helm test` pod that checks `/readyz` through the Service. |
+| tests.image.registry | string | `""` | Test image registry. |
+| tests.image.repository | string | `"busybox"` | Test image repository. |
+| tests.image.tag | string | `"1.37"` | Test image tag. |
+| tests.resources | object | `{}` | Test pod resource requests and limits. |
 | tolerations | list | `[]` | Tolerations. |
-| topologySpreadConstraints | list | `[]` | Topology spread constraints. Values are templated. |
+| topologySpreadConstraints | list | `[]` | Topology spread constraints. |
 
 ## Development
 
