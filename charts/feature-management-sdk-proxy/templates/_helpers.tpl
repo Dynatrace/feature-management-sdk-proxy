@@ -43,7 +43,7 @@ Usage: include "fmsp.render" (dict "value" .Values.x "context" $)
 {{- define "fmsp.tplTree" -}}
 {{- $ctx := .context }}
 {{- $v := .value }}
-{{- if kindIs "string" $v }}
+{{- if typeIs "string" $v }}
 {{- $v = tpl $v $ctx }}
 {{- else if kindIs "map" $v }}
 {{- $v = dict }}
