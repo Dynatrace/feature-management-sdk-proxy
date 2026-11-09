@@ -45,7 +45,7 @@ data:
   {{- end }}
   {{- with .Values.snapshot }}
   {{- if .enabled }}
-  SNAPSHOT_URL: {{ .url | quote }}
+  SNAPSHOT_URL: {{ tpl .url $ | quote }}
   {{- with .maxAge }}
   SNAPSHOT_MAX_AGE: {{ . | quote }}
   {{- end }}

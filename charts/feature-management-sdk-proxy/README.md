@@ -237,7 +237,7 @@ ingress:
 | snapshot.credentials.existingSecret | string | `""` | Existing Secret loaded with `envFrom`. |
 | snapshot.enabled | bool | `false` | Enable snapshot persistence. |
 | snapshot.maxAge | string | `nil` | Snapshots older than this are treated as stale at startup (`SNAPSHOT_MAX_AGE`, proxy default 24h). |
-| snapshot.url | string | `""` | Bucket URL (`SNAPSHOT_URL`), e.g. `s3://bucket?region=us-east-1`, `gs://bucket`, `azblob://container?storage_account=name`. Required when `snapshot.enabled`. |
+| snapshot.url | string | `""` | Bucket URL (`SNAPSHOT_URL`), e.g. `s3://bucket?region=us-east-1`, `gs://bucket`, `azblob://container?storage_account=name`. Required when `snapshot.enabled`. Values are templated. |
 | snapshot.writeQueueSize | string | `nil` | Async write queue size (`SNAPSHOT_WRITE_QUEUE_SIZE`, proxy default 256). |
 | sse.enabled | bool | `true` | Enable SSE fan-out. `false` sets `SSE_DISABLED=true` (SDKs fall back to polling). |
 | sse.fanoutCapPerKey | string | `nil` | Max downstream subscribers per SDK key (`SSE_FANOUT_CAP_PER_KEY`, proxy default 1000, 0 = unlimited). |
@@ -245,6 +245,11 @@ ingress:
 | sse.subscribeRatePerSec | string | `nil` | Per-key subscribe rate limit (`SSE_SUBSCRIBE_RATE_PER_SEC`, proxy default 20). |
 | startupProbe | object | `{"failureThreshold":30,"httpGet":{"path":"/livez","port":"http"},"periodSeconds":2}` | Startup probe, which holds off liveness checks during startup. |
 | terminationGracePeriodSeconds | int | `60` | Pod termination grace period. Shutdown takes up to `shutdownTimeout` + 5s (SSE) + snapshot drain + 10s (usage flush); keep this above that sum. |
+| tests.enabled | bool | `true` | Render the `helm test` pod that checks `/readyz` through the Service. |
+| tests.image.registry | string | `""` | Test image registry. Values are templated. |
+| tests.image.repository | string | `"busybox"` | Test image repository. |
+| tests.image.tag | string | `"1.37"` | Test image tag. |
+| tests.resources | object | `{}` | Test pod resource requests and limits. |
 | tolerations | list | `[]` | Tolerations. |
 | topologySpreadConstraints | list | `[]` | Topology spread constraints. Values are templated. |
 

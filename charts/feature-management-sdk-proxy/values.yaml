@@ -77,7 +77,7 @@ snapshot:
   # -- Enable snapshot persistence.
   enabled: false
   # -- Bucket URL (`SNAPSHOT_URL`), e.g. `s3://bucket?region=us-east-1`, `gs://bucket`,
-  # `azblob://container?storage_account=name`. Required when `snapshot.enabled`.
+  # `azblob://container?storage_account=name`. Required when `snapshot.enabled`. Values are templated.
   url: ""
   # -- Snapshots older than this are treated as stale at startup (`SNAPSHOT_MAX_AGE`, proxy default 24h).
   maxAge: null
@@ -173,6 +173,19 @@ networkPolicy:
     from: []
   # -- Additional ingress rules (list of `NetworkPolicyIngressRule`).
   extraIngress: []
+
+tests:
+  # -- Render the `helm test` pod that checks `/readyz` through the Service.
+  enabled: true
+  image:
+    # -- Test image registry. Values are templated.
+    registry: ""
+    # -- Test image repository.
+    repository: busybox
+    # -- Test image tag.
+    tag: "1.37"
+  # -- Test pod resource requests and limits.
+  resources: {}
 
 # -- Resource requests and limits.
 resources:

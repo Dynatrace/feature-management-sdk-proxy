@@ -59,6 +59,14 @@ Full image reference: registry/repository, then @digest or :tag.
 {{- end }}
 {{- end }}
 
+{{- define "fmsp.testImage" -}}
+{{- $repo := .Values.tests.image.repository }}
+{{- with tpl (.Values.tests.image.registry | default "") . }}
+{{- $repo = printf "%s/%s" (trimSuffix "/" .) $repo }}
+{{- end }}
+{{- printf "%s:%s" $repo .Values.tests.image.tag }}
+{{- end }}
+
 {{- define "fmsp.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
 {{- default (include "fmsp.fullname" .) .Values.serviceAccount.name }}
@@ -90,8 +98,12 @@ render time instead of producing a pod that exits 1 at startup.
 {{- define "fmsp.validate" -}}
 {{- with .Values.snapshot }}
 {{- if .enabled }}
-{{- if not .url }}
+{{- $url := tpl (.url | default "") $ }}
+{{- if not $url }}
 {{- fail "snapshot.url is required when snapshot.enabled=true" }}
+{{- end }}
+{{- if not (regexMatch "^(s3|gs|azblob|file)://" $url) }}
+{{- fail (printf "snapshot.url must start with s3://, gs://, azblob:// or file://, got %q" $url) }}
 {{- end }}
 {{- if and .credentials.existingSecret .credentials.env }}
 {{- fail "set either snapshot.credentials.existingSecret or snapshot.credentials.env, not both" }}

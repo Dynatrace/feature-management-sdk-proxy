@@ -65,6 +65,34 @@ tests:
       - notExists:
           path: data.SNAPSHOT_BACKEND
 
+  - it: templates the snapshot URL
+    set:
+      global.bucket: snaps
+      snapshot.enabled: true
+      snapshot.url: "gs://{{ .Values.global.bucket }}?prefix=proxy/"
+    asserts:
+      - equal:
+          path: data.SNAPSHOT_URL
+          value: gs://snaps?prefix=proxy/
+
+  - it: fails when the snapshot URL template renders empty
+    set:
+      global.bucket: ""
+      snapshot.enabled: true
+      snapshot.url: "{{ .Values.global.bucket }}"
+    asserts:
+      - failedTemplate:
+          errorMessage: snapshot.url is required when snapshot.enabled=true
+
+  - it: fails when the snapshot URL template renders an unsupported scheme
+    set:
+      global.bucket: snaps
+      snapshot.enabled: true
+      snapshot.url: "gcs://{{ .Values.global.bucket }}"
+    asserts:
+      - failedTemplate:
+          errorPattern: must start with s3://
+
   - it: omits snapshot settings when disabled
     set:
       snapshot.url: gs://ignored

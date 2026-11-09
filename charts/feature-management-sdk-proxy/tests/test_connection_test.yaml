@@ -10,3 +10,26 @@ tests:
       - equal:
           path: metadata.labels["app.kubernetes.io/component"]
           value: test
+
+  - it: renders nothing when tests are disabled
+    set:
+      tests.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: uses the configured test image and resources
+    set:
+      global.mirror: mirror.example.com
+      tests.enabled: true
+      tests.image.registry: "{{ .Values.global.mirror }}"
+      tests.image.repository: library/busybox
+      tests.image.tag: "1.38"
+      tests.resources.limits.memory: 16Mi
+    asserts:
+      - equal:
+          path: spec.containers[0].image
+          value: mirror.example.com/library/busybox:1.38
+      - equal:
+          path: spec.containers[0].resources.limits.memory
+          value: 16Mi
