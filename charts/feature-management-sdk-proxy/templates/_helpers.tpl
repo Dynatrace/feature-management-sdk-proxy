@@ -26,14 +26,38 @@ Create a default fully qualified app name, truncated to 63 chars (DNS label limi
 {{- end }}
 
 {{/*
-Render a value through tpl: strings as-is, maps and lists as YAML.
+Render a value through tpl: strings directly, maps and lists by templating each
+string inside them before serializing, so substituted text is escaped.
+Templated values render as strings.
 Usage: include "fmsp.render" (dict "value" .Values.x "context" $)
 */}}
 {{- define "fmsp.render" -}}
 {{- if typeIs "string" .value }}
 {{- tpl .value .context }}
 {{- else }}
-{{- tpl (toYaml .value) .context }}
+{{- (include "fmsp.tplTree" . | fromJson).v | toYaml }}
+{{- end }}
+{{- end }}
+
+{{/* fmsp.render helper; returns {"v": <value>} as JSON */}}
+{{- define "fmsp.tplTree" -}}
+{{- $ctx := .context }}
+{{- if kindIs "map" .value }}
+{{- $out := dict }}
+{{- range $k, $v := .value }}
+{{- $_ := set $out $k (include "fmsp.tplTree" (dict "value" $v "context" $ctx) | fromJson).v }}
+{{- end }}
+{{- dict "v" $out | toJson }}
+{{- else if kindIs "slice" .value }}
+{{- $out := list }}
+{{- range .value }}
+{{- $out = append $out (include "fmsp.tplTree" (dict "value" . "context" $ctx) | fromJson).v }}
+{{- end }}
+{{- dict "v" $out | toJson }}
+{{- else if kindIs "string" .value }}
+{{- dict "v" (tpl .value $ctx) | toJson }}
+{{- else }}
+{{- dict "v" .value | toJson }}
 {{- end }}
 {{- end }}
 
@@ -73,7 +97,7 @@ Full image reference: registry/repository, then @digest or :tag.
 
 {{- define "fmsp.testImage" -}}
 {{- $repo := .Values.tests.image.repository }}
-{{- with tpl (.Values.tests.image.registry | default "") . }}
+{{- with .Values.tests.image.registry }}
 {{- $repo = printf "%s/%s" (trimSuffix "/" .) $repo }}
 {{- end }}
 {{- printf "%s:%s" $repo .Values.tests.image.tag }}

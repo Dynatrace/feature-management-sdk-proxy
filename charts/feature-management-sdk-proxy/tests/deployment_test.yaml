@@ -259,3 +259,26 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: replicaCount must render to a non-negative integer
+
+  - it: escapes substituted text
+    template: deployment.yaml
+    set:
+      global.owner: "MyTeam's: #1"
+      deploymentAnnotations:
+        owner: "{{ .Values.global.owner }}"
+    asserts:
+      - equal:
+          path: metadata.annotations.owner
+          value: "MyTeam's: #1"
+
+  - it: keeps literal numbers in templated lists
+    template: deployment.yaml
+    set:
+      tolerations:
+        - key: k
+          operator: Exists
+          tolerationSeconds: 60
+    asserts:
+      - equal:
+          path: spec.template.spec.tolerations[0].tolerationSeconds
+          value: 60

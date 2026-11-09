@@ -175,7 +175,7 @@ ingress:
 ## Templated Values
 
 These values go through `tpl`, so a wrapper chart can derive them from its own values or globals instead of setting
-them per environment: `replicaCount`, `image.registry`, `tests.image.registry`, `commonLabels`, `deploymentAnnotations`,
+them per environment: `replicaCount`, `image.registry`, `commonLabels`, `deploymentAnnotations`,
 `podAnnotations`, `podLabels`, `serviceAccount.annotations`, `service.annotations`, `ingress.annotations`,
 `cdnBaseDomain`, `otel.*`, `snapshot.url`, `extraEnv`, `extraEnvFrom`, `extraVolumes`, `extraVolumeMounts`,
 `imagePullSecrets`, `priorityClassName`, `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints`, and
@@ -188,7 +188,8 @@ feature-management-sdk-proxy:
   replicaCount: "{{`{{ .Values.global.zoneCount }}`}}"
 ```
 
-Plain values render unchanged. To keep a literal `{{`{{`}}`, write `{{`{{ "{{" }}`}}`.
+Plain values render unchanged, and templated values render as strings, so keep numeric fields like
+`tolerationSeconds` literal. To keep a literal `{{`{{`}}`, write `{{`{{ "{{" }}`}}`.
 
 {{ template "chart.valuesSection" . }}
 
