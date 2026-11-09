@@ -41,3 +41,12 @@ tests:
       - equal:
           path: spec.imagePullSecrets[0].name
           value: regcred
+
+  - it: templates commonLabels
+    set:
+      global.cluster: dev1
+      commonLabels.cluster: "{{ .Values.global.cluster }}"
+    asserts:
+      - equal:
+          path: metadata.labels.cluster
+          value: dev1

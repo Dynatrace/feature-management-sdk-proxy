@@ -10,7 +10,7 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
     app.kubernetes.io/component: test
     {{- with .Values.commonLabels }}
-    {{- toYaml . | nindent 4 }}
+    {{- include "fmsp.render" (dict "value" . "context" $) | nindent 4 }}
     {{- end }}
   annotations:
     "helm.sh/hook": test
