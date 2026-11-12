@@ -13,7 +13,7 @@ For metrics reference, see [telemetry.md](telemetry.md). For configuration, see 
 
 Every SDK request to `GET /server/{sdk_key}.json` hits one of two paths:
 
-**Cache hit:** the entry for that SDK key is already in memory. The proxy rewrites the `eventStreamEndpoint` URL in the
+**Cache hit:** the entry for that SDK key is already in memory. The proxy rewrites the SSE entry (`eventStreams`) in the
 flagd config payload to point at its own `/sse` endpoint, then responds immediately. No upstream call is made.
 
 **Cache miss:** no entry exists for this key. The proxy fetches `GET /server/{sdk_key}.json` from the upstream CDN,
@@ -33,7 +33,7 @@ The proxy multiplexes SSE events from a single upstream connection to all SDK cl
    config is cached.
 
 2. **Clients subscribe.** SDK clients connect to `GET /sse?stream_id={public_id}`. The `stream_id` is the SDK key's
-   public prefix, embedded in the `eventStreamEndpoint` of the flagd config the SDK already received. The proxy gates on
+   public prefix, embedded in the SSE entry of the flagd config the SDK already received. The proxy gates on
    cache presence: if no config is cached for the given `stream_id`, it returns 412 Precondition Failed. On cold start
    this is expected; providers retry after fetching the config.
 

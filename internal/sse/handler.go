@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -53,6 +54,20 @@ type Handler struct {
 	tracer            trace.Tracer
 	heartbeatInterval time.Duration
 	configPath        string
+
+	// heartbeats holds one heartbeat per key with connected clients. A single
+	// PublishComment reaches every subscriber of the key, so a heartbeat per
+	// connection would send each client one ping per connected client and
+	// overflow their buffers, which makes eventsource.Server disconnect them.
+	hbMu       sync.Mutex
+	heartbeats map[string]*keyHeartbeat
+}
+
+// keyHeartbeat is a key's shared heartbeat: refs connections use it, and
+// cancel stops its loop.
+type keyHeartbeat struct {
+	refs   int
+	cancel context.CancelFunc
 }
 
 // NewHandler constructs a Handler. heartbeatInterval is the period between
@@ -72,6 +87,7 @@ func NewHandler(c *cache.Cache, esServer *eventsource.Server, tracker Subscriber
 		tracer:            tracenoop.NewTracerProvider().Tracer("sse"),
 		heartbeatInterval: heartbeatInterval,
 		configPath:        configPath,
+		heartbeats:        make(map[string]*keyHeartbeat),
 	}
 }
 
@@ -162,11 +178,9 @@ func (h *Handler) Handle(c *gin.Context) {
 
 	h.logger.Debug("sse: client connected", slog.String("sdk_key_public_id", keyID))
 
-	// Start a heartbeat goroutine that publishes comments to this channel.
-	// The eventsource.Server delivers the comment to all subscribers of keyID.
-	heartbeatCtx, heartbeatCancel := context.WithCancel(c.Request.Context())
-	defer heartbeatCancel()
-	go h.heartbeatLoop(heartbeatCtx, keyID)
+	// Join keyID's shared heartbeat (started by its first connection, stopped
+	// when its last connection leaves).
+	defer h.acquireHeartbeat(keyID)()
 
 	// Delegate to the eventsource.Server handler. This blocks until the client
 	// disconnects or the channel is unregistered with forceDisconnect.
@@ -175,8 +189,34 @@ func (h *Handler) Handle(c *gin.Context) {
 	h.logger.Debug("sse: client disconnected", slog.String("sdk_key_public_id", keyID))
 }
 
+// acquireHeartbeat makes sure keyID's heartbeat is running and returns a
+// function that releases this connection's reference to it. The last release
+// stops the heartbeat.
+func (h *Handler) acquireHeartbeat(keyID string) (release func()) {
+	h.hbMu.Lock()
+	defer h.hbMu.Unlock()
+	hb, ok := h.heartbeats[keyID]
+	if !ok {
+		ctx, cancel := context.WithCancel(context.Background())
+		hb = &keyHeartbeat{cancel: cancel}
+		h.heartbeats[keyID] = hb
+		go h.heartbeatLoop(ctx, keyID)
+	}
+	hb.refs++
+	return func() {
+		h.hbMu.Lock()
+		defer h.hbMu.Unlock()
+		hb.refs--
+		if hb.refs == 0 {
+			hb.cancel()
+			delete(h.heartbeats, keyID)
+		}
+	}
+}
+
 // heartbeatLoop periodically publishes a comment to the keyID channel to keep
-// idle connections alive. Stops when ctx is done.
+// idle connections alive. The eventsource.Server delivers it to every
+// subscriber of keyID. Stops when ctx is done.
 func (h *Handler) heartbeatLoop(ctx context.Context, keyID string) {
 	ticker := time.NewTicker(h.heartbeatInterval)
 	defer ticker.Stop()

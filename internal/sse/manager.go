@@ -143,9 +143,11 @@ func (m *Manager) Server() *eventsource.Server {
 // OnConfigCached is called by the proxy handler after a successful cold fetch
 // (200) populates the cache for sdkKey. It starts an upstream SSE connection
 // if one is not already running for this key. If the SSE URL changed, the old
-// connection is cancelled and a new one is started.
-func (m *Manager) OnConfigCached(ctx context.Context, sdkKey string, payload []byte) {
-	sseURL, inactivitySec, ok := ExtractSSEURL(payload)
+// connection is cancelled and a new one is started. fetchURL is the upstream
+// URL the config was fetched from; its origin resolves an eventStreams
+// endpoint that omits origin.
+func (m *Manager) OnConfigCached(ctx context.Context, sdkKey, fetchURL string, payload []byte) {
+	sseURL, inactivitySec, ok := ExtractSSEURL(payload, OriginOf(fetchURL))
 	if !ok {
 		m.logger.Debug("sse: no SSE entry in config, skipping upstream connection",
 			slog.String("sdk_key_public_id", sdkkey.PublicID(sdkKey)),
@@ -161,7 +163,7 @@ func (m *Manager) OnConfigCached(ctx context.Context, sdkKey string, payload []b
 func (m *Manager) OnRefreshed(keyID string, entry cache.Entry) {
 	m.NotifyPolledChange(keyID, entry)
 
-	sseURL, inactivitySec, ok := ExtractSSEURL(entry.Payload)
+	sseURL, inactivitySec, ok := ExtractSSEURL(entry.Payload, OriginOf(entry.FetchURL))
 	if !ok {
 		return
 	}

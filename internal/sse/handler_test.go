@@ -1,11 +1,13 @@
 package sse
 
 import (
+	"bufio"
 	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -513,4 +515,97 @@ func TestHandler_RateLimit_NoCounterIncrement(t *testing.T) {
 	if samples := counter.Drain(); len(samples) != 0 {
 		t.Errorf("rejected request must not increment billing counter, got %v", samples)
 	}
+}
+
+// TestHandler_Heartbeat_SharedPerKey is a regression test: each connection
+// used to run its own heartbeat, and every heartbeat reaches all subscribers
+// of the key. With more clients than the subscriber buffer (16), each client
+// got N pings per interval, overflowed, and eventsource.Server disconnected it.
+func TestHandler_Heartbeat_SharedPerKey(t *testing.T) {
+	const (
+		clients   = 100
+		heartbeat = 50 * time.Millisecond
+		window    = 600 * time.Millisecond
+	)
+	m := newTestManager(t, http.DefaultClient)
+	defer m.esServer.Close()
+	c := cache.New()
+	keyID := sdkkey.PublicID(testSDKKey)
+	c.Set(keyID, cache.Entry{Payload: []byte(`{}`)})
+	h := NewHandler(c, m.Server(), m, newTestInstruments(t), nil, slog.New(slog.DiscardHandler), heartbeat, "/server/")
+	r := gin.New()
+	r.GET("/sse", sdkkey.FromStreamID(), h.Handle)
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	type result struct {
+		pings      int
+		endedEarly bool
+	}
+	results := make(chan result, clients)
+	var wg sync.WaitGroup
+	for range clients {
+		wg.Go(func() {
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/sse?stream_id="+keyID, nil)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				results <- result{endedEarly: ctx.Err() == nil}
+				return
+			}
+			defer resp.Body.Close()
+			var res result
+			sc := bufio.NewScanner(resp.Body)
+			for sc.Scan() {
+				if sc.Text() == ":ping" {
+					res.pings++
+				}
+			}
+			res.endedEarly = ctx.Err() == nil
+			results <- res
+		})
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !m.HasSubscribers(keyID) || subscriberCount(m, keyID) < clients {
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of %d clients connected", subscriberCount(m, keyID), clients)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(window)
+	cancel()
+	wg.Wait()
+	close(results)
+
+	maxPings := int(window/heartbeat) + 3 // slack for scheduling
+	for res := range results {
+		if res.endedEarly {
+			t.Fatal("a client stream ended while the client was still reading")
+		}
+		if res.pings > maxPings {
+			t.Fatalf("client saw %d pings in %v, want at most %d (one per heartbeat interval)", res.pings, window, maxPings)
+		}
+	}
+
+	// The last connection to leave stops the key's heartbeat.
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		h.hbMu.Lock()
+		n := len(h.heartbeats)
+		h.hbMu.Unlock()
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d heartbeats still running after all clients disconnected", n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func subscriberCount(m *Manager, keyID string) int64 {
+	if v, ok := m.subscriberCounts.Load(keyID); ok {
+		return v.(*atomic.Int64).Load()
+	}
+	return 0
 }
