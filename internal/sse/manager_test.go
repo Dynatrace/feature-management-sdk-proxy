@@ -52,7 +52,7 @@ func TestManager_OnConfigCached_StartsOneConn(t *testing.T) {
 
 	m := newTestManager(t, srv.Client())
 	defer m.esServer.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	payload := configWithSSEURL(srv.URL)
@@ -83,7 +83,7 @@ func TestManager_OnConfigCached_SameURLIsNoop(t *testing.T) {
 
 	m := newTestManager(t, srv.Client())
 	defer m.esServer.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	payload := configWithSSEURL(srv.URL)
@@ -114,7 +114,7 @@ func TestManager_OnConfigCached_URLChangeRestartsConn(t *testing.T) {
 
 	m := newTestManager(t, srv.Client())
 	defer m.esServer.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "", configWithSSEURL(srv.URL+"/v1"))
@@ -144,7 +144,7 @@ func TestManager_OnRefreshed_SameURLIsNoop(t *testing.T) {
 
 	m := newTestManager(t, srv.Client())
 	defer m.esServer.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	payload := configWithSSEURL(srv.URL)
@@ -177,7 +177,7 @@ func TestManager_Publish_DeliversEvent(t *testing.T) {
 
 	m := newTestManager(t, srv.Client())
 	defer m.esServer.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
@@ -228,7 +228,7 @@ func TestManager_Shutdown_CancelsAllConns(t *testing.T) {
 	defer srv.Close()
 
 	m := newTestManager(t, srv.Client())
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	for i := range 3 {
@@ -237,7 +237,7 @@ func TestManager_Shutdown_CancelsAllConns(t *testing.T) {
 	}
 	time.Sleep(500 * time.Millisecond)
 
-	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutCtx, shutCancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer shutCancel()
 
 	if err := m.Shutdown(shutCtx); err != nil {
@@ -280,7 +280,7 @@ func TestManager_Close_CancelsUpstreamConn(t *testing.T) {
 
 	m := newTestManager(t, srv.Client())
 	defer m.esServer.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
@@ -317,7 +317,7 @@ func TestManager_NoSSEInConfig_NoConnection(t *testing.T) {
 
 	m := newTestManager(t, srv.Client())
 	defer m.esServer.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 
 	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "", []byte(`{"flags":{}}`))
@@ -361,13 +361,13 @@ func TestManager_RefreshInterval_Connected(t *testing.T) {
 	// Shut down the manager (cancels upstream conns) before srv.Close()
 	// to avoid srv.Close() blocking on the active TLS connection.
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()
 		m.Shutdown(ctx) //nolint:errcheck
 	}()
 
 	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
-	m.OnConfigCached(context.Background(), "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "", configWithSSEURL(srv.URL+"/sse"))
+	m.OnConfigCached(t.Context(), "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "", configWithSSEURL(srv.URL+"/sse"))
 
 	// Wait for the read loop to enter streaming state.
 	select {
@@ -589,7 +589,7 @@ func TestManager_OnConfigCached_EndpointForm(t *testing.T) {
 
 			m := newTestManager(t, srv.Client())
 			defer m.esServer.Close()
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", tc.fetchURL(srv.URL), tc.payload(srv.URL))
