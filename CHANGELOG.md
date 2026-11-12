@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.3](https://github.com/Dynatrace/feature-management-sdk-proxy/compare/v0.3.2...v0.3.3) (2026-11-12)
+
+
+### 🐛 Bug Fixes
+
+* Parse both the origin and url formats for SSE. ([#41](https://github.com/Dynatrace/feature-management-sdk-proxy/issues/41)) ([3636bbc](https://github.com/Dynatrace/feature-management-sdk-proxy/commit/3636bbcb0d38b2aaade997bf156b3d15667ff98f))
+* Update parsing and refactor logic ([#43](https://github.com/Dynatrace/feature-management-sdk-proxy/issues/43)) ([a8938ee](https://github.com/Dynatrace/feature-management-sdk-proxy/commit/a8938ee0312d866f3e5f5b7ca104e04cf6d36f00))
+
 ## [0.3.2](https://github.com/Dynatrace/feature-management-sdk-proxy/compare/v0.3.1...v0.3.2) (2026-11-09)
 
 
