@@ -105,8 +105,8 @@ It carries the URL in one of two forms; the proxy prefers `endpoint` when both a
   with a single `/`.
 - **`url`**: an absolute `https` URL. Used when `endpoint` is absent or unusable.
 
-Entries that fail validation are skipped, so a compromised payload can't point the upstream connection at an internal
-host.
+Entries that fail URL validation are skipped. These checks enforce HTTPS and URL structure; they do not restrict
+destination hosts or prevent access to private/internal addresses.
 
 On rewrite, the entry keeps the form it arrived in. An `endpoint` gets the proxy's own `origin` and
 `/sse?stream_id={public_id}` as `requestUri`; a `url` is replaced with the full proxy URL. An entry carrying both has
