@@ -539,6 +539,7 @@ func TestHandler_Heartbeat_SharedPerKey(t *testing.T) {
 	defer srv.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	type result struct {
 		pings      int
 		endedEarly bool
