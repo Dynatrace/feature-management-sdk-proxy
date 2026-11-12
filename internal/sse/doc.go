@@ -9,7 +9,7 @@
 // only eventStreams[*].type, .endpoint (origin + requestUri, preferred), .url and
 // .inactivityDelaySec are read; the rest of the payload is treated as opaque bytes).
 // RewriteSSEURL extends this exception: it parses the full JSON payload, points
-// the first type=="sse" eventStreams entry at the proxy, and re-serializes the
+// every type=="sse" eventStreams entry at the proxy, and re-serializes the
 // modified payload.
 //
 // OnConfigCached must be called after a fresh cold-fetch 200 populates the

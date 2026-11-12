@@ -46,20 +46,6 @@ func (e streamEntry) resolve(fallbackOrigin string) (string, bool) {
 	return "", false
 }
 
-// rewritable reports whether the entry describes an SSE connection the proxy
-// should take over. An endpoint without origin counts even though the proxy
-// cannot resolve it on its own: served unchanged, SDKs would resolve it against
-// the proxy's origin and get a URL that doesn't exist.
-func (e streamEntry) rewritable() bool {
-	if e.Type != "sse" {
-		return false
-	}
-	if e.Endpoint != nil && validRequestURI(e.Endpoint.RequestURI) {
-		return true
-	}
-	return isValidSSEURL(e.URL)
-}
-
 // ExtractSSEURL returns the upstream URL and inactivity delay from the first
 // eventStreams entry with type=="sse" that has a usable URL. The endpoint form
 // (origin + requestUri) is preferred over url; fallbackOrigin (scheme and host
@@ -106,29 +92,43 @@ func OriginOf(rawURL string) string {
 type RewriteResult int
 
 const (
-	// RewriteResultRewritten indicates the SSE URL was replaced with the proxy URL.
+	// RewriteResultRewritten indicates the SSE entries were pointed at the proxy.
 	RewriteResultRewritten RewriteResult = iota
-	// RewriteResultNoEntry indicates no type=="sse" entry was found; payload returned unchanged.
+	// RewriteResultNoEntry indicates nothing was rewritten; payload returned unchanged.
 	RewriteResultNoEntry
 	// RewriteResultNotFoundInBody is retained for backward compatibility but is no longer
 	// returned by RewriteSSEURL. The JSON parse approach handles all valid encodings.
 	RewriteResultNotFoundInBody
 )
 
-// RewriteSSEURL points the first rewritable type=="sse" eventStreams entry at
-// proxyURL (an absolute URL) and re-serializes the payload.
+// RewriteSSEURL points every type=="sse" eventStreams entry at proxyURL (an
+// absolute URL) and re-serializes the payload.
 //
-// The entry keeps the form it arrived in: an endpoint gets endpoint.origin and
-// endpoint.requestUri set from proxyURL, and a url is replaced with proxyURL.
-// An entry carrying both has both rewritten, so the upstream URL never reaches
-// the SDK. No form is added that the entry didn't have, and other fields of the
-// entry are kept unchanged.
+// All entries are rewritten, not only the one ExtractSSEURL picks: an SDK may
+// choose an entry the proxy skipped and bypass it. Entries the proxy can't
+// connect to still work, since polled changes are published to /sse.
 //
-// Returns the original payload unchanged if the JSON is malformed, proxyURL is
-// not absolute, or no rewritable type=="sse" entry exists (RewriteResultNoEntry).
+// Each entry keeps its forms: an endpoint gets origin and requestUri from
+// proxyURL, and a non-empty url becomes proxyURL. No form is added, and other
+// fields are kept.
+//
+// Returns the payload unchanged (RewriteResultNoEntry) if the JSON is
+// malformed, proxyURL is not absolute, or no type=="sse" entry has an endpoint
+// or url.
 func RewriteSSEURL(payload []byte, proxyURL string) ([]byte, RewriteResult) {
 	pu, err := url.Parse(proxyURL)
 	if err != nil || pu.Scheme == "" || pu.Host == "" {
+		return payload, RewriteResultNoEntry
+	}
+	endpoint, err := json.Marshal(streamEndpoint{
+		Origin:     pu.Scheme + "://" + pu.Host,
+		RequestURI: pu.RequestURI(),
+	})
+	if err != nil {
+		return payload, RewriteResultNoEntry
+	}
+	encodedURL, err := json.Marshal(proxyURL)
+	if err != nil {
 		return payload, RewriteResultNoEntry
 	}
 
@@ -153,34 +153,22 @@ func RewriteSSEURL(payload []byte, proxyURL string) ([]byte, RewriteResult) {
 		return payload, RewriteResultNoEntry
 	}
 
-	idx := -1
+	rewritten := false
 	for i, e := range streams {
-		if e.rewritable() {
-			idx = i
-			break
+		if e.Type != "sse" || rawEntries[i] == nil {
+			continue
+		}
+		if e.Endpoint != nil {
+			rawEntries[i]["endpoint"] = endpoint
+			rewritten = true
+		}
+		if e.URL != "" {
+			rawEntries[i]["url"] = encodedURL
+			rewritten = true
 		}
 	}
-	if idx < 0 || rawEntries[idx] == nil {
+	if !rewritten {
 		return payload, RewriteResultNoEntry
-	}
-
-	entry := rawEntries[idx]
-	if streams[idx].Endpoint != nil {
-		endpoint, err := json.Marshal(streamEndpoint{
-			Origin:     pu.Scheme + "://" + pu.Host,
-			RequestURI: pu.RequestURI(),
-		})
-		if err != nil {
-			return payload, RewriteResultNoEntry
-		}
-		entry["endpoint"] = endpoint
-	}
-	if streams[idx].URL != "" {
-		encodedURL, err := json.Marshal(proxyURL)
-		if err != nil {
-			return payload, RewriteResultNoEntry
-		}
-		entry["url"] = encodedURL
 	}
 
 	newStreams, err := json.Marshal(rawEntries)

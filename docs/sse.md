@@ -108,10 +108,15 @@ It carries the URL in one of two forms; the proxy prefers `endpoint` when both a
 Entries that fail URL validation are skipped. These checks enforce HTTPS and URL structure; they do not restrict
 destination hosts or prevent access to private/internal addresses.
 
-On rewrite, the entry keeps the form it arrived in. An `endpoint` gets the proxy's own `origin` and
-`/sse?stream_id={public_id}` as `requestUri`; a `url` is replaced with the full proxy URL. An entry carrying both has
-both rewritten, so the upstream URL never reaches the SDK. The proxy keeps every other field of the entry (including `inactivityDelaySec`, or its absence) as received. An
-`endpoint` without `origin` is rewritten too: served unchanged, providers would resolve it against the proxy's origin.
+On rewrite, every `type: "sse"` entry is pointed at the proxy, not only the one the proxy connects to. A provider may
+pick an entry the proxy skipped (for example one with an `http` origin listed before a valid one), which would bypass
+the proxy and expose the upstream URL. This is safe even for entries the proxy can't connect to, because polled config
+changes still reach `/sse` subscribers.
+
+Each entry keeps the form it arrived in. An `endpoint` (with or without `origin`, valid or not) gets the proxy's own
+`origin` and `/sse?stream_id={public_id}` as `requestUri`; a `url` is replaced with the full proxy URL. An entry
+carrying both has both rewritten, so the upstream URL never reaches the SDK. An entry with neither is left alone. The
+proxy keeps every other field of the entry (including `inactivityDelaySec`, or its absence) as received.
 
 **How `stream_id` maps to the upstream connection**
 
