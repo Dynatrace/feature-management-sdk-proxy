@@ -9,7 +9,7 @@ sharing that key. This is the core multiplexing guarantee: N SDK client instance
 
 SDK clients connect to `GET /sse?stream_id={stream_id}`. The `stream_id` is the SDK key public identifier:
 `cache.PublicID(sdkKey)`, i.e. `{token}.{platform}_{geo}_{publicRandom}` (e.g. `dt01.server_us_ab3xy9kp2q`). It is
-embedded in the flagd config's `eventStreamEndpoint` URL by the proxy rewrite step, so clients receive it automatically.
+embedded in the flagd config's SSE entry by the proxy rewrite step, so clients receive it automatically.
 
 **Prerequisites before a connection is accepted:**
 
@@ -60,14 +60,16 @@ X-Accel-Buffering: no
 
 ### Heartbeats
 
-The handler sends an SSE comment (`: ping`) every **15 seconds** on idle connections to keep proxies and load balancers
-from closing the connection.
+The proxy sends an SSE comment (`:ping`) every **15 seconds** on idle connections to keep proxies and load balancers
+from closing the connection. There is one heartbeat per SDK key, not per connection, so each client gets one ping per
+interval however many other clients share its key.
 
 ### Slow Subscriber Handling
 
-Events are dispatched to subscriber channels (buffered at 16). If a client's buffer is full at dispatch time, the event
-is dropped and a structured warning is logged. The metric `proxy.sse.upstream.events{result="dropped_slow_subscriber"}`
-is incremented.
+Events and heartbeats are queued per client (buffered at 16). A client whose buffer fills up, meaning it has stopped
+reading for 16 queued messages (about 4 minutes of heartbeats on an otherwise idle key), is disconnected; it can
+reconnect. Healthy clients are not disconnected. To limit how many clients connect, use the per-key
+[fan-out cap](#per-flag-set-isolation); connections over the cap are rejected at subscribe time.
 
 ## Two-Leg Connection Model
 
@@ -76,15 +78,40 @@ The proxy separates the SSE connection into two independent legs.
 **Leg 1: Provider to Proxy** (`GET /sse?stream_id={public_id}`)
 
 SDK providers connect to the proxy's `/sse` endpoint using the `stream_id` embedded in the flagd config they received
-from `GET /server/{sdk_key}.json`. The proxy rewrites the `eventStreamEndpoint` URL in the flagd config payload to point
-at itself, replacing the original upstream URL with `{proxy_base}/sse?stream_id={public_id}`. Providers with
-`configOrigin` pointing at the proxy follow this URL automatically.
+from `GET /server/{sdk_key}.json`. The proxy rewrites the SSE entry in the flagd config payload to point at itself,
+replacing the original upstream URL with `{proxy_base}/sse?stream_id={public_id}` (see
+[SSE entry format](#sse-entry-format)). Providers with `configOrigin` pointing at the proxy follow this URL
+automatically.
 
 **Leg 2: Proxy to Upstream** (one connection per SDK key)
 
-The proxy opens exactly one upstream SSE connection per distinct SDK key. It uses the original `eventStreamEndpoint` URL
-from the flagd config (scheme, path, and query parameters preserved verbatim). The raw SDK key is passed as-is in
+The proxy opens exactly one upstream SSE connection per distinct SDK key. It uses the original upstream URL from the
+flagd config's SSE entry (scheme, path, and query parameters preserved verbatim). The raw SDK key is passed as-is in
 requests to the upstream service for authentication; it is never exposed to providers or embedded in client-facing URLs.
+
+### SSE entry format
+
+The SSE entry is the first `eventStreams` entry with `type: "sse"` that has a usable URL
+([OFREP ADR-8](https://github.com/open-feature/protocol/blob/main/service/adrs/0008-sse-for-bulk-evaluation-changes.md)).
+It carries the URL in one of two forms; the proxy prefers `endpoint` when both are present:
+
+```json
+{"type": "sse", "endpoint": {"origin": "https://sse.us.fm.dynatrace.com", "requestUri": "/event-stream?..."}, "inactivityDelaySec": 120}
+{"type": "sse", "url": "https://sse.us.fm.dynatrace.com/event-stream?...", "inactivityDelaySec": 120}
+```
+
+- **`endpoint`**: the URL is `origin + requestUri`. `origin` is optional; when absent, the proxy uses the origin of the
+  CDN URL it fetched the config from. `origin` must be `https://host[:port]` with no path, and `requestUri` must start
+  with a single `/`.
+- **`url`**: an absolute `https` URL. Used when `endpoint` is absent or unusable.
+
+Entries that fail URL validation are skipped. These checks enforce HTTPS and URL structure; they do not restrict
+destination hosts or prevent access to private/internal addresses.
+
+On rewrite, the entry keeps the form it arrived in. An `endpoint` gets the proxy's own `origin` and
+`/sse?stream_id={public_id}` as `requestUri`; a `url` is replaced with the full proxy URL. An entry carrying both has
+both rewritten, so the upstream URL never reaches the SDK. The proxy keeps every other field of the entry (including `inactivityDelaySec`, or its absence) as received. An
+`endpoint` without `origin` is rewritten too: served unchanged, providers would resolve it against the proxy's origin.
 
 **How `stream_id` maps to the upstream connection**
 
@@ -195,8 +222,8 @@ data: {"type":"refetchConfig","etag":"\"abc123\"","lastModified":1771622898000}
 No event is published while the upstream connection is streaming (upstream announces changes itself), on a 304, or when
 the key has no subscribers. These events are counted as `proxy.sse.upstream.events{result="synthesized"}`.
 
-When `SSE_DISABLED=true`, `GET /sse` returns **501 Not Implemented** and the `eventStreamEndpoint` URL is not rewritten
-in the flagd config: SDK clients receive the upstream URL verbatim (or no URL if the upstream omits it). Clients must
+When `SSE_DISABLED=true`, `GET /sse` returns **501 Not Implemented** and the SSE entry is not rewritten in the flagd
+config: SDK clients receive the upstream entry verbatim (or none if the upstream omits it). Clients must
 rely exclusively on polling; they must not connect to `/sse`.
 
 ### SSE URL Changes
@@ -231,5 +258,5 @@ create unbounded cardinality.
 | Metric                               | Type          | Labels                                    | Description                                                                                                          |
 |--------------------------------------|---------------|-------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
 | `proxy.sse.connections`              | UpDownCounter | `sdk_key_public_id`, `direction`, `state` | Active SSE connections. `direction=upstream`: one per SDK key; `direction=downstream`: one per connected SDK client. |
-| `proxy.sse.upstream.events`          | Counter       | `sdk_key_public_id`, `result`             | Upstream events received. `result`: `forwarded`                                                                      |
+| `proxy.sse.upstream.events`          | Counter       | `sdk_key_public_id`, `result`             | Events published to subscribers. `result`: `forwarded`, `synthesized`                                                |
 | `proxy.sse.subscribe.rejected_total` | Counter       | `reason`                                  | Subscribe requests rejected by per-key limits. `reason`: `rate_limit`, `fanout_cap`                                  |

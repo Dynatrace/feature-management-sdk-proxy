@@ -133,8 +133,8 @@ When set to `true`, the proxy does not open any upstream SSE connections. All SD
 disconnected interval (every 10 seconds).
 
 `GET /sse` returns **501 Not Implemented** immediately, so SDK clients fail fast rather than holding a dead connection.
-The `eventStreamEndpoint` URL in the flagd config is also not rewritten: clients receive the upstream URL verbatim (or
-no URL if the upstream omits it) rather than a pointer to the non-functional `/sse` endpoint.
+The SSE entry (`eventStreams`) in the flagd config is also not rewritten: clients receive the upstream entry verbatim
+(or none if the upstream omits it) rather than a pointer to the non-functional `/sse` endpoint.
 
 Use this if your network or firewall policy blocks long-lived HTTP connections to the upstream SSE service.
 

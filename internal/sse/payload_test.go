@@ -2,6 +2,7 @@ package sse
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
@@ -11,6 +12,7 @@ func TestExtractSSEURL(t *testing.T) {
 	cases := []struct {
 		name              string
 		payload           string
+		fallbackOrigin    string
 		wantURL           string
 		wantInactivitySec int
 		wantOK            bool
@@ -60,6 +62,91 @@ func TestExtractSSEURL(t *testing.T) {
 			wantOK:  false,
 		},
 		{
+			name:              "endpoint form",
+			payload:           `{"eventStreams":[{"type":"sse","endpoint":{"origin":"https://sse.example.com","requestUri":"/event-stream?channels=abc&key=t"},"inactivityDelaySec":90}]}`,
+			wantURL:           "https://sse.example.com/event-stream?channels=abc&key=t",
+			wantInactivitySec: 90,
+			wantOK:            true,
+		},
+		{
+			name:    "endpoint preferred over url",
+			payload: `{"eventStreams":[{"type":"sse","url":"https://old.example.com/stream","endpoint":{"origin":"https://sse.example.com","requestUri":"/event-stream"}}]}`,
+			wantURL: "https://sse.example.com/event-stream",
+			wantOK:  true,
+		},
+		{
+			name:    "endpoint origin with trailing slash",
+			payload: `{"eventStreams":[{"type":"sse","endpoint":{"origin":"https://sse.example.com/","requestUri":"/event-stream"}}]}`,
+			wantURL: "https://sse.example.com/event-stream",
+			wantOK:  true,
+		},
+		{
+			name:    "endpoint origin with port",
+			payload: `{"eventStreams":[{"type":"sse","endpoint":{"origin":"https://sse.example.com:8443","requestUri":"/event-stream"}}]}`,
+			wantURL: "https://sse.example.com:8443/event-stream",
+			wantOK:  true,
+		},
+		{
+			name:           "endpoint without origin uses fallback origin",
+			payload:        `{"eventStreams":[{"type":"sse","endpoint":{"requestUri":"/event-stream?c=1"}}]}`,
+			fallbackOrigin: "https://cdn.us.fm.example.com",
+			wantURL:        "https://cdn.us.fm.example.com/event-stream?c=1",
+			wantOK:         true,
+		},
+		{
+			name:    "endpoint without origin and no fallback",
+			payload: `{"eventStreams":[{"type":"sse","endpoint":{"requestUri":"/event-stream"}}]}`,
+			wantOK:  false,
+		},
+		{
+			name:    "endpoint without origin falls back to url",
+			payload: `{"eventStreams":[{"type":"sse","url":"https://sse.example.com/stream","endpoint":{"requestUri":"/event-stream"}}]}`,
+			wantURL: "https://sse.example.com/stream",
+			wantOK:  true,
+		},
+		{
+			name:    "invalid endpoint falls back to url",
+			payload: `{"eventStreams":[{"type":"sse","url":"https://sse.example.com/stream","endpoint":{"origin":"http://sse.example.com","requestUri":"/event-stream"}}]}`,
+			wantURL: "https://sse.example.com/stream",
+			wantOK:  true,
+		},
+		{
+			name:    "endpoint with non-https origin",
+			payload: `{"eventStreams":[{"type":"sse","endpoint":{"origin":"http://sse.example.com","requestUri":"/event-stream"}}]}`,
+			wantOK:  false,
+		},
+		{
+			name:    "endpoint origin with path",
+			payload: `{"eventStreams":[{"type":"sse","endpoint":{"origin":"https://sse.example.com/base","requestUri":"/event-stream"}}]}`,
+			wantOK:  false,
+		},
+		{
+			name:    "endpoint origin with userinfo",
+			payload: `{"eventStreams":[{"type":"sse","endpoint":{"origin":"https://user@sse.example.com","requestUri":"/event-stream"}}]}`,
+			wantOK:  false,
+		},
+		{
+			name:    "endpoint requestUri without leading slash cannot change host",
+			payload: `{"eventStreams":[{"type":"sse","endpoint":{"origin":"https://sse.example.com","requestUri":"@internal.local/x"}}]}`,
+			wantOK:  false,
+		},
+		{
+			name:    "endpoint requestUri network-path reference rejected",
+			payload: `{"eventStreams":[{"type":"sse","endpoint":{"origin":"https://sse.example.com","requestUri":"//internal.local/x"}}]}`,
+			wantOK:  false,
+		},
+		{
+			name:    "endpoint with empty requestUri",
+			payload: `{"eventStreams":[{"type":"sse","endpoint":{"origin":"https://sse.example.com","requestUri":""}}]}`,
+			wantOK:  false,
+		},
+		{
+			name:    "unusable sse entry skipped for next sse entry",
+			payload: `{"eventStreams":[{"type":"sse","endpoint":{"origin":"http://bad.example.com","requestUri":"/x"}},{"type":"sse","endpoint":{"origin":"https://sse.example.com","requestUri":"/event-stream"}}]}`,
+			wantURL: "https://sse.example.com/event-stream",
+			wantOK:  true,
+		},
+		{
 			name:              "zero inactivity delay",
 			payload:           `{"eventStreams":[{"type":"sse","url":"https://sse.example.com/stream"}]}`,
 			wantURL:           "https://sse.example.com/stream",
@@ -69,7 +156,7 @@ func TestExtractSSEURL(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotURL, gotSec, gotOK := ExtractSSEURL([]byte(tc.payload))
+			gotURL, gotSec, gotOK := ExtractSSEURL([]byte(tc.payload), tc.fallbackOrigin)
 			if gotOK != tc.wantOK {
 				t.Fatalf("ok = %v, want %v", gotOK, tc.wantOK)
 			}
@@ -83,6 +170,20 @@ func TestExtractSSEURL(t *testing.T) {
 				t.Errorf("inactivityDelaySec = %d, want %d", gotSec, tc.wantInactivitySec)
 			}
 		})
+	}
+}
+
+func TestOriginOf(t *testing.T) {
+	cases := map[string]string{
+		"https://cdn.us.fm.example.com/server/dt01.key.json": "https://cdn.us.fm.example.com",
+		"https://cdn.example.com:8443/x?y=z":                 "https://cdn.example.com:8443",
+		"":                                                   "",
+		"/relative/path":                                     "",
+	}
+	for in, want := range cases {
+		if got := OriginOf(in); got != want {
+			t.Errorf("OriginOf(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -103,12 +204,12 @@ func TestRewriteSSEURL(t *testing.T) {
 		wantByteIdentical bool
 	}{
 		{
-			name:            "rewrites upstream URL",
+			name:            "url form stays url",
 			payload:         `{"flags":{},"eventStreams":[{"type":"sse","url":"` + upstream + `","inactivityDelaySec":120}]}`,
 			proxyURL:        proxy,
 			wantResult:      RewriteResultRewritten,
-			wantContains:    proxy,
-			wantNotContains: upstream,
+			wantContains:    `"url":"` + proxy + `"`,
+			wantNotContains: `"endpoint"`,
 		},
 		{
 			name:              "no SSE entry returns payload unchanged",
@@ -145,7 +246,6 @@ func TestRewriteSSEURL(t *testing.T) {
 			payload:         `{"eventStreams":[{"type":"sse","url":"https:\/\/upstream.sse.example.com\/stream","inactivityDelaySec":0}]}`,
 			proxyURL:        proxy,
 			wantResult:      RewriteResultRewritten,
-			wantContains:    proxy,
 			wantNotContains: "upstream.sse.example.com",
 		},
 		{
@@ -154,6 +254,72 @@ func TestRewriteSSEURL(t *testing.T) {
 			proxyURL:     proxy,
 			wantResult:   RewriteResultRewritten,
 			wantContains: `"before":"value"`,
+		},
+		{
+			name:            "endpoint form rewritten to proxy endpoint",
+			payload:         `{"flags":{},"eventStreams":[{"type":"sse","endpoint":{"origin":"https://upstream.sse.example.com","requestUri":"/event-stream?ch=abc"}}]}`,
+			proxyURL:        proxy,
+			wantResult:      RewriteResultRewritten,
+			wantContains:    `"endpoint":{"origin":"http://proxy.example.com","requestUri":"/sse?stream_id=dt01.server_us_ab3xy9kp2q"}`,
+			wantNotContains: "upstream.sse.example.com",
+		},
+		{
+			name:            "endpoint form does not gain a url field",
+			payload:         `{"eventStreams":[{"type":"sse","endpoint":{"origin":"https://upstream.sse.example.com","requestUri":"/event-stream"}}]}`,
+			proxyURL:        proxy,
+			wantResult:      RewriteResultRewritten,
+			wantNotContains: `"url"`,
+		},
+		{
+			name:            "both forms rewritten",
+			payload:         `{"eventStreams":[{"type":"sse","url":"` + upstream + `","endpoint":{"origin":"https://upstream.sse.example.com","requestUri":"/event-stream"}}]}`,
+			proxyURL:        proxy,
+			wantResult:      RewriteResultRewritten,
+			wantContains:    `"url":"` + proxy + `"`,
+			wantNotContains: "upstream.sse.example.com",
+		},
+		{
+			name:            "endpoint without origin rewritten",
+			payload:         `{"eventStreams":[{"type":"sse","endpoint":{"requestUri":"/event-stream?ch=abc"}}]}`,
+			proxyURL:        proxy,
+			wantResult:      RewriteResultRewritten,
+			wantContains:    `"origin":"http://proxy.example.com"`,
+			wantNotContains: "/event-stream",
+		},
+		{
+			name:         "unknown entry fields preserved",
+			payload:      `{"eventStreams":[{"type":"sse","endpoint":{"origin":"https://upstream.sse.example.com","requestUri":"/event-stream"},"futureField":{"a":1}}]}`,
+			proxyURL:     proxy,
+			wantResult:   RewriteResultRewritten,
+			wantContains: `"futureField":{"a":1}`,
+		},
+		{
+			name:            "absent inactivityDelaySec not added",
+			payload:         `{"eventStreams":[{"type":"sse","endpoint":{"origin":"https://upstream.sse.example.com","requestUri":"/event-stream"}}]}`,
+			proxyURL:        proxy,
+			wantResult:      RewriteResultRewritten,
+			wantNotContains: "inactivityDelaySec",
+		},
+		{
+			name:         "inactivityDelaySec kept",
+			payload:      `{"eventStreams":[{"type":"sse","endpoint":{"origin":"https://upstream.sse.example.com","requestUri":"/event-stream"},"inactivityDelaySec":45}]}`,
+			proxyURL:     proxy,
+			wantResult:   RewriteResultRewritten,
+			wantContains: `"inactivityDelaySec":45`,
+		},
+		{
+			name:              "endpoint with invalid requestUri not rewritten",
+			payload:           `{"eventStreams":[{"type":"sse","endpoint":{"origin":"https://upstream.sse.example.com","requestUri":"event-stream"}}]}`,
+			proxyURL:          proxy,
+			wantResult:        RewriteResultNoEntry,
+			wantByteIdentical: true,
+		},
+		{
+			name:              "relative proxy URL leaves payload unchanged",
+			payload:           `{"eventStreams":[{"type":"sse","url":"` + upstream + `"}]}`,
+			proxyURL:          "/sse?stream_id=x",
+			wantResult:        RewriteResultNoEntry,
+			wantByteIdentical: true,
 		},
 		{
 			name:            "upstream URL absent from rewritten output",
@@ -168,6 +334,11 @@ func TestRewriteSSEURL(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			input := []byte(tc.payload)
 			out, result := RewriteSSEURL(input, tc.proxyURL)
+			if result == RewriteResultRewritten {
+				// Every rewrite must leave origin + requestUri equal to the proxy URL.
+				// The rewritten entry keeps the input's forms, each pointing at the proxy.
+				checkRewrittenForms(t, input, out, tc.proxyURL)
+			}
 
 			if result != tc.wantResult {
 				t.Fatalf("result = %v, want %v", result, tc.wantResult)
@@ -185,5 +356,42 @@ func TestRewriteSSEURL(t *testing.T) {
 				t.Errorf("output should not contain %q, got: %q", tc.wantNotContains, out)
 			}
 		})
+	}
+}
+
+// checkRewrittenForms asserts that the first sse entry of out has the same
+// forms (endpoint, url) as the first rewritable sse entry of in, and that each
+// form resolves to proxyURL. Validation is skipped (test proxy URLs are http).
+func checkRewrittenForms(t *testing.T, in, out []byte, proxyURL string) {
+	t.Helper()
+	first := func(payload []byte) streamEntry {
+		var cfg struct {
+			EventStreams []streamEntry `json:"eventStreams"`
+		}
+		if err := json.Unmarshal(payload, &cfg); err != nil {
+			t.Fatalf("payload is not valid JSON: %v", err)
+		}
+		for _, e := range cfg.EventStreams {
+			if e.rewritable() || (e.Type == "sse" && (e.Endpoint != nil || e.URL != "")) {
+				return e
+			}
+		}
+		t.Fatalf("payload has no sse entry: %s", payload)
+		return streamEntry{}
+	}
+	before, after := first(in), first(out)
+	if (before.Endpoint != nil) != (after.Endpoint != nil) {
+		t.Errorf("endpoint present: input %v, output %v", before.Endpoint != nil, after.Endpoint != nil)
+	}
+	if (before.URL != "") != (after.URL != "") {
+		t.Errorf("url present: input %v, output %v", before.URL != "", after.URL != "")
+	}
+	if after.Endpoint != nil {
+		if got := after.Endpoint.Origin + after.Endpoint.RequestURI; got != proxyURL {
+			t.Errorf("rewritten endpoint resolves to %q, want %q", got, proxyURL)
+		}
+	}
+	if after.URL != "" && after.URL != proxyURL {
+		t.Errorf("rewritten url = %q, want %q", after.URL, proxyURL)
 	}
 }

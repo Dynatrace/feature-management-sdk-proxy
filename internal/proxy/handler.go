@@ -327,7 +327,7 @@ func (h *Handler) doDemandRevalidate(ctx context.Context, sdkKey, key string, en
 		h.logger.DebugContext(ctx, "proxy: demand revalidation — upstream unchanged (304), TTL extended", slog.String("sdk_key_public_id", key))
 		if h.sseManager != nil {
 			sseCtx := trace.ContextWithSpanContext(context.Background(), span.SpanContext())
-			h.sseManager.OnConfigCached(sseCtx, sdkKey, entry.Payload)
+			h.sseManager.OnConfigCached(sseCtx, sdkKey, entry.FetchURL, entry.Payload)
 		}
 		h.recordDemandReval(ctx, "not_modified")
 		return demandRevalEntry{entry: entry}
@@ -344,7 +344,7 @@ func (h *Handler) doDemandRevalidate(ctx context.Context, sdkKey, key string, en
 			// SSE is up; tell them the config changed.
 			h.sseManager.NotifyPolledChange(key, *result.Entry)
 			sseCtx := trace.ContextWithSpanContext(context.Background(), span.SpanContext())
-			h.sseManager.OnConfigCached(sseCtx, sdkKey, result.Entry.Payload)
+			h.sseManager.OnConfigCached(sseCtx, sdkKey, result.Entry.FetchURL, result.Entry.Payload)
 		}
 		if h.snapshotNotifier != nil {
 			h.snapshotNotifier.OnConfigCached(key, *result.Entry)
@@ -518,7 +518,7 @@ func (h *Handler) coldFetch(ctx context.Context, sdkKey, key, target string) col
 			// Preserve trace lineage for the SSE goroutine that starts after this fetch,
 			// but detach cancellation so SSE connections outlive the HTTP request.
 			sseCtx := trace.ContextWithSpanContext(context.Background(), span.SpanContext())
-			h.sseManager.OnConfigCached(sseCtx, sdkKey, body)
+			h.sseManager.OnConfigCached(sseCtx, sdkKey, target, body)
 		}
 		if h.snapshotNotifier != nil {
 			h.snapshotNotifier.OnConfigCached(key, entry)

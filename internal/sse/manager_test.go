@@ -52,12 +52,12 @@ func TestManager_OnConfigCached_StartsOneConn(t *testing.T) {
 
 	m := newTestManager(t, srv.Client())
 	defer m.esServer.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	payload := configWithSSEURL(srv.URL)
 	for range 5 {
-		m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", payload)
+		m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "", payload)
 	}
 
 	time.Sleep(500 * time.Millisecond)
@@ -83,13 +83,13 @@ func TestManager_OnConfigCached_SameURLIsNoop(t *testing.T) {
 
 	m := newTestManager(t, srv.Client())
 	defer m.esServer.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	payload := configWithSSEURL(srv.URL)
-	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", payload)
+	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "", payload)
 	time.Sleep(300 * time.Millisecond)
-	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", payload) // same URL — no-op
+	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "", payload) // same URL — no-op
 
 	time.Sleep(300 * time.Millisecond)
 	if n := connCount.Load(); n != 1 {
@@ -114,12 +114,12 @@ func TestManager_OnConfigCached_URLChangeRestartsConn(t *testing.T) {
 
 	m := newTestManager(t, srv.Client())
 	defer m.esServer.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
-	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", configWithSSEURL(srv.URL+"/v1"))
+	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "", configWithSSEURL(srv.URL+"/v1"))
 	time.Sleep(300 * time.Millisecond)
-	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", configWithSSEURL(srv.URL+"/v2"))
+	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "", configWithSSEURL(srv.URL+"/v2"))
 	time.Sleep(500 * time.Millisecond)
 
 	if n := connCount.Load(); n < 2 {
@@ -144,11 +144,11 @@ func TestManager_OnRefreshed_SameURLIsNoop(t *testing.T) {
 
 	m := newTestManager(t, srv.Client())
 	defer m.esServer.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	payload := configWithSSEURL(srv.URL)
-	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", payload)
+	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "", payload)
 	time.Sleep(300 * time.Millisecond)
 
 	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
@@ -177,7 +177,7 @@ func TestManager_Publish_DeliversEvent(t *testing.T) {
 
 	m := newTestManager(t, srv.Client())
 	defer m.esServer.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
@@ -194,7 +194,7 @@ func TestManager_Publish_DeliversEvent(t *testing.T) {
 	defer downstreamResp.Body.Close()
 
 	// Start the upstream connection which will publish to the eventsource server.
-	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", configWithSSEURL(srv.URL))
+	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "", configWithSSEURL(srv.URL))
 
 	// Read from downstream (with timeout).
 	buf := make([]byte, 1024)
@@ -228,16 +228,16 @@ func TestManager_Shutdown_CancelsAllConns(t *testing.T) {
 	defer srv.Close()
 
 	m := newTestManager(t, srv.Client())
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	for i := range 3 {
 		key := fmt.Sprintf("dt_server_us_key%d", i)
-		m.OnConfigCached(ctx, key, configWithSSEURL(srv.URL))
+		m.OnConfigCached(ctx, key, "", configWithSSEURL(srv.URL))
 	}
 	time.Sleep(500 * time.Millisecond)
 
-	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutCtx, shutCancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer shutCancel()
 
 	if err := m.Shutdown(shutCtx); err != nil {
@@ -280,11 +280,11 @@ func TestManager_Close_CancelsUpstreamConn(t *testing.T) {
 
 	m := newTestManager(t, srv.Client())
 	defer m.esServer.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
-	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", configWithSSEURL(srv.URL))
+	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "", configWithSSEURL(srv.URL))
 	time.Sleep(500 * time.Millisecond)
 
 	m.Close(keyHash)
@@ -317,10 +317,10 @@ func TestManager_NoSSEInConfig_NoConnection(t *testing.T) {
 
 	m := newTestManager(t, srv.Client())
 	defer m.esServer.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 
-	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", []byte(`{"flags":{}}`))
+	m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "", []byte(`{"flags":{}}`))
 	time.Sleep(200 * time.Millisecond)
 
 	if n := connCount.Load(); n != 0 {
@@ -361,13 +361,13 @@ func TestManager_RefreshInterval_Connected(t *testing.T) {
 	// Shut down the manager (cancels upstream conns) before srv.Close()
 	// to avoid srv.Close() blocking on the active TLS connection.
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()
 		m.Shutdown(ctx) //nolint:errcheck
 	}()
 
 	keyHash := sdkkey.PublicID("dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a")
-	m.OnConfigCached(context.Background(), "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", configWithSSEURL(srv.URL+"/sse"))
+	m.OnConfigCached(t.Context(), "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", "", configWithSSEURL(srv.URL+"/sse"))
 
 	// Wait for the read loop to enter streaming state.
 	select {
@@ -549,5 +549,59 @@ func TestManager_AdmitSubscriber_IsolatedPerKey(t *testing.T) {
 	// key2 should be unaffected.
 	if admitted, _ := m.AdmitSubscriber(key2); !admitted {
 		t.Error("key2 should not be affected by key1's cap")
+	}
+}
+
+// TestManager_OnConfigCached_EndpointForm verifies that an ADR-8 endpoint entry
+// (origin + requestUri) opens the upstream connection, including an endpoint
+// without origin, which resolves against the origin the config was fetched from.
+func TestManager_OnConfigCached_EndpointForm(t *testing.T) {
+	cases := map[string]struct {
+		payload  func(origin string) []byte
+		fetchURL func(origin string) string
+	}{
+		"with origin": {
+			payload: func(origin string) []byte {
+				return fmt.Appendf(nil, `{"eventStreams":[{"type":"sse","endpoint":{"origin":%q,"requestUri":"/event-stream?ch=abc"}}]}`, origin)
+			},
+			fetchURL: func(string) string { return "" },
+		},
+		"without origin": {
+			payload: func(string) []byte {
+				return []byte(`{"eventStreams":[{"type":"sse","endpoint":{"requestUri":"/event-stream?ch=abc"}}]}`)
+			},
+			fetchURL: func(origin string) string { return origin + "/server/dt01.server_us_ab3xy9kp2q.secret.json" },
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			requests := make(chan string, 4)
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests <- r.URL.RequestURI()
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+				<-r.Context().Done()
+			}))
+			defer srv.Close()
+
+			m := newTestManager(t, srv.Client())
+			defer m.esServer.Close()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			m.OnConfigCached(ctx, "dt01.server_us_ab3xy9kp2q.03ee0ef7cd4244bfb8b71fea8f783f53_d4f8a9c12a", tc.fetchURL(srv.URL), tc.payload(srv.URL))
+
+			select {
+			case got := <-requests:
+				if got != "/event-stream?ch=abc" {
+					t.Errorf("upstream request URI = %q, want /event-stream?ch=abc", got)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("no upstream SSE connection opened for endpoint-form config")
+			}
+		})
 	}
 }

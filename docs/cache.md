@@ -156,29 +156,26 @@ below). All other bytes pass through unchanged.
 ## SSE URL Rewrite
 
 Flagd config payloads include an `eventStreams` array that tells the SDK where to connect for SSE events. The upstream
-URL points to Dynatrace's CDN SSE service. The proxy rewrites it to point to `GET /sse` on the proxy itself, so SDK
-clients connect to the proxy's fan-out endpoint instead.
+URL points to Dynatrace's SSE service. The proxy rewrites it to point to `GET /sse` on the proxy itself, so SDK
+clients connect to the proxy's fan-out endpoint instead. Both the `endpoint` (`origin` + `requestUri`) and `url` forms
+are handled; see [sse.md](sse.md#sse-entry-format).
 
-The rewrite uses byte-level replacement (`bytes.ReplaceAll`), not JSON re-encoding, to preserve the rest of the payload
-exactly as received from upstream.
+The rewrite parses the payload as JSON, replaces the SSE entry's URL fields, and re-encodes it. Values are preserved,
+but key order and whitespace may change.
 
 **Rewrite outcomes** (tracked by `proxy.config.sse_rewrite_total`):
 
-| Result              | Meaning                                                                                                                       |
-|---------------------|-------------------------------------------------------------------------------------------------------------------------------|
-| `rewritten`         | SSE URL replaced with the proxy URL                                                                                           |
-| `no_sse_entry`      | No `type=sse` entry found; payload returned unchanged                                                                         |
-| `not_found_in_body` | Upstream URL was parsed but not found as an exact byte sequence (e.g. non-standard JSON encoding); payload returned unchanged |
-
-When the upstream URL is not found as a literal byte sequence, a structured warning is logged with the cache key. The
-payload is still served; only the SSE URL is missing.
+| Result         | Meaning                                                                                       |
+|----------------|-----------------------------------------------------------------------------------------------|
+| `rewritten`    | SSE entry pointed at the proxy                                                                |
+| `no_sse_entry` | No usable `type=sse` entry (or the payload isn't valid JSON); payload returned unchanged      |
 
 ### Proxy SSE URL Construction
 
 The rewritten URL is derived from the incoming HTTP request; no static `PROXY_PUBLIC_URL` configuration is needed:
 
 ```
-{derived-scheme}://{r.Host}/sse?sdk_key={url-encoded-sdk-key}
+{derived-scheme}://{r.Host}/sse?stream_id={sdk-key-public-id}
 ```
 
 The scheme is resolved from `X-Forwarded-Proto`, then `r.TLS`, then defaults to `http`. A malformed `Host` header is

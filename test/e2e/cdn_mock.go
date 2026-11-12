@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"sync/atomic"
 )
@@ -139,11 +140,17 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 // buildCDNPayload builds a minimal flagd config JSON payload that includes the
-// given SSE URL. The structure mirrors real Dynatrace flag config payloads.
+// given SSE URL. The structure mirrors real Dynatrace flag config payloads,
+// which carry the SSE URL in the ADR-8 endpoint form (origin + requestUri).
 func buildCDNPayload(sseURL string) []byte {
-	encoded, _ := json.Marshal(sseURL)
+	u, err := url.Parse(sseURL)
+	if err != nil {
+		panic(fmt.Sprintf("buildCDNPayload: invalid SSE URL %q: %v", sseURL, err))
+	}
+	origin, _ := json.Marshal(u.Scheme + "://" + u.Host)
+	requestURI, _ := json.Marshal(u.RequestURI())
 	return fmt.Appendf(nil,
-		`{"flags":{},"eventStreams":[{"type":"sse","url":%s,"inactivityDelaySec":60}]}`,
-		encoded,
+		`{"flags":{},"eventStreams":[{"type":"sse","endpoint":{"origin":%s,"requestUri":%s},"inactivityDelaySec":60}]}`,
+		origin, requestURI,
 	)
 }
