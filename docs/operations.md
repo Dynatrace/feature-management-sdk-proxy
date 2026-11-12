@@ -13,7 +13,7 @@ For metrics reference, see [telemetry.md](telemetry.md). For configuration, see 
 
 Every SDK request to `GET /server/{sdk_key}.json` hits one of two paths:
 
-**Cache hit:** the entry for that SDK key is already in memory. The proxy rewrites the SSE entry (`eventStreams`) in the
+**Cache hit:** the entry for that SDK key is already in memory. The proxy rewrites the SSE entries (`eventStreams`) in the
 flagd config payload to point at its own `/sse` endpoint, then responds immediately. No upstream call is made.
 
 **Cache miss:** no entry exists for this key. The proxy fetches `GET /server/{sdk_key}.json` from the upstream CDN,

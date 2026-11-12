@@ -3,6 +3,7 @@ package sse
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/dynatrace/feature-management-sdk-proxy/internal/sdkkey"
@@ -308,8 +309,44 @@ func TestRewriteSSEURL(t *testing.T) {
 			wantContains: `"inactivityDelaySec":45`,
 		},
 		{
-			name:              "endpoint with invalid requestUri not rewritten",
-			payload:           `{"eventStreams":[{"type":"sse","endpoint":{"origin":"https://upstream.sse.example.com","requestUri":"event-stream"}}]}`,
+			name:            "endpoint with invalid requestUri rewritten",
+			payload:         `{"eventStreams":[{"type":"sse","endpoint":{"origin":"https://upstream.sse.example.com","requestUri":"event-stream"}}]}`,
+			proxyURL:        proxy,
+			wantResult:      RewriteResultRewritten,
+			wantNotContains: "upstream.sse.example.com",
+		},
+		{
+			// The proxy connects to entry 1, but an SDK would take entry 0.
+			name:            "rejected entry before usable entry both rewritten",
+			payload:         `{"eventStreams":[{"type":"sse","endpoint":{"origin":"http://bad.example.com","requestUri":"/x"}},{"type":"sse","endpoint":{"origin":"https://upstream.sse.example.com","requestUri":"/event-stream"}}]}`,
+			proxyURL:        proxy,
+			wantResult:      RewriteResultRewritten,
+			wantNotContains: "bad.example.com",
+		},
+		{
+			name:            "every usable entry rewritten",
+			payload:         `{"eventStreams":[{"type":"sse","url":"` + upstream + `"},{"type":"sse","url":"https://other.sse.example.com/stream"}]}`,
+			proxyURL:        proxy,
+			wantResult:      RewriteResultRewritten,
+			wantNotContains: "sse.example.com",
+		},
+		{
+			name:         "non-sse entries untouched",
+			payload:      `{"eventStreams":[{"type":"grpc","url":"https://grpc.example.com"},{"type":"sse","url":"` + upstream + `"}]}`,
+			proxyURL:     proxy,
+			wantResult:   RewriteResultRewritten,
+			wantContains: `"url":"https://grpc.example.com"`,
+		},
+		{
+			name:         "sse entry without endpoint or url left alone",
+			payload:      `{"eventStreams":[{"type":"sse","inactivityDelaySec":30},{"type":"sse","url":"` + upstream + `"}]}`,
+			proxyURL:     proxy,
+			wantResult:   RewriteResultRewritten,
+			wantContains: `{"inactivityDelaySec":30,"type":"sse"}`,
+		},
+		{
+			name:              "only sse entries without endpoint or url returns payload unchanged",
+			payload:           `{"eventStreams":[{"type":"sse","inactivityDelaySec":30}]}`,
 			proxyURL:          proxy,
 			wantResult:        RewriteResultNoEntry,
 			wantByteIdentical: true,
@@ -359,39 +396,45 @@ func TestRewriteSSEURL(t *testing.T) {
 	}
 }
 
-// checkRewrittenForms asserts that the first sse entry of out has the same
-// forms (endpoint, url) as the first rewritable sse entry of in, and that each
-// form resolves to proxyURL. Validation is skipped (test proxy URLs are http).
+// checkRewrittenForms asserts that every type=="sse" entry in out kept the
+// forms (endpoint, url) it had in in, each pointing at proxyURL, and that
+// other entries are unchanged.
 func checkRewrittenForms(t *testing.T, in, out []byte, proxyURL string) {
 	t.Helper()
-	first := func(payload []byte) streamEntry {
+	streams := func(payload []byte) []streamEntry {
 		var cfg struct {
 			EventStreams []streamEntry `json:"eventStreams"`
 		}
 		if err := json.Unmarshal(payload, &cfg); err != nil {
 			t.Fatalf("payload is not valid JSON: %v", err)
 		}
-		for _, e := range cfg.EventStreams {
-			if e.rewritable() || (e.Type == "sse" && (e.Endpoint != nil || e.URL != "")) {
-				return e
+		return cfg.EventStreams
+	}
+	ins, outs := streams(in), streams(out)
+	if len(ins) != len(outs) {
+		t.Fatalf("eventStreams length: input %d, output %d", len(ins), len(outs))
+	}
+	for i, before := range ins {
+		after := outs[i]
+		if before.Type != "sse" {
+			if !reflect.DeepEqual(before, after) {
+				t.Errorf("entry %d (type %q) changed: %+v -> %+v", i, before.Type, before, after)
+			}
+			continue
+		}
+		if (before.Endpoint != nil) != (after.Endpoint != nil) {
+			t.Errorf("entry %d endpoint present: input %v, output %v", i, before.Endpoint != nil, after.Endpoint != nil)
+		}
+		if (before.URL != "") != (after.URL != "") {
+			t.Errorf("entry %d url present: input %v, output %v", i, before.URL != "", after.URL != "")
+		}
+		if after.Endpoint != nil {
+			if got := after.Endpoint.Origin + after.Endpoint.RequestURI; got != proxyURL {
+				t.Errorf("entry %d endpoint resolves to %q, want %q", i, got, proxyURL)
 			}
 		}
-		t.Fatalf("payload has no sse entry: %s", payload)
-		return streamEntry{}
-	}
-	before, after := first(in), first(out)
-	if (before.Endpoint != nil) != (after.Endpoint != nil) {
-		t.Errorf("endpoint present: input %v, output %v", before.Endpoint != nil, after.Endpoint != nil)
-	}
-	if (before.URL != "") != (after.URL != "") {
-		t.Errorf("url present: input %v, output %v", before.URL != "", after.URL != "")
-	}
-	if after.Endpoint != nil {
-		if got := after.Endpoint.Origin + after.Endpoint.RequestURI; got != proxyURL {
-			t.Errorf("rewritten endpoint resolves to %q, want %q", got, proxyURL)
+		if after.URL != "" && after.URL != proxyURL {
+			t.Errorf("entry %d url = %q, want %q", i, after.URL, proxyURL)
 		}
-	}
-	if after.URL != "" && after.URL != proxyURL {
-		t.Errorf("rewritten url = %q, want %q", after.URL, proxyURL)
 	}
 }

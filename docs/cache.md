@@ -160,15 +160,15 @@ URL points to Dynatrace's SSE service. The proxy rewrites it to point to `GET /s
 clients connect to the proxy's fan-out endpoint instead. Both the `endpoint` (`origin` + `requestUri`) and `url` forms
 are handled; see [sse.md](sse.md#sse-entry-format).
 
-The rewrite parses the payload as JSON, replaces the SSE entry's URL fields, and re-encodes it. Values are preserved,
+The rewrite parses the payload as JSON, replaces the URL fields of every `type=sse` entry, and re-encodes it. Values are preserved,
 but key order and whitespace may change.
 
 **Rewrite outcomes** (tracked by `proxy.config.sse_rewrite_total`):
 
 | Result         | Meaning                                                                                       |
 |----------------|-----------------------------------------------------------------------------------------------|
-| `rewritten`    | SSE entry pointed at the proxy                                                                |
-| `no_sse_entry` | No usable `type=sse` entry (or the payload isn't valid JSON); payload returned unchanged      |
+| `rewritten`    | Every SSE entry pointed at the proxy                                                          |
+| `no_sse_entry` | No `type=sse` entry with `endpoint` or `url` (or invalid JSON); payload returned unchanged    |
 
 ### Proxy SSE URL Construction
 
