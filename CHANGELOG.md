@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.4](https://github.com/Dynatrace/feature-management-sdk-proxy/compare/v0.3.3...v0.3.4) (2026-11-18)
+
+
+### 🧹 Chore
+
+* fix ci dead-end if no releases ([#54](https://github.com/Dynatrace/feature-management-sdk-proxy/issues/54)) ([6742d9b](https://github.com/Dynatrace/feature-management-sdk-proxy/commit/6742d9b66b46a9b1dbafa749840b2883ab6debfe))
+
 ## [0.3.3](https://github.com/Dynatrace/feature-management-sdk-proxy/compare/v0.3.2...v0.3.3) (2026-11-12)
 
 
